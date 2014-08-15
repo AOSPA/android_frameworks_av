@@ -73,6 +73,10 @@ LOCAL_EXPORT_C_INCLUDE_DIRS := \
 
 LOCAL_CFLAGS += -Werror -Wall -Wextra
 
+ifeq ($(CAMERA_EXTRA_PARAMETERS), true)
+LOCAL_CFLAGS += -DCAMERA_EXTRA_PARAMETERS
+endif
+
 LOCAL_MODULE:= libcamera_client
 
 include $(BUILD_SHARED_LIBRARY)
