@@ -19,6 +19,7 @@
 #include <inttypes.h>
 #include <utils/Log.h>
 
+#include <cutils/properties.h>
 #include <inttypes.h>
 #include "WebmWriter.h"
 #include "StagefrightRecorder.h"
@@ -1852,9 +1853,15 @@ status_t StagefrightRecorder::resume() {
         if (mPauseStartTimeUs < bufferStartTimeUs) {
             mPauseStartTimeUs = bufferStartTimeUs;
         }
-        // 30 ms buffer to avoid timestamp overlap
-        mTotalPausedDurationUs += (systemTime() / 1000) - mPauseStartTimeUs - 30000;
+        mTotalPausedDurationUs += (systemTime() / 1000) - mPauseStartTimeUs;
+
+        bool isQCHwAACEnc = property_get_bool("qcom.hw.aac.encoder", true);
+        if (!isQCHwAACEnc || mAudioEncoder != AUDIO_ENCODER_AAC || mCaptureFpsEnable) {
+            // 30 ms buffer to avoid timestamp overlap
+            mTotalPausedDurationUs -= (30000*(mCaptureFpsEnable ? (mCaptureFps / mFrameRate) : 1));
+        }
     }
+
     double timeOffset = -mTotalPausedDurationUs;
     if (mCaptureFpsEnable) {
         timeOffset *= mCaptureFps / mFrameRate;
