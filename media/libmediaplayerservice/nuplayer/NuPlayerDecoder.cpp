@@ -565,6 +565,11 @@ bool NuPlayer::Decoder::handleAnOutputBuffer(
     sp<ABuffer> buffer;
     mCodec->getOutputBuffer(index, &buffer);
 
+    if (buffer == NULL) {
+        handleError(UNKNOWN_ERROR);
+        return false;
+    }
+
     if (index >= mOutputBuffers.size()) {
         for (size_t i = mOutputBuffers.size(); i <= index; ++i) {
             mOutputBuffers.add();
@@ -577,6 +582,7 @@ bool NuPlayer::Decoder::handleAnOutputBuffer(
     buffer->meta()->clear();
     buffer->meta()->setInt64("timeUs", timeUs);
     setPcmFormat(buffer->meta());
+    AVNuUtils::get()->addFlagsInMeta(buffer, flags, mIsAudio);
 
     bool eos = flags & MediaCodec::BUFFER_FLAG_EOS;
     // we do not expect CODECCONFIG or SYNCFRAME for decoder
