@@ -300,7 +300,8 @@ protected:
     void writeTrackInfo(Parcel* reply, const sp<AMessage> format) const;
 
     void tearDownPCMOffload(const sp<AMessage> &msg);
-#ifdef DOLBY_UDC_VIRTUALIZE_AUDIO
+
+#ifdef DOLBY_ENABLE
     void onDolbyMessageReceived();
 #endif // DOLBY_END
 
