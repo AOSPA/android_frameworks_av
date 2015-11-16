@@ -871,6 +871,8 @@ status_t MediaCodec::getBufferAndFormat(
             }
             *format = info.mFormat;
         }
+    } else {
+        return BAD_INDEX;
     }
     return OK;
 }
@@ -986,6 +988,9 @@ bool MediaCodec::handleDequeueOutputBuffer(const sp<AReplyToken> &replyID, bool 
         }
         if (omxFlags & OMX_BUFFERFLAG_EXTRADATA) {
             flags |= BUFFER_FLAG_EXTRADATA;
+        }
+        if (omxFlags & OMX_BUFFERFLAG_DATACORRUPT) {
+            flags |= BUFFER_FLAG_DATACORRUPT;
         }
 
         response->setInt32("flags", flags);
@@ -2630,6 +2635,9 @@ void MediaCodec::onOutputBufferAvailable() {
         }
         if (omxFlags & OMX_BUFFERFLAG_EOS) {
             flags |= BUFFER_FLAG_EOS;
+        }
+        if (omxFlags & OMX_BUFFERFLAG_DATACORRUPT) {
+            flags |= BUFFER_FLAG_DATACORRUPT;
         }
 
         msg->setInt32("flags", flags);
