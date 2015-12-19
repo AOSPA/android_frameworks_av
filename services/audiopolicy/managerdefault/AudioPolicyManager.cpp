@@ -436,6 +436,20 @@ void AudioPolicyManager::updateCallRouting(audio_devices_t rxDevice, int delayMs
             patch.num_sources = 2;
         }
 
+        // terminate active capture if on the same HW module as the call TX source device
+        // FIXME: would be better to refine to only inputs whose profile connects to the
+        // call TX device but this information is not in the audio patch and logic here must be
+        // symmetric to the one in startInput()
+        audio_io_handle_t activeInput = mInputs.getActiveInput();
+        if (activeInput != 0) {
+            sp<AudioInputDescriptor> activeDesc = mInputs.valueFor(activeInput);
+            if (activeDesc->getModuleHandle() == txSourceDeviceDesc->getModuleHandle()) {
+                audio_session_t activeSession = activeDesc->mSessions.itemAt(0);
+                stopInput(activeInput, activeSession);
+                releaseInput(activeInput, activeSession);
+            }
+        }
+
         afPatchHandle = AUDIO_PATCH_HANDLE_NONE;
         status = mpClientInterface->createAudioPatch(&patch, &afPatchHandle, 0);
         ALOGW_IF(status != NO_ERROR, "setPhoneState() error %d creating TX audio patch",
@@ -600,9 +614,15 @@ void AudioPolicyManager::setForceUse(audio_policy_force_use_t usage,
 
     audio_io_handle_t activeInput = mInputs.getActiveInput();
     if (activeInput != 0) {
-        setInputDevice(activeInput, getNewInputDevice(activeInput));
+        sp<AudioInputDescriptor> activeDesc = mInputs.valueFor(activeInput);
+        audio_devices_t newDevice = getNewInputDevice(activeInput);
+        // Force new input selection if the new device can not be reached via current input
+        if (activeDesc->mProfile->mSupportedDevices.types() & (newDevice & ~AUDIO_DEVICE_BIT_IN)) {
+            setInputDevice(activeInput, newDevice);
+        } else {
+            closeInput(activeInput);
+        }
     }
-
 }
 
 void AudioPolicyManager::setSystemProperty(const char* property, const char* value)
@@ -1116,11 +1136,7 @@ status_t AudioPolicyManager::startOutput(audio_io_handle_t output,
     // DOLBY_DAP_MOVE_EFFECT
     // Note: The global effect can't be taken away from the deep-buffered output (source output) if there're still
     //       music playing on the deep-buffered output.
-    sp<SwAudioOutputDescriptor> srcOutputDesc = mOutputs.valueFor(mDolbyAudioPolicy.output());
-    if ((stream == AUDIO_STREAM_MUSIC) && mDolbyAudioPolicy.shouldMoveToOutput(output, outputDesc->mFlags) && srcOutputDesc != NULL &&
-        ((srcOutputDesc->mFlags & AUDIO_OUTPUT_FLAG_DEEP_BUFFER) == 0 || srcOutputDesc->mRefCount[AUDIO_STREAM_MUSIC] == 0)) {
-        mDolbyAudioPolicy.movedToOutput(mpClientInterface, output);
-    }
+    mDolbyAudioPolicy.movedToOutput(stream, outputDesc, &mOutputs, mpClientInterface, output);
 #endif //DOLBY_END
 
     return status;
@@ -1579,6 +1595,15 @@ status_t AudioPolicyManager::startInput(audio_io_handle_t input,
                 return INVALID_OPERATION;
             }
         }
+
+        // Do not allow capture if an active voice call is using a software patch and
+        // the call TX source device is on the same HW module.
+        // FIXME: would be better to refine to only inputs whose profile connects to the
+        // call TX device but this information is not in the audio patch
+        if (mCallTxPatch != 0 &&
+            inputDesc->getModuleHandle() == mCallTxPatch->mPatch.sources[0].ext.device.hw_module) {
+            return INVALID_OPERATION;
+        }
     }
 
     // Routing?
@@ -1914,12 +1939,7 @@ status_t AudioPolicyManager::registerEffect(const effect_descriptor_t *desc,
         }
     }
 #ifdef DOLBY_ENABLE
-    status_t status = mEffects.registerEffect(desc, io, strategy, session, id);
-    if (status == NO_ERROR) {
-        sp<EffectDescriptor> effectDesc = mEffects.valueFor(id);
-        mDolbyAudioPolicy.effectRegistered(effectDesc);
-    }
-    return status;
+    return mDolbyAudioPolicy.effectRegistered(desc, io, strategy, session, id, &mEffects);
 #else // DOLBY_END
     return mEffects.registerEffect(desc, io, strategy, session, id);
 #endif // LINE_ADDED_BY_DOLBY
