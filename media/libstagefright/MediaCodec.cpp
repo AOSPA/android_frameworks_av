@@ -64,6 +64,7 @@ static bool isResourceError(status_t err) {
 }
 
 static const int kMaxRetry = 2;
+static const int kMaxReclaimWaitTimeInUs = 500000;  // 0.5s
 
 struct ResourceManagerClient : public BnResourceManagerClient {
     ResourceManagerClient(MediaCodec* codec) : mMediaCodec(codec) {}
@@ -75,6 +76,12 @@ struct ResourceManagerClient : public BnResourceManagerClient {
             return true;
         }
         status_t err = codec->reclaim();
+        if (err == WOULD_BLOCK) {
+            ALOGD("Wait for the client to release codec.");
+            usleep(kMaxReclaimWaitTimeInUs);
+            ALOGD("Try to reclaim again.");
+            err = codec->reclaim(true /* force */);
+        }
         if (err != OK) {
             ALOGW("ResourceManagerClient failed to release codec with err %d", err);
         }
@@ -572,12 +579,34 @@ status_t MediaCodec::stop() {
     return PostAndAwaitResponse(msg, &response);
 }
 
-status_t MediaCodec::reclaim() {
+bool MediaCodec::hasPendingBuffer(int portIndex) {
+    const Vector<BufferInfo> &buffers = mPortBuffers[portIndex];
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        const BufferInfo &info = buffers.itemAt(i);
+        if (info.mOwnedByClient) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool MediaCodec::hasPendingBuffer() {
+    return hasPendingBuffer(kPortIndexInput) || hasPendingBuffer(kPortIndexOutput);
+}
+
+status_t MediaCodec::reclaim(bool force) {
+    ALOGD("MediaCodec::reclaim(%p) %s", this, mInitName.c_str());
     sp<AMessage> msg = new AMessage(kWhatRelease, this);
     msg->setInt32("reclaimed", 1);
+    msg->setInt32("force", force ? 1 : 0);
 
     sp<AMessage> response;
-    return PostAndAwaitResponse(msg, &response);
+    status_t ret = PostAndAwaitResponse(msg, &response);
+    if (ret == -ENOENT) {
+        ALOGD("MediaCodec looper is gone, skip reclaim");
+        ret = OK;
+    }
+    return ret;
 }
 
 status_t MediaCodec::release() {
@@ -989,6 +1018,9 @@ bool MediaCodec::handleDequeueOutputBuffer(const sp<AReplyToken> &replyID, bool 
         if (omxFlags & OMX_BUFFERFLAG_EXTRADATA) {
             flags |= BUFFER_FLAG_EXTRADATA;
         }
+        if (omxFlags & OMX_BUFFERFLAG_DATACORRUPT) {
+            flags |= BUFFER_FLAG_DATACORRUPT;
+        }
 
         response->setInt32("flags", flags);
         response->postReply(replyID);
@@ -1160,8 +1192,10 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         resourceType = String8(kResourceNonSecureCodec);
                     }
 
-                    const char *subtype = mIsVideo ? kResourceVideoCodec : kResourceAudioCodec;
-                    addResource(resourceType, String8(subtype), 1);
+                    if (mIsVideo) {
+                        // audio codec is currently ignored.
+                        addResource(resourceType, String8(kResourceVideoCodec), 1);
+                    }
 
                     (new AMessage)->postReply(mReplyID);
                     break;
@@ -1791,6 +1825,23 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             msg->findInt32("reclaimed", &reclaimed);
             if (reclaimed) {
                 mReleasedByResourceManager = true;
+
+                int32_t force = 0;
+                msg->findInt32("force", &force);
+                if (!force && hasPendingBuffer()) {
+                    ALOGW("Can't reclaim codec right now due to pending buffers.");
+
+                    // return WOULD_BLOCK to ask resource manager to retry later.
+                    sp<AMessage> response = new AMessage;
+                    response->setInt32("err", WOULD_BLOCK);
+                    response->postReply(replyID);
+
+                    // notify the async client
+                    if (mFlags & kFlagIsAsync) {
+                        onError(DEAD_OBJECT, ACTION_CODE_FATAL);
+                    }
+                    break;
+                }
             }
 
             if (!((mFlags & kFlagIsComponentAllocated) && targetState == UNINITIALIZED) // See 1
@@ -2632,6 +2683,9 @@ void MediaCodec::onOutputBufferAvailable() {
         }
         if (omxFlags & OMX_BUFFERFLAG_EOS) {
             flags |= BUFFER_FLAG_EOS;
+        }
+        if (omxFlags & OMX_BUFFERFLAG_DATACORRUPT) {
+            flags |= BUFFER_FLAG_DATACORRUPT;
         }
 
         msg->setInt32("flags", flags);

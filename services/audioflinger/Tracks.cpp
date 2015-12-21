@@ -456,7 +456,10 @@ AudioFlinger::PlaybackThread::Track::Track(
     }
     // only allocate a fast track index if we were able to allocate a normal track name
     if (flags & IAudioFlinger::TRACK_FAST) {
-        mAudioTrackServerProxy->framesReadyIsCalledByMultipleThreads();
+        // FIXME: Not calling framesReadyIsCalledByMultipleThreads() exposes a potential
+        // race with setSyncEvent(). However, if we call it, we cannot properly start
+        // static fast tracks (SoundPool) immediately after stopping.
+        //mAudioTrackServerProxy->framesReadyIsCalledByMultipleThreads();
         ALOG_ASSERT(thread->mFastTrackAvailMask != 0);
         int i = __builtin_ctz(thread->mFastTrackAvailMask);
         ALOG_ASSERT(0 < i && i < (int)FastMixerState::kMaxFastTracks);
@@ -747,6 +750,7 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
             // But in this case we know the mixer thread (whether normal mixer or fast mixer)
             // isn't looking at this track yet:  we still hold the normal mixer thread lock,
             // and for fast tracks the track is not yet in the fast mixer thread's active set.
+            // For static tracks, this is used to acknowledge change in position or loop.
             ServerProxy::Buffer buffer;
             buffer.mFrameCount = 1;
             (void) mAudioTrackServerProxy->obtainBuffer(&buffer, true /*ackFlush*/);

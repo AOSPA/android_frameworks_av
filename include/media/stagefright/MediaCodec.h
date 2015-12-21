@@ -52,6 +52,7 @@ struct MediaCodec : public AHandler {
         BUFFER_FLAG_CODECCONFIG = 2,
         BUFFER_FLAG_EOS         = 4,
         BUFFER_FLAG_EXTRADATA   = 0x1000,
+        BUFFER_FLAG_DATACORRUPT = 0x2000,
     };
 
     enum {
@@ -177,7 +178,7 @@ protected:
 
 private:
     // used by ResourceManagerClient
-    status_t reclaim();
+    status_t reclaim(bool force = false);
     friend struct ResourceManagerClient;
 
 private:
@@ -385,6 +386,9 @@ private:
 
     uint64_t getGraphicBufferSize();
     void addResource(const String8 &type, const String8 &subtype, uint64_t value);
+
+    bool hasPendingBuffer(int portIndex);
+    bool hasPendingBuffer();
 
     /* called to get the last codec error when the sticky flag is set.
      * if no such codec error is found, returns UNKNOWN_ERROR.
