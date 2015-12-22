@@ -254,6 +254,9 @@ void CameraClient::disconnect() {
     // Turn off all messages.
     disableMsgType(CAMERA_MSG_ALL_MSGS);
     mHardware->stopPreview();
+    mCameraService->updateProxyDeviceState(
+        ICameraServiceProxy::CAMERA_STATE_IDLE,
+        String8::format("%d", mCameraId));
     mHardware->cancelPicture();
     // Release the hardware resources.
     mHardware->release();
@@ -412,7 +415,11 @@ status_t CameraClient::startPreviewMode() {
     }
     mHardware->setPreviewWindow(mPreviewWindow);
     result = mHardware->startPreview();
-
+    if (result == NO_ERROR) {
+        mCameraService->updateProxyDeviceState(
+            ICameraServiceProxy::CAMERA_STATE_ACTIVE,
+            String8::format("%d", mCameraId));
+    }
     return result;
 }
 
@@ -435,7 +442,7 @@ status_t CameraClient::startRecordingMode() {
 
     // start recording mode
     enableMsgType(CAMERA_MSG_VIDEO_FRAME);
-    mCameraService->playSound(CameraService::SOUND_RECORDING);
+    mCameraService->playSound(CameraService::SOUND_RECORDING_START);
     result = mHardware->startRecording();
     if (result != NO_ERROR) {
         ALOGE("mHardware->startRecording() failed with status %d", result);
@@ -452,7 +459,9 @@ void CameraClient::stopPreview() {
 
     disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
     mHardware->stopPreview();
-
+    mCameraService->updateProxyDeviceState(
+        ICameraServiceProxy::CAMERA_STATE_IDLE,
+        String8::format("%d", mCameraId));
     mPreviewBuffer.clear();
 }
 
@@ -464,7 +473,7 @@ void CameraClient::stopRecording() {
 
     disableMsgType(CAMERA_MSG_VIDEO_FRAME);
     mHardware->stopRecording();
-    mCameraService->playSound(CameraService::SOUND_RECORDING);
+    mCameraService->playSound(CameraService::SOUND_RECORDING_STOP);
 
     mPreviewBuffer.clear();
 }
@@ -646,7 +655,7 @@ status_t CameraClient::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) {
         }
         return OK;
     } else if (cmd == CAMERA_CMD_PLAY_RECORDING_SOUND) {
-        mCameraService->playSound(CameraService::SOUND_RECORDING);
+        mCameraService->playSound(CameraService::SOUND_RECORDING_START);
     } else if (cmd == CAMERA_CMD_SET_VIDEO_BUFFER_COUNT) {
         // Silently ignore this command
         return INVALID_OPERATION;
@@ -812,6 +821,12 @@ void CameraClient::handleShutter(void) {
     if ( !mLongshotEnabled ) {
         disableMsgType(CAMERA_MSG_SHUTTER);
     }
+
+    // Shutters only happen in response to takePicture, so mark device as
+    // idle now, until preview is restarted
+    mCameraService->updateProxyDeviceState(
+        ICameraServiceProxy::CAMERA_STATE_IDLE,
+        String8::format("%d", mCameraId));
 
     mLock.unlock();
 }

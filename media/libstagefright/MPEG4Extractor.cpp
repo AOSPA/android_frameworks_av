@@ -1936,13 +1936,13 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             if (!isParsingMetaKeys) {
                 uint8_t buffer[4];
                 if (chunk_data_size < (off64_t)sizeof(buffer)) {
-                    *offset += chunk_size;
+                    *offset = stop_offset;
                     return ERROR_MALFORMED;
                 }
 
                 if (mDataSource->readAt(
                             data_offset, buffer, 4) < 4) {
-                    *offset += chunk_size;
+                    *offset = stop_offset;
                     return ERROR_IO;
                 }
 
@@ -1953,7 +1953,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
                     // apparently malformed chunks that don't have flags
                     // and completely different semantics than what's
                     // in the MPEG4 specs and skip it.
-                    *offset += chunk_size;
+                    *offset = stop_offset;
                     return OK;
                 }
                 *offset +=  sizeof(buffer);
@@ -2724,6 +2724,12 @@ status_t MPEG4Extractor::parseITunesMetaData(off64_t offset, size_t size) {
                     mLastCommentName.setTo((const char *)buffer + 4);
                     break;
                 case FOURCC('d', 'a', 't', 'a'):
+                    if (size < 8) {
+                        delete[] buffer;
+                        buffer = NULL;
+                        ALOGE("b/24346430");
+                        return ERROR_MALFORMED;
+                    }
                     mLastCommentData.setTo((const char *)buffer + 8);
                     break;
             }
@@ -4307,7 +4313,10 @@ status_t MPEG4Source::read(
             (const uint8_t *)mBuffer->data() + mBuffer->range_offset();
 
         size_t nal_size = parseNALSize(src);
-        if (mBuffer->range_length() < mNALLengthSize + nal_size) {
+        if (mNALLengthSize > SIZE_MAX - nal_size) {
+            ALOGE("b/24441553, b/24445122");
+        }
+        if (mBuffer->range_length() - mNALLengthSize < nal_size) {
             ALOGE("incomplete NAL unit.");
 
             mBuffer->release();
@@ -4594,7 +4603,11 @@ status_t MPEG4Source::fragmentedRead(
             (const uint8_t *)mBuffer->data() + mBuffer->range_offset();
 
         size_t nal_size = parseNALSize(src);
-        if (mBuffer->range_length() < mNALLengthSize + nal_size) {
+        if (mNALLengthSize > SIZE_MAX - nal_size) {
+            ALOGE("b/24441553, b/24445122");
+        }
+
+        if (mBuffer->range_length() - mNALLengthSize < nal_size) {
             ALOGE("incomplete NAL unit.");
 
             mBuffer->release();

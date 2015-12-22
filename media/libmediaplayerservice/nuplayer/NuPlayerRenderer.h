@@ -173,11 +173,13 @@ protected:
 
     // modified on only renderer's thread.
     bool mPaused;
+    int64_t mPauseDrainAudioAllowedUs; // time when we can drain/deliver audio in pause mode.
 
     bool mVideoSampleReceived;
     bool mVideoRenderingStarted;
     int32_t mVideoRenderingStartGeneration;
     int32_t mAudioRenderingStartGeneration;
+    bool mRenderingDataDelivered;
 
     int64_t mLastPositionUpdateUs;
 

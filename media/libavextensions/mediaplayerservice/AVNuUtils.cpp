@@ -119,6 +119,8 @@ bool AVNuUtils::canUseSetBuffers(const sp<MetaData> &/*Meta*/) {
     return false;
 }
 
+bool AVNuUtils::dropCorruptFrame() { return false; }
+
 // ----- NO TRESSPASSING BEYOND THIS LINE ------
 AVNuUtils::AVNuUtils() {}
 
