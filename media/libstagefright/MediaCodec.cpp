@@ -2412,12 +2412,7 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
     }
 
     if (offset + size > info->mData->capacity()) {
-        if ( ((int)size == (int)-1) && !(flags & BUFFER_FLAG_EOS)) {
-            size = 0;
-            ALOGD("EOS, reset size to zero");
-        }
-        else
-            return -EINVAL;
+        return -EINVAL;
     }
 
     sp<AMessage> reply = info->mNotify;
