@@ -304,10 +304,6 @@ protected:
     void onDolbyMessageReceived();
 #endif // DOLBY_END
 
-#ifdef DOLBY_ENABLE
-    void onDolbyMessageReceived();
-#endif // DOLBY_END
-
     DISALLOW_EVIL_CONSTRUCTORS(NuPlayer);
 };
 

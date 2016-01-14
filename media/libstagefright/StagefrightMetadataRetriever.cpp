@@ -271,6 +271,9 @@ static VideoFrame *extractVideoFrame(
             if (err != OK) {
                 ALOGW("Input Error or EOS");
                 haveMoreInputs = false;
+                //correct the status to continue get output from decoder
+                err = OK;
+                inputIndex = -1;
                 break;
             }
 
@@ -300,7 +303,6 @@ static VideoFrame *extractVideoFrame(
                     codecBuffer->size(),
                     ptsUs,
                     flags);
-
             // we don't expect an output from codec config buffer
             if (flags & MediaCodec::BUFFER_FLAG_CODECCONFIG) {
                 continue;
