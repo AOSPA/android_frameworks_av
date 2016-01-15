@@ -21,6 +21,18 @@
 
 namespace android {
 
+#define DTS_M8_OMX_LIB "libomx-dts.so"
+
+typedef OMX_ERRORTYPE (*fPtrInit)();
+typedef OMX_ERRORTYPE (*fPtrGetHandle)(
+                                OMX_OUT OMX_HANDLETYPE* pHandle,
+                                OMX_IN  OMX_STRING cComponentName,
+                                OMX_IN  OMX_PTR pAppData,
+                                OMX_IN  OMX_CALLBACKTYPE* pCallBacks);
+typedef OMX_ERRORTYPE (*fPtrFreeHandle)(
+                                OMX_IN  OMX_HANDLETYPE hComponent);
+typedef OMX_ERRORTYPE (*fPtrDeinit)();
+
 struct SoftDTSDec : public SimpleSoftOMXComponent
 {
     SoftDTSDec( const char *name,
@@ -63,6 +75,7 @@ protected:
 
 private:
     OMX_HANDLETYPE mComponentHandle; // handle to DTS OMX component instance
+    void *mOmxLibHandle;
 
     DISALLOW_EVIL_CONSTRUCTORS(SoftDTSDec);
 };

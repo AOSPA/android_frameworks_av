@@ -49,29 +49,72 @@ SoftDTSDec::SoftDTSDec( const char *name,
                         OMX_PTR appData,
                         OMX_COMPONENTTYPE **component )
   : SimpleSoftOMXComponent(name, callbacks, appData, component),
-    mComponentHandle(NULL)
+    mComponentHandle(NULL),
+    mOmxLibHandle(NULL)
 {
+    int ret = 0;
+    const char *error;
     DTS_ALOGV("+SoftDTSDec() ctor : name = '%s'  this = 0x%x", name, this);
 
-    OMX_Init();
+    mOmxLibHandle = dlopen(DTS_M8_OMX_LIB, RTLD_LAZY);
+    if (mOmxLibHandle) {
+        dlerror();
+        fPtrInit omxInit = (fPtrInit)(dlsym(mOmxLibHandle, "OMX_Init"));
+        if ((error = dlerror()) != NULL) {
+            ret = -1;
+            ALOGE("SoftDTSDec() ctor, failed to dlsym OMX_Init, error (%s)", error);
+        } else {
+            omxInit();
+        }
 
-    OMX_ERRORTYPE retVal = OMX_GetHandle( &mComponentHandle,
-                                          const_cast<char *>(name),
-                                          appData,
-                                          const_cast<OMX_CALLBACKTYPE *>(callbacks) );
+        if (!ret) {
+            fPtrGetHandle omxGetHandle = (fPtrGetHandle)(dlsym(mOmxLibHandle, "OMX_GetHandle"));
+            if ((error = dlerror()) != NULL) {
+                ALOGE("SoftDTSDec() ctor, failed to dlsym OMX_GetHandle, error (%s)", error);
+            } else {
+                OMX_ERRORTYPE retVal = omxGetHandle(
+                                             &mComponentHandle,
+                                             const_cast<char *>(name),
+                                             appData,
+                                             const_cast<OMX_CALLBACKTYPE *>(callbacks) );
+            }
+        }
+    } else {
+        ALOGE("SoftDTSDec() ctor, dlopen of %s failed, error (%s)", DTS_M8_OMX_LIB, dlerror());
+    }
 }
 
 
 SoftDTSDec::~SoftDTSDec()
 {
+    int ret = 0;
+    const char *error;
     DTS_ALOGV("+ ~SoftDTSDec() (dtor)");
 
-    OMX_FreeHandle(mComponentHandle);
-    OMX_Deinit();
+    if (mOmxLibHandle) {
+        fPtrFreeHandle omxFreeHandle = (fPtrFreeHandle)(dlsym(mOmxLibHandle, "OMX_FreeHandle"));
+        if ((error = dlerror()) != NULL) {
+            ret = -1;
+            ALOGE("~SoftDTSDec() failed to dlsym OMX_FreeHandle, error (%s)", error);
+        } else {
+            omxFreeHandle(mComponentHandle);
+        }
 
+        if (!ret) {
+            fPtrDeinit omxDeinit = (fPtrDeinit)(dlsym(mOmxLibHandle, "OMX_Deinit"));
+            if ((error = dlerror()) != NULL) {
+                ALOGE("~SoftDTSDec() failed to dlsym OMX_Deinit, error (%s)", error);
+            } else {
+                omxDeinit();
+            }
+        }
+
+        if (dlclose(mOmxLibHandle)) {
+            ALOGV("~SoftDTSDec() failed to dlclose %s", DTS_M8_OMX_LIB);
+        }
+    }
     DTS_ALOGV("- ~SoftDTSDec() (dtor)");
 }
-
 
 OMX_ERRORTYPE SoftDTSDec::sendCommand(OMX_COMMANDTYPE cmd, OMX_U32 param, OMX_PTR data)
 {
