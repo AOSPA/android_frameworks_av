@@ -445,10 +445,10 @@ void AudioMixer::deleteTrackName(int name)
     // delete the resampler
     delete track.resampler;
     track.resampler = NULL;
-    // delete the downmixer
-    mState.tracks[name].unprepareForDownmix();
     // delete the reformatter
     mState.tracks[name].unprepareForReformat();
+    // delete the downmixer
+    mState.tracks[name].unprepareForDownmix();
     // delete the timestretch provider
     delete track.mTimestretchBufferProvider;
     track.mTimestretchBufferProvider = NULL;
@@ -785,7 +785,8 @@ bool AudioMixer::track_t::setResampler(uint32_t trackSampleRate, uint32_t devSam
 #ifdef QTI_RESAMPLER
                 if ((trackSampleRate <= QTI_RESAMPLER_MAX_SAMPLERATE) &&
                        (trackSampleRate > devSampleRate * 2) &&
-                       ((devSampleRate == 48000)||(devSampleRate == 44100))) {
+                       ((devSampleRate == 48000)||(devSampleRate == 44100)) &&
+                       (resamplerChannelCount <= 2)) {
                     quality = AudioResampler::QTI_QUALITY;
                 }
 #endif

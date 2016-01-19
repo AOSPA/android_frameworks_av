@@ -18,6 +18,11 @@
  * licensed separately, as follows:
  *
  *  (C) 2011-2015 Dolby Laboratories, Inc.
+ * This file was modified by DTS, Inc. The portions of the
+ * code that are surrounded by "DTS..." are copyrighted and
+ * licensed separately, as follows:
+ *
+ *  (C) 2015 DTS, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +62,7 @@
 #include <utils/Vector.h>
 
 #include <inttypes.h>
+#include <stagefright/AVExtensions.h>
 
 namespace android {
 
@@ -622,6 +628,12 @@ ATSParser::Stream::Stream(
                     (mProgram->parserFlags() & ALIGNED_VIDEO_DATA)
                         ? ElementaryStreamQueue::kFlag_AlignedData : 0);
             break;
+        case STREAMTYPE_H265:
+            mQueue = AVFactory::get()->createESQueue(
+                    ElementaryStreamQueue::H265,
+                    (mProgram->parserFlags() & ALIGNED_VIDEO_DATA)
+                        ? ElementaryStreamQueue::kFlag_AlignedData : 0);
+            break;
         case STREAMTYPE_MPEG2_AUDIO_ADTS:
             mQueue = new ElementaryStreamQueue(ElementaryStreamQueue::AAC);
             break;
@@ -658,6 +670,13 @@ ATSParser::Stream::Stream(
             mQueue = new ElementaryStreamQueue(
                     ElementaryStreamQueue::METADATA);
             break;
+
+#ifdef DTS_CODEC_M_
+        case STREAMTYPE_DTSHD:
+            mQueue = new ElementaryStreamQueue(
+                    ElementaryStreamQueue::DTSHD);
+            break;
+#endif
 
         default:
             break;
@@ -760,6 +779,7 @@ status_t ATSParser::Stream::parse(
 bool ATSParser::Stream::isVideo() const {
     switch (mStreamType) {
         case STREAMTYPE_H264:
+        case STREAMTYPE_H265:
         case STREAMTYPE_MPEG1_VIDEO:
         case STREAMTYPE_MPEG2_VIDEO:
         case STREAMTYPE_MPEG4_VIDEO:
@@ -780,6 +800,9 @@ bool ATSParser::Stream::isAudio() const {
 #ifdef DOLBY_ENABLE
         case STREAMTYPE_EAC3:
 #endif // DOLBY_END
+#ifdef DTS_CODEC_M_
+        case STREAMTYPE_DTSHD:
+#endif
             return true;
 
         default:
@@ -1111,9 +1134,11 @@ void ATSParser::Stream::onPayloadData(
                      mElementaryPID, mStreamType);
 
                 const char *mime;
-                if (meta->findCString(kKeyMIMEType, &mime)
-                        && !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_AVC)
-                        && !IsIDR(accessUnit)) {
+                if (meta->findCString(kKeyMIMEType, &mime) &&
+                        ((!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_AVC)
+                           && !IsIDR(accessUnit)) ||
+                         (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_HEVC)
+                          && !AVUtils::get()->IsHevcIDR(accessUnit)))) {
                     continue;
                 }
                 mSource = new AnotherPacketSource(meta);
