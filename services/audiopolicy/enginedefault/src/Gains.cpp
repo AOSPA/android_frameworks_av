@@ -55,7 +55,7 @@ Gains::sSpeakerMediaVolumeCurve[Volume::VOLCNT] = {
 
 const VolumeCurvePoint
 Gains::sSpeakerMediaVolumeCurveDrc[Volume::VOLCNT] = {
-    {1, -55.0f}, {20, -43.0f}, {86, -12.0f}, {100, 0.0f}
+    {1, -46.5f}, {33, -26.5f}, {86, -7.0f}, {100, 0.0f}
 };
 
 const VolumeCurvePoint
