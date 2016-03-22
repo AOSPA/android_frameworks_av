@@ -48,6 +48,7 @@ enum {
     kKeySliceHeight       = 'slht',  // int32_t
     kKeyChannelCount      = '#chn',  // int32_t
     kKeyChannelMask       = 'chnm',  // int32_t
+    kKeyBitsPerSample     = 'abps',  // int32_t (audio bits per sample)
     kKeySampleRate        = 'srte',  // int32_t (audio sampling rate Hz)
     kKeyPcmEncoding       = 'PCMe',  // int32_t (audio encoding enum)
     kKeyFrameRate         = 'frmR',  // int32_t (video frame rate fps)

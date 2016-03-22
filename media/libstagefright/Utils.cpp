@@ -697,6 +697,10 @@ status_t convertMetaDataToMessage(
         if (meta->findInt32(kKeyChannelMask, &channelMask)) {
             msg->setInt32("channel-mask", channelMask);
         }
+        int32_t bitsPerSample;
+        if (meta->findInt32(kKeyBitsPerSample, &bitsPerSample)) {
+            msg->setInt32("bits-persample", bitsPerSample);
+        }
 
         int32_t delay = 0;
         if (meta->findInt32(kKeyEncoderDelay, &delay)) {
@@ -1331,6 +1335,10 @@ void convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
         int32_t channelMask;
         if (msg->findInt32("channel-mask", &channelMask)) {
             meta->setInt32(kKeyChannelMask, channelMask);
+        }
+        int32_t bitsPerSample;
+        if (msg->findInt32("bits-persample", &bitsPerSample)) {
+            meta->setInt32(kKeyBitsPerSample, bitsPerSample);
         }
         int32_t delay = 0;
         if (msg->findInt32("encoder-delay", &delay)) {
