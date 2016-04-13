@@ -16,7 +16,6 @@ LOCAL_CFLAGS :=
 LOCAL_CFLAGS += -Werror
 
 LOCAL_SHARED_LIBRARIES := \
-      libomx-dts \
       libstagefright_omx libstagefright_foundation libutils libcutils libdl
 
 LOCAL_MODULE := libstagefright_soft_dtsdec
