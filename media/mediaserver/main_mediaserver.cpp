@@ -134,9 +134,14 @@ int main(int argc __unused, char** argv)
         ALOGI("ServiceManager: %p", sm.get());
         AudioFlinger::instantiate();
         MediaPlayerService::instantiate();
+#ifdef LEGACY_FLASHLIGHT_FIX
+        AudioPolicyService::instantiate();
+#endif
         ResourceManagerService::instantiate();
         CameraService::instantiate();
+#ifndef LEGACY_FLASHLIGHT_FIX
         AudioPolicyService::instantiate();
+#endif
         SoundTriggerHwService::instantiate();
         RadioService::instantiate();
 #ifdef AUDIO_LISTEN_ENABLED
