@@ -2581,11 +2581,10 @@ void AudioFlinger::PlaybackThread::cacheParameters_l()
     mIdleSleepTimeUs = idleSleepTimeUs();
 }
 
-void AudioFlinger::PlaybackThread::invalidateTracks(audio_stream_type_t streamType)
+void AudioFlinger::PlaybackThread::invalidateTracks_l(audio_stream_type_t streamType)
 {
     ALOGV("MixerThread::invalidateTracks() mixer %p, streamType %d, mTracks.size %d",
             this,  streamType, mTracks.size());
-    Mutex::Autolock _l(mLock);
 
     size_t size = mTracks.size();
     for (size_t i = 0; i < size; i++) {
@@ -2594,6 +2593,12 @@ void AudioFlinger::PlaybackThread::invalidateTracks(audio_stream_type_t streamTy
             t->invalidate();
         }
     }
+}
+
+void AudioFlinger::PlaybackThread::invalidateTracks(audio_stream_type_t streamType)
+{
+    Mutex::Autolock _l(mLock);
+    invalidateTracks_l(streamType);
 }
 
 status_t AudioFlinger::PlaybackThread::addEffectChain_l(const sp<EffectChain>& chain)
@@ -5194,15 +5199,9 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::OffloadThread::prepareTr
         if (track->isInvalid()) {
             ALOGW("An invalidated track shouldn't be in active list");
             tracksToRemove->add(track);
-            continue;
-        }
-
-        if (track->mState == TrackBase::IDLE) {
+        } else if (track->mState == TrackBase::IDLE) {
             ALOGW("An idle track shouldn't be in active list");
-            continue;
-        }
-
-        if (track->isPausing()) {
+        } else if (track->isPausing()) {
             track->setPaused();
             if (last) {
                 if (mHwSupportsPause && !mHwPaused) {
@@ -5225,7 +5224,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::OffloadThread::prepareTr
             if (last) {
                 mFlushPending = true;
             }
-        } else if (track->isResumePending()){
+        } else if (track->isResumePending()) {
             track->resumeAck();
             if (last) {
                 if (mPausedBytesRemaining) {
@@ -5399,6 +5398,13 @@ void AudioFlinger::OffloadThread::flushHw_l()
         mCallbackThread->setWriteBlocked(mWriteAckSequence);
         mCallbackThread->setDraining(mDrainSequence);
     }
+}
+
+void AudioFlinger::OffloadThread::invalidateTracks(audio_stream_type_t streamType)
+{
+    Mutex::Autolock _l(mLock);
+    mFlushPending = true;
+    PlaybackThread::invalidateTracks_l(streamType);
 }
 
 // ----------------------------------------------------------------------------
