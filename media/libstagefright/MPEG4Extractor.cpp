@@ -611,7 +611,10 @@ status_t MPEG4Extractor::readMetaData() {
     }
     if (psshsize > 0 && psshsize <= UINT32_MAX) {
         char *buf = (char*)malloc(psshsize);
-        CHECK(buf != NULL);
+        if (!buf) {
+            ALOGE("b/28471206");
+            return NO_MEMORY;
+        }
         char *ptr = buf;
         for (size_t i = 0; i < mPssh.size(); i++) {
             memcpy(ptr, mPssh[i].uuid, 20); // uuid + length
@@ -1006,6 +1009,11 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             }
 
             if (isTrack) {
+                int32_t trackId;
+                // There must be exact one track header per track.
+                if (!mLastTrack->meta->findInt32(kKeyTrackID, &trackId)) {
+                    mLastTrack->skipTrack = true;
+                }
                 if (mLastTrack->skipTrack) {
                     Track *cur = mFirstTrack;
 
@@ -1900,6 +1908,11 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
 
             sp<ABuffer> buffer = new ABuffer(chunk_data_size);
 
+            if (buffer->data() == NULL) {
+                ALOGE("b/28471206");
+                return NO_MEMORY;
+            }
+
             if (mDataSource->readAt(
                         data_offset, buffer->data(), chunk_data_size) < chunk_data_size) {
                 return ERROR_IO;
@@ -1916,6 +1929,11 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
         case FOURCC('h', 'v', 'c', 'C'):
         {
             sp<ABuffer> buffer = new ABuffer(chunk_data_size);
+
+            if (buffer->data() == NULL) {
+                ALOGE("b/28471206");
+                return NO_MEMORY;
+            }
 
             if (mDataSource->readAt(
                         data_offset, buffer->data(), chunk_data_size) < chunk_data_size) {
@@ -2249,6 +2267,10 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
                     return ERROR_MALFORMED;
                 }
                 sp<ABuffer> buffer = new ABuffer(chunk_data_size + 1);
+                if (buffer->data() == NULL) {
+                    ALOGE("b/28471206");
+                    return NO_MEMORY;
+                }
                 if (mDataSource->readAt(
                     data_offset, buffer->data(), chunk_data_size) != (ssize_t)chunk_data_size) {
                     return ERROR_IO;
@@ -3049,6 +3071,9 @@ sp<MediaSource> MPEG4Extractor::getTrack(size_t index) {
                 break;
             }
         }
+    } else {
+        ALOGE("b/21657957");
+        return NULL;
     }
 
     ALOGV("getTrack called, pssh: %zu", mPssh.size());
@@ -4432,8 +4457,8 @@ status_t MPEG4Source::read(
                 if (dstOffset > SIZE_MAX - 4 ||
                         dstOffset + 4 > SIZE_MAX - nalLength ||
                         dstOffset + 4 + nalLength > mBuffer->size()) {
-                    ALOGE("b/26365349 : %zu %zu", dstOffset, mBuffer->size());
-                    android_errorWriteLog(0x534e4554, "26365349");
+                    ALOGE("b/27208621 : %zu %zu", dstOffset, mBuffer->size());
+                    android_errorWriteLog(0x534e4554, "27208621");
                     mBuffer->release();
                     mBuffer = NULL;
                     return ERROR_MALFORMED;
@@ -4757,8 +4782,8 @@ status_t MPEG4Source::fragmentedRead(
                 if (dstOffset > SIZE_MAX - 4 ||
                         dstOffset + 4 > SIZE_MAX - nalLength ||
                         dstOffset + 4 + nalLength > mBuffer->size()) {
-                    ALOGE("b/27208621 : %zu %zu", dstOffset, mBuffer->size());
-                    android_errorWriteLog(0x534e4554, "27208621");
+                    ALOGE("b/26365349 : %zu %zu", dstOffset, mBuffer->size());
+                    android_errorWriteLog(0x534e4554, "26365349");
                     mBuffer->release();
                     mBuffer = NULL;
                     return ERROR_MALFORMED;
