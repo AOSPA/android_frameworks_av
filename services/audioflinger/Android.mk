@@ -66,8 +66,10 @@ LOCAL_MULTILIB := $(AUDIOSERVER_MULTILIB)
 
 #QTI Resampler
 ifeq ($(call is-vendor-board-platform,QCOM), true)
+ifeq ($(strip $(VENDOR_HEAD_IS_PRESENT)), true)
 ifeq ($(strip $(AUDIO_FEATURE_ENABLED_EXTN_RESAMPLER)), true)
 LOCAL_CFLAGS += -DQTI_RESAMPLER
+endif
 endif
 endif
 #QTI Resampler
@@ -143,6 +145,7 @@ LOCAL_SHARED_LIBRARIES := \
 
 #QTI Resampler
 ifeq ($(call is-vendor-board-platform,QCOM),true)
+ifeq ($(strip $(VENDOR_HEAD_IS_PRESENT)), true)
 ifeq ($(strip $(AUDIO_FEATURE_ENABLED_EXTN_RESAMPLER)),true)
 ifdef TARGET_2ND_ARCH
 LOCAL_SRC_FILES_$(TARGET_2ND_ARCH) += AudioResamplerQTI.cpp.arm
@@ -154,6 +157,7 @@ LOCAL_SRC_FILES += AudioResamplerQTI.cpp.arm
 LOCAL_C_INCLUDES += $(TARGET_OUT_HEADERS)/mm-audio/audio-src
 LOCAL_SHARED_LIBRARIES += libqct_resampler
 LOCAL_CFLAGS += -DQTI_RESAMPLER
+endif
 endif
 endif
 endif
