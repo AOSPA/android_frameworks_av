@@ -73,8 +73,10 @@ LOCAL_SRC_FILES:= \
 
 #QTI Resampler
 ifeq ($(call is-vendor-board-platform,QCOM), true)
+ifeq ($(strip $(VENDOR_HEAD_IS_PRESENT)), true)
 ifeq ($(strip $(AUDIO_FEATURE_ENABLED_EXTN_RESAMPLER)), true)
 LOCAL_CFLAGS += -DQTI_RESAMPLER
+endif
 endif
 endif
 #QTI Resampler
