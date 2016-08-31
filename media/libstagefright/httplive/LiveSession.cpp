@@ -157,6 +157,11 @@ bool LiveSession::BandwidthEstimator::estimateBandwidth(
     }
 
     *bandwidthBps = ((double)mTotalTransferBytes * 8E6 / mTotalTransferTimeUs);
+    static const int32_t kMaxBandwidthBps = 0x7fffffff / 7;
+    if (*bandwidthBps > kMaxBandwidthBps) {
+        ALOGW("Override bandwidth because it's too huge. %d -> %d", *bandwidthBps, kMaxBandwidthBps);
+        *bandwidthBps = kMaxBandwidthBps;
+    }
     mPrevEstimates.push_back(*bandwidthBps);
     while (mPrevEstimates.size() > 3) {
         mPrevEstimates.erase(mPrevEstimates.begin());
