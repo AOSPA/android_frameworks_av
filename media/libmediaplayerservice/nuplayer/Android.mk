@@ -41,8 +41,8 @@ LOCAL_C_INCLUDES := \
 
 LOCAL_CFLAGS += -Werror -Wall
 
-# enable experiments only in userdebug and eng builds
-ifneq (,$(filter userdebug eng,$(TARGET_BUILD_VARIANT)))
+# enable experiments only if requested
+ifeq ($(TARGET_ENABLE_AV_EXPERIMENTS),true)
 LOCAL_CFLAGS += -DENABLE_STAGEFRIGHT_EXPERIMENTS
 endif
 # DOLBY_START

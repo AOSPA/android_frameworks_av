@@ -151,8 +151,8 @@ endif
 
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wno-error=deprecated-declarations -Wall
 
-# enable experiments only in userdebug and eng builds
-ifneq (,$(filter userdebug eng,$(TARGET_BUILD_VARIANT)))
+# enable experiments only if requested
+ifeq ($(TARGET_ENABLE_AV_EXPERIMENTS),true)
 LOCAL_CFLAGS += -DENABLE_STAGEFRIGHT_EXPERIMENTS
 endif
 # DOLBY_START
