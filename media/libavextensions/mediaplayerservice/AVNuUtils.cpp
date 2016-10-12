@@ -39,6 +39,11 @@
 #include <nuplayer/NuPlayerSource.h>
 #include <nuplayer/NuPlayerRenderer.h>
 
+#ifndef ENABLE_AV_ENHANCEMENTS
+#include <media/stagefright/MediaDefs.h>
+#include <media/stagefright/MetaData.h>
+#endif
+
 #include "common/ExtensionsLoader.hpp"
 #include "mediaplayerservice/AVNuExtensions.h"
 
@@ -76,9 +81,27 @@ void AVNuUtils::checkFormatChange(bool * /*formatChange*/,
         const sp<ABuffer> & /*accessUnit*/) {
 }
 
+#ifndef ENABLE_AV_ENHANCEMENTS
+bool AVNuUtils::isByteStreamModeEnabled(const sp<MetaData> &meta) {
+    const char *mime = {0};
+
+    if ((meta == NULL) || !(meta->findCString(kKeyMIMEType, &mime))) {
+        return false;
+    }
+
+   // MP3 and AAC typed streams are guaranteed to be in ByteStreamMode
+   if ((!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC)) || (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_MPEG))) {
+        return true;
+   } else {
+        return false;
+   }
+
+}
+#else
 bool AVNuUtils::isByteStreamModeEnabled(const sp<MetaData> &) {
     return false;
 }
+#endif
 
 // ----- NO TRESSPASSING BEYOND THIS LINE ------
 AVNuUtils::AVNuUtils() {}
