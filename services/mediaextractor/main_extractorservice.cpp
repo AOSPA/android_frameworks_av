@@ -39,7 +39,12 @@ int main(int argc __unused, char** argv)
     limitProcessMemory(
         "ro.media.maxmem", /* property that defines limit */
         SIZE_MAX, /* upper limit in bytes */
-        25 /* upper limit as percentage of physical RAM */);
+#ifndef ENABLE_AV_ENHANCEMENTS
+        15
+#else
+        25
+#endif
+/* upper limit as percentage of physical RAM */);
 
     signal(SIGPIPE, SIG_IGN);
     MiniJail();
