@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "da7095c5_4212a363",
+        "filename": "services/mediaextractor/main_extractorservice.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 47,
+      "author": {
+        "id": 1000009
+      },
+      "writtenOn": "2016-10-16T22:17:15Z",
+      "side": 1,
+      "message": "This text should be side-by-side with \u002725\u0027. Let me adjust this!",
+      "revId": "bf1d966821e90d0c3f43560b0e0e84ed7c653715",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad",
+      "unresolved": false
+    }
+  ]
+}
