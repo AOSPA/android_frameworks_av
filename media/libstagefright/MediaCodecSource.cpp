@@ -188,7 +188,6 @@ void MediaCodecSource::Puller::stop() {
         interrupt = queue->mReadPendingSince && (queue->mReadPendingSince < ALooper::GetNowUs() - 1000000);
         queue->flush(); // flush any unprocessed pulled buffers
     }
-
 }
 
 void MediaCodecSource::Puller::interruptSource() {
@@ -1073,6 +1072,14 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
     }
     default:
         TRESPASS();
+    }
+}
+
+void MediaCodecSource::notifyPerformanceMode() {
+    if (mIsVideo && mEncoder != NULL) {
+        sp<AMessage> params = new AMessage;
+        params->setInt32("qti.request.perf", true);
+        mEncoder->setParameters(params);
     }
 }
 
