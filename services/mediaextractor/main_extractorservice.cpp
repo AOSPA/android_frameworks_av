@@ -42,7 +42,7 @@ int main(int argc __unused, char** argv)
 #ifndef ENABLE_AV_ENHANCEMENTS
         15 /* upper limit as percentage of physical RAM */
 #else
-        25 /* higher upper limit as percentage of physical RAM */
+        20 /* higher upper limit as percentage of physical RAM */
 #endif
     );
 
