@@ -18,7 +18,7 @@ endif
 LOCAL_SRC_FILES += $(wildcard $(foreach dir, $(BOARD_SECCOMP_POLICY), \
                      $(dir)/mediacodec-seccomp.policy))
 
-include $(BUILD_SYSTEM)/base_rules.mk
+#include $(BUILD_SYSTEM)/base_rules.mk
 
 $(LOCAL_BUILT_MODULE): $(LOCAL_SRC_FILES)
 	@mkdir -p $(dir $@)
