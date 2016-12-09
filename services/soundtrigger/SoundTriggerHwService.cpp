@@ -307,7 +307,7 @@ void SoundTriggerHwService::sendRecognitionEvent(struct sound_trigger_recognitio
         newEvent.common.data_size = event->data_size;
         newEvent.common.data_offset = sizeof(struct sound_trigger_phrase_recognition_event);
 
-         event = &newEvent.common;
+        event = &newEvent.common;
      }
      sp<IMemory> eventMemory = prepareRecognitionEvent_l(event);
      if (eventMemory == 0) {
