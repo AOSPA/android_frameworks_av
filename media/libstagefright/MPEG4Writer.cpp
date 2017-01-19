@@ -3479,7 +3479,7 @@ void MPEG4Writer::Track::writeCttsBox() {
 
     mOwner->beginBox("ctts");
     mOwner->writeInt32(0);  // version=0, flags=0
-    uint32_t delta = mMinCttsOffsetTimeUs - getStartTimeOffsetScaledTime();
+    int64_t delta = mMinCttsOffsetTimeUs - getStartTimeOffsetScaledTime();
     mCttsTableEntries->adjustEntries([delta](size_t /* ix */, uint32_t (&value)[2]) {
         // entries are <count, ctts> pairs; adjust only ctts
         uint32_t duration = htonl(value[1]); // back to host byte order
