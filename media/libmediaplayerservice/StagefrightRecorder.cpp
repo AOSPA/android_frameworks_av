@@ -1465,7 +1465,7 @@ status_t StagefrightRecorder::setupCameraSource(
     Size videoSize;
     videoSize.width = mVideoWidth;
     videoSize.height = mVideoHeight;
-    if (mCaptureFpsEnable) {
+    if (mCaptureFpsEnable && mCaptureFps != mFrameRate ) {
         if (mTimeBetweenCaptureUs < 0) {
             ALOGE("Invalid mTimeBetweenTimeLapseFrameCaptureUs value: %" PRId64 "",
                 mTimeBetweenCaptureUs);
