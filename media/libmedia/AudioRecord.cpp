@@ -875,7 +875,7 @@ audio_io_handle_t AudioRecord::getInputPrivate() const
 
 ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
 {
-    if (mTransfer != TRANSFER_SYNC) {
+    if ((mTransfer != TRANSFER_SYNC) || !mActive) {
         return INVALID_OPERATION;
     }
 
