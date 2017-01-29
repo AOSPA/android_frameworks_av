@@ -273,10 +273,7 @@ void CameraService::onFirstRef()
 
 sp<ICameraServiceProxy> CameraService::getCameraServiceProxy() {
     sp<IServiceManager> sm = defaultServiceManager();
-    // Use checkService because cameraserver normally starts before the
-    // system server and the proxy service. So the long timeout that getService
-    // has before giving up is inappropriate.
-    sp<IBinder> binder = sm->checkService(String16("media.camera.proxy"));
+    sp<IBinder> binder = sm->getService(String16("media.camera.proxy"));
     if (binder == nullptr) {
         return nullptr;
     }
