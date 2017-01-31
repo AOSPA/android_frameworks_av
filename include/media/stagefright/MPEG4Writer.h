@@ -225,6 +225,10 @@ private:
 
     static uint32_t getMpeg4Time();
 
+    int64_t mLastAudioTimeStampUs;
+    void setLastAudioTimeStamp(int64_t ts) {mLastAudioTimeStampUs = ts;}
+    int64_t getLastAudioTimeStamp() {return mLastAudioTimeStampUs;}
+
     MPEG4Writer(const MPEG4Writer &);
     MPEG4Writer &operator=(const MPEG4Writer &);
 };
