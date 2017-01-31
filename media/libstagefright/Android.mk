@@ -173,6 +173,10 @@ LOCAL_CFLAGS += -DQTI_FLAC_DECODER
 endif
 endif
 
+ifneq (,$(filter msm8992 msm8994 msm8996 msmcobalt msmfalcon, $(TARGET_BOARD_PLATFORM)))
+    LOCAL_CFLAGS += -DNO_LIBWVM
+endif
+
 LOCAL_CLANG := true
 LOCAL_SANITIZE := unsigned-integer-overflow signed-integer-overflow
 
