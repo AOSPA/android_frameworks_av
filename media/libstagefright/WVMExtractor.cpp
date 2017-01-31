@@ -47,6 +47,10 @@ static Mutex gWVMutex;
 WVMExtractor::WVMExtractor(const sp<DataSource> &source)
     : mDataSource(source)
 {
+#ifdef NO_LIBWVM
+    return;
+#endif
+
     Mutex::Autolock autoLock(gWVMutex);
 
     if (!getVendorLibHandle()) {
@@ -168,6 +172,10 @@ void WVMExtractor::setError(status_t err) {
 bool SniffWVM(
     const sp<DataSource> &source, String8 *mimeType, float *confidence,
         sp<AMessage> *) {
+
+#ifdef NO_LIBWVM
+    return;
+#endif
 
     Mutex::Autolock autoLock(gWVMutex);
 
