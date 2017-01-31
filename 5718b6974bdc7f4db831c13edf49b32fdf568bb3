@@ -16,6 +16,24 @@
       "revId": "5718b6974bdc7f4db831c13edf49b32fdf568bb3",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad",
       "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "fa81d914_2d31f9a2",
+        "filename": "media/libstagefright/WVMExtractor.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 177,
+      "author": {
+        "id": 1000007
+      },
+      "writtenOn": "2017-01-31T19:26:17Z",
+      "side": 1,
+      "message": "Derp.\nWell we don\u0027t want to try to get the symbol if unsupported",
+      "parentUuid": "fa81d914_edffe1a8",
+      "revId": "5718b6974bdc7f4db831c13edf49b32fdf568bb3",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad",
+      "unresolved": false
     }
   ]
 }
