@@ -1812,6 +1812,40 @@ void NuPlayer::Renderer::cancelAudioOffloadPauseTimeout() {
     ++mAudioOffloadPauseTimeoutGeneration;
 }
 
+static const struct aac_adts_format_conv_t profileLookup[] = {
+    { OMX_AUDIO_AACObjectMain,        AUDIO_FORMAT_AAC_MAIN},
+    { OMX_AUDIO_AACObjectLC,          AUDIO_FORMAT_AAC_ADTS_LC},
+    { OMX_AUDIO_AACObjectSSR,         AUDIO_FORMAT_AAC_ADTS_SSR},
+    { OMX_AUDIO_AACObjectLTP,         AUDIO_FORMAT_AAC_ADTS_LTP},
+    { OMX_AUDIO_AACObjectHE,          AUDIO_FORMAT_AAC_ADTS_HE_V1},
+    { OMX_AUDIO_AACObjectScalable,    AUDIO_FORMAT_AAC_ADTS_SCALABLE},
+    { OMX_AUDIO_AACObjectERLC,        AUDIO_FORMAT_AAC_ADTS_ERLC},
+    { OMX_AUDIO_AACObjectLD,          AUDIO_FORMAT_AAC_ADTS_LD},
+    { OMX_AUDIO_AACObjectHE_PS,       AUDIO_FORMAT_AAC_ADTS_HE_V2},
+    { OMX_AUDIO_AACObjectELD,         AUDIO_FORMAT_AAC_ADTS_ELD},
+    { OMX_AUDIO_AACObjectNull,        AUDIO_FORMAT_AAC_ADTS},
+};
+
+bool mapAACProfileToAudioFormat_QC(const sp<AMessage> &format,
+                          audio_format_t& audioFormat,
+                          uint64_t eAacProfile) {
+
+    int32_t isADTS;
+    if (format->findInt32("is-adts", &isADTS)) {
+        const struct aac_adts_format_conv_t* p = &profileLookup[0];
+        while (p->eAacProfileType != OMX_AUDIO_AACObjectNull) {
+            if (eAacProfile == p->eAacProfileType) {
+                audioFormat = p->format;
+                return true;
+            }
+            ++p;
+        }
+        audioFormat = AUDIO_FORMAT_AAC_ADTS;
+        return true;
+    }
+    return false;
+}
+
 status_t NuPlayer::Renderer::onOpenAudioSink(
         const sp<AMessage> &format,
         bool offloadOnly,
@@ -1864,7 +1898,7 @@ status_t NuPlayer::Renderer::onOpenAudioSink(
                     && format->findInt32("aac-profile", &aacProfile)) {
                 // Redefine AAC format as per aac profile
                 int32_t isADTSSupported;
-                isADTSSupported = AVUtils::get()->mapAACProfileToAudioFormat(format,
+                isADTSSupported = mapAACProfileToAudioFormat_QC(format,
                                           audioFormat,
                                           aacProfile);
                 if (!isADTSSupported) {

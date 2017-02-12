@@ -1480,6 +1480,166 @@ AString MakeUserAgent() {
     return ua;
 }
 
+status_t sendMetaDataToHal_QC(const sp<MetaData>& meta, AudioParameter *param) {
+
+    (void)param;
+    const char *mime;
+    bool success = meta->findCString(kKeyMIMEType, &mime);
+    CHECK(success);
+
+#ifdef FLAC_OFFLOAD_ENABLED
+    int32_t minBlkSize = 0, maxBlkSize = 0, minFrmSize = 0, maxFrmSize = 0;
+    if(!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_FLAC)) {
+        if (meta->findInt32(kKeyMinBlkSize, &minBlkSize)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_FLAC_MIN_BLK_SIZE), minBlkSize);
+        }
+        if (meta->findInt32(kKeyMaxBlkSize, &maxBlkSize)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_FLAC_MAX_BLK_SIZE), maxBlkSize);
+        }
+        if (meta->findInt32(kKeyMinFrmSize, &minFrmSize)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_FLAC_MIN_FRAME_SIZE), minFrmSize);
+        }
+        if (meta->findInt32(kKeyMaxFrmSize, &maxFrmSize)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_FLAC_MAX_FRAME_SIZE), maxFrmSize);
+        }
+        AVLOGV("FLAC metadata: minBlkSize %d, maxBlkSize %d, minFrmSize %d, maxFrmSize %d",
+                minBlkSize, maxBlkSize, minFrmSize, maxFrmSize);
+        return OK;
+    }
+#endif
+
+#ifdef WMA_OFFLOAD_ENABLED
+    int32_t wmaFormatTag = 0, wmaBlockAlign = 0, wmaChannelMask = 0;
+    int32_t wmaBitsPerSample = 0, wmaEncodeOpt = 0, wmaEncodeOpt1 = 0;
+    int32_t wmaEncodeOpt2 = 0;
+
+    if(!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_WMA)) {
+        if (meta->findInt32(kKeyWMAFormatTag, &wmaFormatTag)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_FORMAT_TAG), wmaFormatTag);
+        }
+        if (meta->findInt32(kKeyWMABlockAlign, &wmaBlockAlign)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_BLOCK_ALIGN), wmaBlockAlign);
+        }
+        if (meta->findInt32(kKeyWMABitspersample, &wmaBitsPerSample)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_BIT_PER_SAMPLE), wmaBitsPerSample);
+        }
+        if (meta->findInt32(kKeyWMAChannelMask, &wmaChannelMask)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_CHANNEL_MASK), wmaChannelMask);
+        }
+        if (meta->findInt32(kKeyWMAEncodeOpt, &wmaEncodeOpt)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION), wmaEncodeOpt);
+        }
+        if (meta->findInt32(kKeyWMAAdvEncOpt1, &wmaEncodeOpt1)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION1), wmaEncodeOpt1);
+        }
+        if (meta->findInt32(kKeyWMAAdvEncOpt2, &wmaEncodeOpt2)) {
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_WMA_ENCODE_OPTION2), wmaEncodeOpt2);
+        }
+        AVLOGV("WMA specific meta: fmt_tag 0x%x, blk_align %d, bits_per_sample %d, "
+                "enc_options 0x%x", wmaFormatTag, wmaBlockAlign,
+                wmaBitsPerSample, wmaEncodeOpt);
+        return OK;
+    }
+#endif
+
+#ifdef VORBIS_OFFLOAD_ENABLED
+    int32_t bitstream_fmt = 1;
+    if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_VORBIS)) {
+        param->addInt(String8(AUDIO_OFFLOAD_CODEC_VORBIS_BITSTREAM_FMT), bitstream_fmt);
+        AVLOGV("Vorbis metadata: bitstream_fmt %d", bitstream_fmt);
+        return OK;
+    }
+#endif
+
+    const void *data;
+    size_t size;
+    uint32_t type = 0;
+    if (meta->findData(kKeyRawCodecSpecificData, &type, &data, &size)) {
+        CHECK(data && (size == ALAC_CSD_SIZE || size == APE_CSD_SIZE));
+        AVLOGV("Found kKeyRawCodecSpecificData of size %d", size);
+        const uint8_t *ptr = (uint8_t *) data;
+
+#ifdef ALAC_OFFLOAD_ENABLED
+        if (!strncasecmp(mime, MEDIA_MIMETYPE_AUDIO_ALAC,
+                    strlen(MEDIA_MIMETYPE_AUDIO_ALAC))) {
+            uint32_t frameLength = 0, maxFrameBytes = 0, avgBitRate = 0;
+            uint32_t samplingRate = 0, channelLayoutTag = 0;
+            uint8_t compatibleVersion = 0, pb = 0, mb = 0, kb = 0, numChannels = 0, bitDepth = 0;
+            uint16_t maxRun = 0;
+
+            memcpy(&frameLength, ptr + kKeyIndexAlacFrameLength, sizeof(frameLength));
+            memcpy(&compatibleVersion, ptr + kKeyIndexAlacCompatibleVersion, sizeof(compatibleVersion));
+            memcpy(&bitDepth, ptr + kKeyIndexAlacBitDepth, sizeof(bitDepth));
+            memcpy(&pb, ptr + kKeyIndexAlacPb, sizeof(pb));
+            memcpy(&mb, ptr + kKeyIndexAlacMb, sizeof(mb));
+            memcpy(&kb, ptr + kKeyIndexAlacKb, sizeof(kb));
+            memcpy(&numChannels, ptr + kKeyIndexAlacNumChannels, sizeof(numChannels));
+            memcpy(&maxRun, ptr + kKeyIndexAlacMaxRun, sizeof(maxRun));
+            memcpy(&maxFrameBytes, ptr + kKeyIndexAlacMaxFrameBytes, sizeof(maxFrameBytes));
+            memcpy(&avgBitRate, ptr + kKeyIndexAlacAvgBitRate, sizeof(avgBitRate));
+            memcpy(&samplingRate, ptr + kKeyIndexAlacSamplingRate, sizeof(samplingRate));
+
+            AVLOGV("ALAC CSD values: frameLength %d bitDepth %d numChannels %d"
+                    " maxFrameBytes %d avgBitRate %d samplingRate %d",
+                    frameLength, bitDepth, numChannels, maxFrameBytes, avgBitRate, samplingRate);
+
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_FRAME_LENGTH), frameLength);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_COMPATIBLE_VERSION), compatibleVersion);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_BIT_DEPTH), bitDepth);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_PB), pb);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_MB), mb);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_KB), kb);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_NUM_CHANNELS), numChannels);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_MAX_RUN), maxRun);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_MAX_FRAME_BYTES), maxFrameBytes);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_AVG_BIT_RATE), avgBitRate);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_SAMPLING_RATE), samplingRate);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_ALAC_CHANNEL_LAYOUT_TAG), channelLayoutTag);
+            return OK;
+        }
+#endif
+#ifdef APE_OFFLOAD_ENABLED
+        if (!strncasecmp(mime, MEDIA_MIMETYPE_AUDIO_APE,
+                    strlen(MEDIA_MIMETYPE_AUDIO_APE))) {
+            uint16_t compatibleVersion = 0, compressionLevel = 0;
+            uint16_t bitsPerSample = 0, numChannels = 0;
+            uint32_t formatFlags = 0, blocksPerFrame = 0, finalFrameBlocks = 0;
+            uint32_t totalFrames = 0, sampleRate = 0, seekTablePresent = 0;
+
+            memcpy(&compatibleVersion, ptr + kKeyIndexApeCompatibleVersion, sizeof(compatibleVersion));
+            memcpy(&compressionLevel, ptr + kKeyIndexApeCompressionLevel, sizeof(compressionLevel));
+            memcpy(&formatFlags, ptr + kKeyIndexApeFormatFlags, sizeof(formatFlags));
+            memcpy(&blocksPerFrame, ptr + kKeyIndexApeBlocksPerFrame, sizeof(blocksPerFrame));
+            memcpy(&finalFrameBlocks, ptr + kKeyIndexApeFinalFrameBlocks, sizeof(finalFrameBlocks));
+            memcpy(&totalFrames, ptr + kKeyIndexApeTotalFrames, sizeof(totalFrames));
+            memcpy(&bitsPerSample, ptr + kKeyIndexApeBitsPerSample, sizeof(bitsPerSample));
+            memcpy(&numChannels, ptr + kKeyIndexApeNumChannels, sizeof(numChannels));
+            memcpy(&sampleRate, ptr + kKeyIndexApeSampleRate, sizeof(sampleRate));
+            memcpy(&seekTablePresent, ptr + kKeyIndexApeSeekTablePresent, sizeof(seekTablePresent));
+
+            AVLOGV("APE CSD values: compatibleVersion %d compressionLevel %d formatFlags %d"
+                    " blocksPerFrame %d finalFrameBlocks %d totalFrames %d bitsPerSample %d"
+                    " numChannels %d sampleRate %d seekTablePresent %d",
+                    compatibleVersion, compressionLevel, formatFlags, blocksPerFrame, finalFrameBlocks, totalFrames,
+                    bitsPerSample, numChannels, sampleRate, seekTablePresent);
+
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_COMPATIBLE_VERSION), compatibleVersion);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_COMPRESSION_LEVEL), compressionLevel);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_FORMAT_FLAGS), formatFlags);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_BLOCKS_PER_FRAME), blocksPerFrame);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_FINAL_FRAME_BLOCKS), finalFrameBlocks);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_TOTAL_FRAMES), totalFrames);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_BITS_PER_SAMPLE), bitsPerSample);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_NUM_CHANNELS), numChannels);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_SAMPLE_RATE), sampleRate);
+            param->addInt(String8(AUDIO_OFFLOAD_CODEC_APE_SEEK_TABLE_PRESENT), seekTablePresent);
+            return OK;
+        }
+#endif
+    }
+    return OK;
+}
+
 status_t sendMetaDataToHal(sp<MediaPlayerBase::AudioSink>& sink,
                            const sp<MetaData>& meta)
 {
@@ -1506,7 +1666,7 @@ status_t sendMetaDataToHal(sp<MediaPlayerBase::AudioSink>& sink,
     if (meta->findInt32(kKeyEncoderPadding, &paddingSamples)) {
         param.addInt(String8(AUDIO_OFFLOAD_CODEC_PADDING_SAMPLES), paddingSamples);
     }
-    AVUtils::get()->sendMetaDataToHal(meta, &param);
+    sendMetaDataToHal_QC(meta, &param);
     ALOGV("sendMetaDataToHal: bitRate %d, sampleRate %d, chanMask %d,"
           "delaySample %d, paddingSample %d", bitRate, sampleRate,
           channelMask, delaySamples, paddingSamples);
@@ -1583,6 +1743,45 @@ const struct aac_format_conv_t* p = &profileLookup[0];
     return;
 }
 
+
+struct aac_adts_format_conv_t {
+        OMX_AUDIO_AACPROFILETYPE eAacProfileType;
+        audio_format_t format;
+};
+
+static const struct aac_adts_format_conv_t profileLookup[] = {
+    { OMX_AUDIO_AACObjectMain,        AUDIO_FORMAT_AAC_MAIN},
+    { OMX_AUDIO_AACObjectLC,          AUDIO_FORMAT_AAC_ADTS_LC},
+    { OMX_AUDIO_AACObjectSSR,         AUDIO_FORMAT_AAC_ADTS_SSR},
+    { OMX_AUDIO_AACObjectLTP,         AUDIO_FORMAT_AAC_ADTS_LTP},
+    { OMX_AUDIO_AACObjectHE,          AUDIO_FORMAT_AAC_ADTS_HE_V1},
+    { OMX_AUDIO_AACObjectScalable,    AUDIO_FORMAT_AAC_ADTS_SCALABLE},
+    { OMX_AUDIO_AACObjectERLC,        AUDIO_FORMAT_AAC_ADTS_ERLC},
+    { OMX_AUDIO_AACObjectLD,          AUDIO_FORMAT_AAC_ADTS_LD},
+    { OMX_AUDIO_AACObjectHE_PS,       AUDIO_FORMAT_AAC_ADTS_HE_V2},
+    { OMX_AUDIO_AACObjectELD,         AUDIO_FORMAT_AAC_ADTS_ELD},
+    { OMX_AUDIO_AACObjectNull,        AUDIO_FORMAT_AAC_ADTS},
+};
+
+bool mapAACProfileToAudioFormat_QC(const sp<MetaData> &meta,
+                          audio_format_t& audioFormat,
+                          uint64_t eAacProfile) {
+    int32_t isADTS;
+    if (meta->findInt32(kKeyIsADTS, &isADTS)) {
+        const struct aac_adts_format_conv_t* p = &profileLookup[0];
+        while (p->eAacProfileType != OMX_AUDIO_AACObjectNull) {
+            if (eAacProfile == p->eAacProfileType) {
+                audioFormat = p->format;
+                return true;
+            }
+            ++p;
+        }
+        audioFormat = AUDIO_FORMAT_AAC_ADTS;
+        return true;
+    }
+    return false;
+}
+
 bool canOffloadStream(const sp<MetaData>& meta, bool hasVideo,
                       bool isStreaming, audio_stream_type_t streamType)
 {
@@ -1617,7 +1816,7 @@ bool canOffloadStream(const sp<MetaData>& meta, bool hasVideo,
     int32_t aacaot = -1;
     if (meta->findInt32(kKeyAACAOT, &aacaot)) {
         bool isADTSSupported = false;
-        isADTSSupported = AVUtils::get()->mapAACProfileToAudioFormat(meta, info.format,
+        isADTSSupported = mapAACProfileToAudioFormat_QC(meta, info.format,
                                   (OMX_AUDIO_AACPROFILETYPE) aacaot);
         if (!isADTSSupported) {
            mapAACProfileToAudioFormat(info.format,(OMX_AUDIO_AACPROFILETYPE) aacaot);
