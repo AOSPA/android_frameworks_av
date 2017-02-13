@@ -121,6 +121,7 @@ protected:
     float mCaptureFps;
     int64_t mTimeBetweenCaptureUs;
     sp<CameraSourceTimeLapse> mCameraSourceTimeLapse;
+    sp<CameraSource> mCameraSource;
 
     String8 mParams;
 

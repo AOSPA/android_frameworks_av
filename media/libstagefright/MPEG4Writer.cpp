@@ -407,6 +407,10 @@ private:
 
     Track(const Track &);
     Track &operator=(const Track &);
+
+    bool mIsStopping;
+    Mutex mTrackCompletionLock;
+    Condition mTrackCompletionSignal;
 };
 
 MPEG4Writer::MPEG4Writer(int fd)
@@ -966,8 +970,9 @@ status_t MPEG4Writer::reset() {
     status_t err = OK;
     int64_t maxDurationUs = 0;
     int64_t minDurationUs = 0x7fffffffffffffffLL;
-    for (List<Track *>::iterator it = mTracks.begin();
-         it != mTracks.end(); ++it) {
+    List<Track *>::iterator it = mTracks.end();
+    do {
+        --it;
         status_t status = (*it)->stop();
         if (err == OK && status != OK) {
             err = status;
@@ -980,7 +985,7 @@ status_t MPEG4Writer::reset() {
         if (durationUs < minDurationUs) {
             minDurationUs = durationUs;
         }
-    }
+    } while (it != mTracks.begin());
 
     if (mTracks.size() > 1) {
         ALOGD("Duration from tracks range is [%" PRId64 ", %" PRId64 "] us",
@@ -1586,6 +1591,7 @@ MPEG4Writer::Track::Track(
     }
 
     setTimeScale();
+    mIsStopping = false;
 }
 
 void MPEG4Writer::Track::updateTrackSizeEstimate() {
@@ -1985,6 +1991,14 @@ status_t MPEG4Writer::Track::stop() {
 
     if (mDone) {
         return OK;
+    }
+
+    if (!mIsAudio) {
+        Mutex::Autolock lock(mTrackCompletionLock);
+        mIsStopping = true;
+        if (mTrackCompletionSignal.waitRelative(mTrackCompletionLock, 1e9 /* 1 sec */)) {
+            ALOGW("Timed-out waiting for video track to reach final audio timestamp !");
+        }
     }
     mDone = true;
 
@@ -2766,6 +2780,15 @@ status_t MPEG4Writer::Track::threadEntry() {
             }
         }
 
+        if (mIsAudio) {
+            mOwner->setLastAudioTimeStamp(lastTimestampUs);
+        } else if (mIsStopping && timestampUs >= mOwner->getLastAudioTimeStamp()) {
+            ALOGI("Video time (%lld) reached last audio time (%lld)", (long long)timestampUs, (long long)mOwner->getLastAudioTimeStamp());
+            Mutex::Autolock lock(mTrackCompletionLock);
+            mTrackCompletionSignal.signal();
+            break;
+        }
+
     }
 
     if (isTrackMalFormed()) {
@@ -3456,7 +3479,7 @@ void MPEG4Writer::Track::writeCttsBox() {
 
     mOwner->beginBox("ctts");
     mOwner->writeInt32(0);  // version=0, flags=0
-    uint32_t delta = mMinCttsOffsetTimeUs - getStartTimeOffsetScaledTime();
+    int64_t delta = mMinCttsOffsetTimeUs - getStartTimeOffsetScaledTime();
     mCttsTableEntries->adjustEntries([delta](size_t /* ix */, uint32_t (&value)[2]) {
         // entries are <count, ctts> pairs; adjust only ctts
         uint32_t duration = htonl(value[1]); // back to host byte order
