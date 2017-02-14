@@ -440,7 +440,8 @@ MPEG4Writer::MPEG4Writer(int fd)
       mAreGeoTagsAvailable(false),
       mStartTimeOffsetMs(-1),
       mMetaKeys(new AMessage()),
-      mIsAudioAMR(false) {
+      mIsAudioAMR(false),
+      mLastAudioTimeStampUs(0) {
     addDeviceMeta();
 
     // Verify mFd is seekable
@@ -1993,7 +1994,7 @@ status_t MPEG4Writer::Track::stop() {
         return OK;
     }
 
-    if (!mIsAudio) {
+    if (!mIsAudio && mOwner->getLastAudioTimeStamp()) {
         Mutex::Autolock lock(mTrackCompletionLock);
         mIsStopping = true;
         if (mTrackCompletionSignal.waitRelative(mTrackCompletionLock, 1e9 /* 1 sec */)) {
