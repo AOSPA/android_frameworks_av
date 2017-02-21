@@ -76,4 +76,10 @@ ifeq ($(strip $(DOLBY_ENABLE)),true)
 endif
 # DOLBY_END
 
+ifeq ($(strip $(SPATIAL_AUDIO_ENABLED)), true)
+    LOCAL_CFLAGS += -DVRAUDIOSERVICE_ENABLE
+    LOCAL_C_INCLUDES += $(vr_audio_includes)
+    LOCAL_SHARED_LIBRARIES += libvraudio
+endif
+
 include $(BUILD_EXECUTABLE)

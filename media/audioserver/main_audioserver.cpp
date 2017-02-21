@@ -56,6 +56,10 @@
 #include "DolbyMemoryService.h"
 #endif
 
+#ifdef VRAUDIOSERVICE_ENABLE
+#include "VRAudioService.h"
+#endif
+
 using namespace android;
 
 int main(int argc __unused, char **argv)
@@ -154,6 +158,9 @@ int main(int argc __unused, char **argv)
         DolbyMemoryService::instantiate();
 #endif
         SoundTriggerHwService::instantiate();
+#ifdef VRAUDIOSERVICE_ENABLE
+        VRAudioServiceNative::instantiate();
+#endif
         ProcessState::self()->startThreadPool();
         IPCThreadState::self()->joinThreadPool();
     }
