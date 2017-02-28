@@ -1232,6 +1232,12 @@ audio_stream_type_t AudioTrack::streamType() const
 
 // -------------------------------------------------------------------------
 
+uint32_t AudioTrack::latency()
+{
+    AudioSystem::getLatency(mOutput, &mAfLatency);
+    return mAfLatency + mFrameLatency;
+}
+
 // must be called with mLock held
 status_t AudioTrack::createTrack_l()
 {
@@ -1537,8 +1543,8 @@ status_t AudioTrack::createTrack_l()
     mAudioTrack->attachAuxEffect(mAuxEffectId);
     // FIXME doesn't take into account speed or future sample rate changes (until restoreTrack)
     // FIXME don't believe this lie
-    mLatency = mAfLatency + (1000*frameCount) / mSampleRate;
-
+    mFrameLatency = (1000*frameCount) / mSampleRate;
+    mLatency = latency();
     mFrameCount = frameCount;
     // If IAudioTrack is re-created, don't let the requested frameCount
     // decrease.  This can confuse clients that cache frameCount().
@@ -2397,6 +2403,7 @@ status_t AudioTrack::getTimestamp(AudioTimestamp& timestamp)
         if (status == OK) {
             ExtendedTimestamp::Location location;
             status = ets.getBestTimestamp(&timestamp, &location);
+            AudioSystem::getLatency(mOutput, &mAfLatency);
 
             if (status == OK) {
                 // It is possible that the best location has moved from the kernel to the server.
