@@ -31,5 +31,6 @@ int main(int argc __unused, char** argv __unused)
     ALOGI("ServiceManager: %p", sm.get());
     CameraService::instantiate();
     ProcessState::self()->startThreadPool();
+    IPCThreadState::self()->disableBackgroundScheduling(true);
     IPCThreadState::self()->joinThreadPool();
 }
