@@ -65,7 +65,6 @@ struct AVMediaServiceFactory {
  * Common delegate to the classes in libmediaplayerservice
  */
 struct AVMediaServiceUtils {
-    virtual void getDashPlayerFactory(MediaPlayerFactory::IFactory *&, player_type ) {}
 
     // RTSP IPV6 utils
     virtual bool pokeAHole(sp<MyHandler> handler, int rtpSocket, int rtcpSocket,
