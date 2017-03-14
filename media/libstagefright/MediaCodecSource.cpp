@@ -690,6 +690,7 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
             if (mIsVideo) {
                 mDecodingTimeQueue.push_back(timeUs);
                 if (mFlags & FLAG_USE_METADATA_INPUT) {
+                    mbuf->meta_data()->setInt64(kKeyTime, timeUs);
                     AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue);
                 }
             } else {

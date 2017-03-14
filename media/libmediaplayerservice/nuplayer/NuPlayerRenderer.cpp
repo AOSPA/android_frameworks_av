@@ -1132,10 +1132,10 @@ void NuPlayer::Renderer::onNewAudioMediaTime(int64_t mediaTimeUs) {
         if (nowUs >= mNextAudioClockUpdateTimeUs) {
             int64_t nowMediaUs = mediaTimeUs - getPendingAudioPlayoutDurationUs(nowUs);
             mMediaClock->updateAnchor(nowMediaUs, nowUs, mediaTimeUs);
-            mAnchorTimeMediaUs = mediaTimeUs;
             mUseVirtualAudioSink = false;
             mNextAudioClockUpdateTimeUs = nowUs + kMinimumAudioClockUpdatePeriodUs;
         }
+        mAnchorTimeMediaUs = mediaTimeUs;
     } else {
         int64_t unused;
         if ((mMediaClock->getMediaTime(nowUs, &unused) != OK)

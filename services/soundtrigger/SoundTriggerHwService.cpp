@@ -563,10 +563,11 @@ void SoundTriggerHwService::Module::detach(const sp<ModuleClient>& moduleClient)
     ALOGV("remove client %p", moduleClient.get());
     mModuleClients.removeAt(index);
 
-    for (size_t i = 0; i < mModels.size(); i++) {
-        sp<Model> model = mModels.valueAt(i);
+    //iterate in reverse order as models are removed from list inside the loop
+    for (size_t i = mModels.size(); i > 0; i--) {
+        sp<Model> model = mModels.valueAt(i - 1);
         if (moduleClient == model->mModuleClient) {
-            mModels.removeItemsAt(i);
+            mModels.removeItemsAt(i - 1);
             ALOGV("detach() unloading model %d", model->mHandle);
             if (model->mState == Model::STATE_ACTIVE) {
                 mHwDevice->stop_recognition(mHwDevice, model->mHandle);

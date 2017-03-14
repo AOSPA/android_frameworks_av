@@ -1857,7 +1857,7 @@ status_t StagefrightRecorder::resume() {
         mTotalPausedDurationUs += (systemTime() / 1000) - mPauseStartTimeUs;
 
         bool isQCHwAACEnc = property_get_bool("qcom.hw.aac.encoder", true);
-        if (!isQCHwAACEnc || mAudioEncoder != AUDIO_ENCODER_AAC || mCaptureFpsEnable) {
+        if (!isQCHwAACEnc || mAudioEncoder != AUDIO_ENCODER_AAC) {
             // 30 ms buffer to avoid timestamp overlap
             mTotalPausedDurationUs -= (30000*(mCaptureFpsEnable ? (mCaptureFps / mFrameRate) : 1));
         }
