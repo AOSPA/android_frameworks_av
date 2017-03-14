@@ -4526,10 +4526,9 @@ audio_devices_t AudioPolicyManager::getDevicesForStream(audio_stream_type_t stre
         for (size_t i = 0; i < outputs.size(); i++) {
             sp<AudioOutputDescriptor> outputDesc = mOutputs.valueFor(outputs[i]);
             if (outputDesc->isStreamActive((audio_stream_type_t)curStream)) {
-                curDevices |= outputDesc->device();
+                devices |= outputDesc->device();
             }
         }
-        devices |= curDevices;
     }
 
     /*Filter SPEAKER_SAFE out of results, as AudioService doesn't know about it
