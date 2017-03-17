@@ -154,7 +154,7 @@ void NuPlayer::Decoder::onMessageReceived(const sp<AMessage> &msg) {
             ALOGV("[%s] kWhatCodecNotify: cbID = %d, paused = %d",
                     mIsAudio ? "audio" : "video", cbID, mPaused);
 
-            if (mPaused) {
+            if (mPaused && (cbID != MediaCodec::CB_OUTPUT_FORMAT_CHANGED)) {
                 break;
             }
 
