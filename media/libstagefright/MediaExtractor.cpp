@@ -143,16 +143,15 @@ sp<DecryptHandle> RemoteDataSource::DrmInitialization(const char *mime) {
 
 // static
 sp<IMediaExtractor> MediaExtractor::Create(
-        const sp<DataSource> &source, const char *mime,
-        const uint32_t flags) {
-    ALOGV("MediaExtractor::Create %s flags %d", mime, flags);
+        const sp<DataSource> &source, const char *mime) {
+    ALOGV("MediaExtractor::Create %s", mime);
 
     char value[PROPERTY_VALUE_MAX];
     if (property_get("media.stagefright.extractremote", value, NULL)
             && (!strcmp("0", value) || !strcasecmp("false", value))) {
         // local extractor
         ALOGW("creating media extractor in calling process");
-        return CreateFromService(source, mime, flags);
+        return CreateFromService(source, mime);
     } else {
         // Check if it's WVM, since WVMExtractor needs to be created in the media server process,
         // not the extractor process.
@@ -181,7 +180,7 @@ sp<IMediaExtractor> MediaExtractor::Create(
 
         if (binder != 0) {
             sp<IMediaExtractorService> mediaExService(interface_cast<IMediaExtractorService>(binder));
-            sp<IMediaExtractor> ex = mediaExService->makeExtractor(RemoteDataSource::wrap(source), mime, flags);
+            sp<IMediaExtractor> ex = mediaExService->makeExtractor(RemoteDataSource::wrap(source), mime);
             return ex;
         } else {
             ALOGE("extractor service not running");
@@ -192,10 +191,9 @@ sp<IMediaExtractor> MediaExtractor::Create(
 }
 
 sp<MediaExtractor> MediaExtractor::CreateFromService(
-        const sp<DataSource> &source, const char *mime,
-        const uint32_t flags) {
+        const sp<DataSource> &source, const char *mime) {
 
-    ALOGV("MediaExtractor::CreateFromService %s flags %d", mime, flags);
+    ALOGV("MediaExtractor::CreateFromService %s", mime);
     DataSource::RegisterDefaultSniffers();
 
     sp<AMessage> meta;
@@ -237,7 +235,7 @@ sp<MediaExtractor> MediaExtractor::CreateFromService(
     }
 
     MediaExtractor *ret = NULL;
-    if ((ret = AVFactory::get()->createExtendedExtractor(source, mime, meta, flags)) != NULL) {
+    if ((ret = AVFactory::get()->createExtendedExtractor(source, mime, meta)) != NULL) {
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_CONTAINER_MPEG4)
             || !strcasecmp(mime, "audio/mp4")) {
         ret = new MPEG4Extractor(source);
