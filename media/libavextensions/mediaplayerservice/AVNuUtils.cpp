@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 - 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013 - 2016, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -102,10 +102,6 @@ bool AVNuUtils::isByteStreamModeEnabled(const sp<MetaData> &) {
     return false;
 }
 #endif
-
-uint32_t AVNuUtils::getFlags() {
-    return 0;
-}
 
 // ----- NO TRESSPASSING BEYOND THIS LINE ------
 AVNuUtils::AVNuUtils() {}

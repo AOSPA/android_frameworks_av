@@ -180,8 +180,7 @@ status_t NuPlayer::GenericSource::initFromDataSource() {
         extractor = mWVMExtractor;
     } else {
         extractor = MediaExtractor::Create(mDataSource,
-                mimeType.isEmpty() ? NULL : mimeType.string(),
-                mIsStreaming ? 0 : AVNuUtils::get()->getFlags());
+                mimeType.isEmpty() ? NULL : mimeType.string());
     }
 
     if (extractor == NULL) {
