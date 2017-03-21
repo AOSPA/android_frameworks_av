@@ -66,6 +66,7 @@
 #include <android/hidl/memory/1.0/IMemory.h>
 
 #include <stagefright/AVExtensions.h>
+#include <common/LogOverride.h>
 
 namespace android {
 

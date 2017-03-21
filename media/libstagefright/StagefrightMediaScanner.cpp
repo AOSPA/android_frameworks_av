@@ -29,6 +29,7 @@
 #include <private/media/VideoFrame.h>
 
 #include <stagefright/AVExtensions.h>
+#include <common/LogOverride.h>
 namespace android {
 
 StagefrightMediaScanner::StagefrightMediaScanner() {}

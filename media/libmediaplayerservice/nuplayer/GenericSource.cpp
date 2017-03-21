@@ -41,6 +41,7 @@
 #include "../../libstagefright/include/NuCachedSource2.h"
 #include "../../libstagefright/include/HTTPBase.h"
 #include "mediaplayerservice/AVNuExtensions.h"
+#include <common/LogOverride.h>
 
 namespace android {
 

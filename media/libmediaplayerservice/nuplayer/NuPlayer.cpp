@@ -61,6 +61,7 @@
 #include "ESDS.h"
 #include <media/stagefright/Utils.h>
 #include "mediaplayerservice/AVNuExtensions.h"
+#include <common/LogOverride.h>
 
 namespace android {
 
