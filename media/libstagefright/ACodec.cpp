@@ -63,6 +63,7 @@
 #include <media/stagefright/omx/OMXUtils.h>
 
 #include <stagefright/AVExtensions.h>
+#include <common/LogOverride.h>
 
 #define QTI_FLAC_DECODER
 namespace android {

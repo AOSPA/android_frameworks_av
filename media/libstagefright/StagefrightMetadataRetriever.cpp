@@ -47,6 +47,7 @@
 #include <media/CharacterEncodingDetector.h>
 
 #include <stagefright/AVExtensions.h>
+#include <common/LogOverride.h>
 
 namespace android {
 
