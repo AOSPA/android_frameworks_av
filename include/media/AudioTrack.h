@@ -327,7 +327,7 @@ public:
      * This includes the latency due to AudioTrack buffer size, AudioMixer (if any)
      * and audio hardware driver.
      */
-            uint32_t    latency() const     { return mLatency; }
+            uint32_t    latency();
 
     /* Returns the number of application-level buffer underruns
      * since the AudioTrack was created.
@@ -957,6 +957,7 @@ protected:
     uint32_t                mAfLatency;             // AudioFlinger latency in ms
     size_t                  mAfFrameCount;          // AudioFlinger frame count
     uint32_t                mAfSampleRate;          // AudioFlinger sample rate
+    uint32_t                mFrameLatency;          // Frame latency
 
     // constant after constructor or set()
     audio_format_t          mFormat;                // as requested by client, not forced to 16-bit
