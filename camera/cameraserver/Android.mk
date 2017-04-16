@@ -34,7 +34,9 @@ LOCAL_32_BIT_ONLY := true
 
 LOCAL_CFLAGS += -Wall -Wextra -Werror -Wno-unused-parameter
 
+ifneq ($(TARGET_PROVIDES_CAMSERVER_INIT_RC),true)
 LOCAL_INIT_RC := cameraserver.rc
+endif
 
 include $(BUILD_EXECUTABLE)
 endif
