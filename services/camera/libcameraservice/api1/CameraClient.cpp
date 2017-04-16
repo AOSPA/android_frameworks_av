@@ -624,6 +624,7 @@ status_t CameraClient::setParameters(const String8& params) {
 
     mLatestSetParameters = CameraParameters(params);
     CameraParameters p(params);
+    p.set(CameraParameters::APP_PACKAGE_NAME,String8(mClientPackageName).string());
     return mHardware->setParameters(p);
 }
 

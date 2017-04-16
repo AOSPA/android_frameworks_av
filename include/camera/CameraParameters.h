@@ -683,6 +683,8 @@ public:
     static const char LIGHTFX_LOWLIGHT[];
     // High-dynamic range mode
     static const char LIGHTFX_HDR[];
+    // Package name
+    static const char APP_PACKAGE_NAME[];
 
 #ifdef CAMERA_PARAMETERS_EXTRA_H
 CAMERA_PARAMETERS_EXTRA_H
