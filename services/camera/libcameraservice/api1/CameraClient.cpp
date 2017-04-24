@@ -476,6 +476,13 @@ void CameraClient::stopRecording() {
     mHardware->stopRecording();
     mCameraService->playSound(CameraService::SOUND_RECORDING_STOP);
 
+    {
+        Mutex::Autolock l(mAvailableCallbackBuffersLock);
+        if (!mAvailableCallbackBuffers.empty()) {
+            mAvailableCallbackBuffers.clear();
+        }
+    }
+
     mPreviewBuffer.clear();
 }
 
