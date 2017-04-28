@@ -86,6 +86,9 @@ protected:
     int64_t mStartTimeUs;
     int16_t mMaxAmplitude;
     int64_t mPrevSampleTimeUs;
+#ifdef LEGACY_HSR
+    int64_t mFirstSampleTimeUs;
+#endif
     int64_t mInitialReadTimeUs;
     int64_t mNumFramesReceived;
     int64_t mNumClientOwnedBuffers;
