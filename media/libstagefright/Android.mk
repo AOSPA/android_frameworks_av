@@ -155,6 +155,10 @@ LOCAL_CFLAGS += -DCAMCORDER_GRALLOC_SOURCE
 endif
 endif
 
+ifeq ($(TARGET_HAS_LEGACY_HSR),true)
+LOCAL_CFLAGS += -DLEGACY_HSR
+endif
+
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wno-error=deprecated-declarations -Wall
 
 # enable experiments only if requested

@@ -56,6 +56,10 @@ LOCAL_CFLAGS += -DCAMCORDER_GRALLOC_SOURCE
 endif
 endif
 
+ifeq ($(TARGET_HAS_LEGACY_HSR),true)
+LOCAL_CFLAGS += -DLEGACY_HSR
+endif
+
 LOCAL_MODULE:= libstagefright_omx
 LOCAL_CFLAGS += -Werror -Wall
 # DOLBY_START
