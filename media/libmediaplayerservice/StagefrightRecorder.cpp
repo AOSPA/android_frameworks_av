@@ -1609,6 +1609,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
             preferBFrames = false;
             tsLayers = 2; // use at least two layers as resulting video will likely be sped up
         } else if (mCaptureFps > maxPlaybackFps) { // slow-mo
+            format->setInt32("high-frame-rate", 1);
             maxPlaybackFps = mCaptureFps; // assume video will be played back at full capture speed
             preferBFrames = false;
         }

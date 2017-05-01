@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 - 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013 - 2017, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -133,6 +133,15 @@ bool AVUtils::isAudioMuxFormatSupported(const char *) {
 
 void AVUtils::cacheCaptureBuffers(sp<hardware::ICamera>, video_encoder) {
     return;
+}
+
+void AVUtils::getHFRParams(bool*, int32_t*, sp<AMessage>) {
+    return;
+}
+
+int64_t AVUtils::overwriteTimeOffset(bool, int64_t inputBufferTimeOffsetUs, int64_t*,
+           int64_t, int32_t) {
+    return inputBufferTimeOffsetUs;
 }
 
 const char *AVUtils::getCustomCodecsLocation() {
