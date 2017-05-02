@@ -70,6 +70,7 @@ static const int64_t kMax32BitFileSize = 0x00ffffffffLL; // 2^32-1 : max FAT32
 static const uint8_t kNalUnitTypeSeqParamSet = 0x07;
 static const uint8_t kNalUnitTypePicParamSet = 0x08;
 static const int64_t kInitialDelayTimeUs     = 700000LL;
+static const nsecs_t kWaitDuration = 500000000LL; //500msec   ~15frames delay
 
 static const char kMetaKey_Version[]    = "com.android.version";
 #ifdef SHOW_MODEL_BUILD
@@ -1994,10 +1995,13 @@ status_t MPEG4Writer::Track::stop() {
         return OK;
     }
 
-    if (!mIsAudio && mOwner->getLastAudioTimeStamp()) {
+    if (!mIsAudio && mOwner->getLastAudioTimeStamp() &&
+        !mOwner->exceedsFileDurationLimit() &&
+        !mOwner->exceedsFileSizeLimit() &&
+        !mIsMalformed) {
         Mutex::Autolock lock(mTrackCompletionLock);
         mIsStopping = true;
-        if (mTrackCompletionSignal.waitRelative(mTrackCompletionLock, 1e9 /* 1 sec */)) {
+        if (mTrackCompletionSignal.waitRelative(mTrackCompletionLock, kWaitDuration)) {
             ALOGW("Timed-out waiting for video track to reach final audio timestamp !");
         }
     }
