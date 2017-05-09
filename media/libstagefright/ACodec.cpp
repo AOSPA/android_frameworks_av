@@ -73,6 +73,7 @@
 #include "include/avc_utils.h"
 #include "include/DataConverter.h"
 #include "omx/OMXUtils.h"
+#include <media/stagefright/Utils.h>
 #ifdef DOLBY_ENABLE
 #include "DolbyACodecExtImpl.h"
 #endif // DOLBY_END
@@ -5565,14 +5566,28 @@ void ACodec::sendFormatChange() {
 
     if (mime == MEDIA_MIMETYPE_AUDIO_RAW && (mEncoderDelay || mEncoderPadding)) {
         int32_t channelCount;
+        AudioEncoding encoding;
+        int32_t frameSize;
+        int32_t bytesPerSample;
         CHECK(mOutputFormat->findInt32("channel-count", &channelCount));
-        if (mSkipCutBuffer != NULL) {
-            size_t prevbufsize = mSkipCutBuffer->size();
-            if (prevbufsize != 0) {
-                ALOGW("Replacing SkipCutBuffer holding %zu bytes", prevbufsize);
+        CHECK(mOutputFormat->findInt32("pcm-encoding", (int32_t*) &encoding));
+        bytesPerSample = getAudioSampleSize(encoding);
+
+        if (channelCount == 0 ||
+                channelCount > INT32_MAX / bytesPerSample) {
+            ALOGW("# channels out of range: %d, using passthrough instead",
+                channelCount);
+            mSkipCutBuffer = NULL;
+        } else {
+            frameSize = channelCount * bytesPerSample;
+            if (mSkipCutBuffer != NULL) {
+                size_t prevbufsize = mSkipCutBuffer->size();
+                if (prevbufsize != 0) {
+                    ALOGW("Replacing SkipCutBuffer holding %zu bytes", prevbufsize);
+                }
             }
+            mSkipCutBuffer = new SkipCutBuffer(mEncoderDelay, mEncoderPadding, frameSize);
         }
-        mSkipCutBuffer = new SkipCutBuffer(mEncoderDelay, mEncoderPadding, channelCount);
     }
 
     sp<AMessage> notify = mNotify->dup();

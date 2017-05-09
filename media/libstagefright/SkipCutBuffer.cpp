@@ -24,18 +24,13 @@
 
 namespace android {
 
-SkipCutBuffer::SkipCutBuffer(size_t skip, size_t cut, size_t num16BitChannels) {
+SkipCutBuffer::SkipCutBuffer(size_t skip, size_t cut, size_t frameSize) {
 
     mWriteHead = 0;
     mReadHead = 0;
     mCapacity = 0;
     mCutBuffer = NULL;
 
-    if (num16BitChannels == 0 || num16BitChannels > INT32_MAX / 2) {
-        ALOGW("# channels out of range: %zu, using passthrough instead", num16BitChannels);
-        return;
-    }
-    size_t frameSize = num16BitChannels * 2;
     if (skip > INT32_MAX / frameSize || cut > INT32_MAX / frameSize
             || cut * frameSize > INT32_MAX - 4096) {
         ALOGW("out of range skip/cut: %zu/%zu, using passthrough instead",
