@@ -27,6 +27,7 @@
 #include <system/audio.h>
 #include <audio_utils/primitives.h>
 #include <audio_utils/format.h>
+#include <media/stagefright/Utils.h>
 
 namespace android {
 
@@ -82,39 +83,6 @@ size_t SampleConverterBase::targetSize(size_t sourceSize) {
     }
     return numSamples * mTargetSampleSize;
 }
-
-static audio_format_t getAudioFormat(AudioEncoding e) {
-    audio_format_t format = AUDIO_FORMAT_INVALID;
-    switch (e) {
-        case kAudioEncodingPcm16bit:
-            format = AUDIO_FORMAT_PCM_16_BIT;
-            break;
-        case kAudioEncodingPcm8bit:
-            format = AUDIO_FORMAT_PCM_8_BIT;
-            break;
-        case kAudioEncodingPcmFloat:
-            format = AUDIO_FORMAT_PCM_FLOAT;
-            break;
-       case kAudioEncodingPcm24bitPacked:
-            format = AUDIO_FORMAT_PCM_24_BIT_PACKED;
-            break;
-        default:
-            ALOGE("Invalid AudioEncoding %d", e);
-        }
-        return format;
-}
-
-static size_t getAudioSampleSize(AudioEncoding e) {
-    switch (e) {
-        case kAudioEncodingPcm16bit:
-        case kAudioEncodingPcm8bit:
-        case kAudioEncodingPcmFloat:
-        case kAudioEncodingPcm24bitPacked:
-            return audio_bytes_per_sample(getAudioFormat(e));
-        default: return 0;
-    }
-}
-
 
 // static
 AudioConverter* AudioConverter::Create(AudioEncoding source, AudioEncoding target) {

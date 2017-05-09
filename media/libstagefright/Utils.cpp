@@ -1583,6 +1583,41 @@ const struct aac_format_conv_t* p = &profileLookup[0];
     return;
 }
 
+audio_format_t getAudioFormat(AudioEncoding encoding) {
+    audio_format_t format = AUDIO_FORMAT_INVALID;
+    switch (encoding) {
+        case kAudioEncodingPcm16bit:
+            format = AUDIO_FORMAT_PCM_16_BIT;
+            break;
+        case kAudioEncodingPcm8bit:
+            format = AUDIO_FORMAT_PCM_8_BIT;
+            break;
+        case kAudioEncodingPcmFloat:
+            format = AUDIO_FORMAT_PCM_FLOAT;
+            break;
+        case kAudioEncodingPcm24bitPacked:
+            format = AUDIO_FORMAT_PCM_24_BIT_PACKED;
+            break;
+        default:
+            ALOGE("Invalid AudioEncoding %d", encoding);
+    }
+    return format;
+}
+
+size_t getAudioSampleSize(AudioEncoding encoding) {
+    switch (encoding) {
+        case kAudioEncodingPcm16bit:
+        case kAudioEncodingPcm8bit:
+        case kAudioEncodingPcmFloat:
+        case kAudioEncodingPcm24bitPacked:
+            return audio_bytes_per_sample(getAudioFormat(encoding));
+        default:
+            ALOGW("%s: Using default bytes per sample", __func__);
+            return audio_bytes_per_sample(
+                                    getAudioFormat(kAudioEncodingPcm16bit));
+    }
+}
+
 bool canOffloadStream(const sp<MetaData>& meta, bool hasVideo,
                       bool isStreaming, audio_stream_type_t streamType)
 {

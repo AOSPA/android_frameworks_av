@@ -24,6 +24,7 @@
 #include <utils/RefBase.h>
 #include <system/audio.h>
 #include <media/MediaPlayerInterface.h>
+#include "MediaDefs.h"
 
 namespace android {
 
@@ -63,6 +64,12 @@ void mapAACProfileToAudioFormat(audio_format_t& format, uint64_t eAacProfile);
 
 // Send information from MetaData to the HAL via AudioSink
 status_t sendMetaDataToHal(sp<MediaPlayerBase::AudioSink>& sink, const sp<MetaData>& meta);
+
+// Get pcm format from audio encoding
+audio_format_t getAudioFormat(AudioEncoding encoding);
+
+// Get bytes per sample from audio encoding
+size_t getAudioSampleSize(AudioEncoding encoding);
 
 // Check whether the stream defined by meta can be offloaded to hardware
 bool canOffloadStream(const sp<MetaData>& meta, bool hasVideo,
