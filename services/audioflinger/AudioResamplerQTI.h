@@ -40,6 +40,7 @@ public:
     size_t mFrameIndex;
     size_t stateSize;
     size_t mOutFrameCount;
+    size_t mInFrameRequest;
 
     static const int kNumTmpBufSize = 1024;
 

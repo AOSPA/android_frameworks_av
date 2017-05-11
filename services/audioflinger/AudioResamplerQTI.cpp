@@ -25,7 +25,7 @@ namespace android {
 AudioResamplerQTI::AudioResamplerQTI(int format,
         int inChannelCount, int32_t sampleRate)
     :AudioResampler(inChannelCount, sampleRate, QTI_QUALITY),
-     mTmpBuf(0), mResamplerOutBuf(0), mFrameIndex(0),mOutFrameCount(0)
+     mTmpBuf(0), mResamplerOutBuf(0), mFrameIndex(0),mOutFrameCount(0), mInFrameRequest(0)
 {
     stateSize = QCT_Resampler::MemAlloc(format, inChannelCount, sampleRate, sampleRate);
     mState = new int16_t[stateSize];
@@ -67,15 +67,18 @@ size_t AudioResamplerQTI::resample(int32_t* out, size_t outFrameCount,
         inFrameRequest = inFrameCount * 2;
     }
 
-    if (mOutFrameCount < outFrameCount) {
-        mOutFrameCount = outFrameCount;
+    if (mInFrameRequest < inFrameRequest) {
+        mInFrameRequest = inFrameRequest;
         if (mTmpBuf) {
             delete [] mTmpBuf;
         }
+        mTmpBuf = new int32_t[inFrameRequest + 16];
+    }
+    if (mOutFrameCount < outFrameCount) {
+        mOutFrameCount = outFrameCount;
         if(mResamplerOutBuf) {
             delete [] mResamplerOutBuf;
         }
-        mTmpBuf = new int32_t[inFrameRequest + 16];
         mResamplerOutBuf = new int32_t[out_count];
     }
 
