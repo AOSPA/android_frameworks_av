@@ -72,8 +72,7 @@ SoftAACEncoder2::SoftAACEncoder2(
 SoftAACEncoder2::~SoftAACEncoder2() {
     aacEncClose(&mAACEncoder);
 
-    delete[] mInputFrame;
-    mInputFrame = NULL;
+    onReset();
 }
 
 void SoftAACEncoder2::initPorts() {
@@ -511,6 +510,15 @@ void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
 
         BufferInfo *outInfo = *outQueue.begin();
         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {
+            ALOGE("b/34617444");
+            android_errorWriteLog(0x534e4554,"34617444");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+            return;
+        }
+
         outHeader->nFilledLen = encInfo.confSize;
         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
 
@@ -701,6 +709,17 @@ void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
 
         mInputSize = 0;
     }
+}
+
+void SoftAACEncoder2::onReset() {
+    delete[] mInputFrame;
+    mInputFrame = NULL;
+    mInputSize = 0;
+
+    mSentCodecSpecificData = false;
+    mInputTimeUs = -1ll;
+    mSawInputEOS = false;
+    mSignalledError = false;
 }
 
 }  // namespace android
