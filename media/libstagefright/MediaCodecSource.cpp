@@ -327,7 +327,7 @@ sp<MediaCodecSource> MediaCodecSource::Create(
         uint32_t flags) {
     sp<MediaCodecSource> mediaSource =
             new MediaCodecSource(looper, format, source, consumer, flags);
-
+    AVUtils::get()->getHFRParams(&mediaSource->mIsHFR, &mediaSource->mBatchSize, format);
     if (mediaSource->init() == OK) {
         return mediaSource;
     }
@@ -420,7 +420,10 @@ MediaCodecSource::MediaCodecSource(
       mFirstSampleSystemTimeUs(-1ll),
       mPausePending(false),
       mFirstSampleTimeUs(-1ll),
-      mGeneration(0) {
+      mGeneration(0),
+      mPrevBufferTimestampUs(0),
+      mIsHFR(false),
+      mBatchSize(0) {
     CHECK(mLooper != NULL);
 
     AString mime;
@@ -683,7 +686,8 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
                     return OK;
                 }
             }
-
+            mInputBufferTimeOffsetUs = AVUtils::get()->overwriteTimeOffset(mIsHFR,
+                mInputBufferTimeOffsetUs, &mPrevBufferTimestampUs, timeUs, mBatchSize);
             timeUs += mInputBufferTimeOffsetUs;
 
             // push decoding time for video, or drift time for audio
@@ -744,8 +748,8 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
 }
 
 status_t MediaCodecSource::onStart(MetaData *params) {
-    if (mStopping) {
-        ALOGE("Failed to start while we're stopping");
+    if (mStopping | mOutput.lock()->mEncoderReachedEOS) {
+        ALOGE("Failed to start while we're stopping or encoder already stopped due to EOS error");
         return INVALID_OPERATION;
     }
 
