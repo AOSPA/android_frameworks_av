@@ -1586,8 +1586,6 @@ const sp<ABuffer> &PlaylistFetcher::setAccessUnitProperties(
 
     if (discard) {
         accessUnit->meta()->setInt32("discard", discard);
-    } else {
-        accessUnit->meta()->setInt64("newSeekTimeUs", mLastIDRTimeUs);
     }
 
     accessUnit->meta()->setInt32("discontinuitySeq", mDiscontinuitySeq);
