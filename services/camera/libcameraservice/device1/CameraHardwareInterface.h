@@ -115,6 +115,11 @@ public:
                                      (hw_device_t **)&mDevice);
         } else {
             rc = module->open(mName.string(), (hw_device_t **)&mDevice);
+            if (rc != OK) {
+                // sleep for a second and retry
+                sleep(1);
+                rc = module->open(mName.string(), (hw_device_t **)&mDevice);
+            }
         }
         if (rc != OK) {
             ALOGE("Could not open camera %s: %d", mName.string(), rc);
