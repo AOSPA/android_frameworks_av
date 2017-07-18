@@ -150,13 +150,6 @@ AAUDIO_API void AAudioStreamBuilder_setChannelCount(AAudioStreamBuilder* builder
     streamBuilder->setSamplesPerFrame(channelCount);
 }
 
-AAUDIO_API void AAudioStreamBuilder_setSamplesPerFrame(AAudioStreamBuilder* builder,
-                                                       int32_t samplesPerFrame)
-{
-    AudioStreamBuilder *streamBuilder = convertAAudioBuilderToStreamBuilder(builder);
-    streamBuilder->setSamplesPerFrame(samplesPerFrame);
-}
-
 AAUDIO_API void AAudioStreamBuilder_setDirection(AAudioStreamBuilder* builder,
                                              aaudio_direction_t direction)
 {
@@ -253,8 +246,10 @@ AAUDIO_API aaudio_result_t  AAudioStream_close(AAudioStream* stream)
 AAUDIO_API aaudio_result_t  AAudioStream_requestStart(AAudioStream* stream)
 {
     AudioStream *audioStream = convertAAudioStreamToAudioStream(stream);
-    ALOGD("AAudioStream_requestStart(%p)", stream);
-    return audioStream->requestStart();
+    ALOGD("AAudioStream_requestStart(%p) called --------------", stream);
+    aaudio_result_t result = audioStream->requestStart();
+    ALOGD("AAudioStream_requestStart(%p) returned ------------", stream);
+    return result;
 }
 
 AAUDIO_API aaudio_result_t  AAudioStream_requestPause(AAudioStream* stream)
@@ -350,12 +345,6 @@ AAUDIO_API int32_t AAudioStream_getSampleRate(AAudioStream* stream)
 }
 
 AAUDIO_API int32_t AAudioStream_getChannelCount(AAudioStream* stream)
-{
-    AudioStream *audioStream = convertAAudioStreamToAudioStream(stream);
-    return audioStream->getSamplesPerFrame();
-}
-
-AAUDIO_API int32_t AAudioStream_getSamplesPerFrame(AAudioStream* stream)
 {
     AudioStream *audioStream = convertAAudioStreamToAudioStream(stream);
     return audioStream->getSamplesPerFrame();

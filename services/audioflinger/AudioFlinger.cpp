@@ -41,7 +41,6 @@
 #include <utils/threads.h>
 #include <utils/Atomic.h>
 
-#include <cutils/bitops.h>
 #include <cutils/properties.h>
 
 #include <system/audio.h>
@@ -261,10 +260,11 @@ __attribute__ ((visibility ("default")))
 status_t MmapStreamInterface::openMmapStream(MmapStreamInterface::stream_direction_t direction,
                                              const audio_attributes_t *attr,
                                              audio_config_base_t *config,
-                                             const MmapStreamInterface::Client& client,
+                                             const AudioClient& client,
                                              audio_port_handle_t *deviceId,
                                              const sp<MmapStreamCallback>& callback,
-                                             sp<MmapStreamInterface>& interface)
+                                             sp<MmapStreamInterface>& interface,
+                                             audio_port_handle_t *handle)
 {
     sp<AudioFlinger> af;
     {
@@ -274,7 +274,7 @@ status_t MmapStreamInterface::openMmapStream(MmapStreamInterface::stream_directi
     status_t ret = NO_INIT;
     if (af != 0) {
         ret = af->openMmapStream(
-                direction, attr, config, client, deviceId, callback, interface);
+                direction, attr, config, client, deviceId, callback, interface, handle);
     }
     return ret;
 }
@@ -282,10 +282,11 @@ status_t MmapStreamInterface::openMmapStream(MmapStreamInterface::stream_directi
 status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t direction,
                                       const audio_attributes_t *attr,
                                       audio_config_base_t *config,
-                                      const MmapStreamInterface::Client& client,
+                                      const AudioClient& client,
                                       audio_port_handle_t *deviceId,
                                       const sp<MmapStreamCallback>& callback,
-                                      sp<MmapStreamInterface>& interface)
+                                      sp<MmapStreamInterface>& interface,
+                                      audio_port_handle_t *handle)
 {
     status_t ret = initCheck();
     if (ret != NO_ERROR) {
@@ -294,7 +295,7 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
 
     audio_session_t sessionId = (audio_session_t) newAudioUniqueId(AUDIO_UNIQUE_ID_USE_SESSION);
     audio_stream_type_t streamType = AUDIO_STREAM_DEFAULT;
-    audio_io_handle_t io;
+    audio_io_handle_t io = AUDIO_IO_HANDLE_NONE;
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
     if (direction == MmapStreamInterface::DIRECTION_OUTPUT) {
         audio_config_t fullConfig = AUDIO_CONFIG_INITIALIZER;
@@ -307,14 +308,14 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
                                             &fullConfig,
                                             (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_MMAP_NOIRQ |
                                                     AUDIO_OUTPUT_FLAG_DIRECT),
-                                            *deviceId, &portId);
+                                            deviceId, &portId);
     } else {
         ret = AudioSystem::getInputForAttr(attr, &io,
                                               sessionId,
                                               client.clientPid,
                                               client.clientUid,
                                               config,
-                                              AUDIO_INPUT_FLAG_MMAP_NOIRQ, *deviceId, &portId);
+                                              AUDIO_INPUT_FLAG_MMAP_NOIRQ, deviceId, &portId);
     }
     if (ret != NO_ERROR) {
         return ret;
@@ -326,6 +327,7 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
     if (thread != 0) {
         interface = new MmapThreadHandle(thread);
         thread->configure(attr, streamType, sessionId, callback, portId);
+        *handle = portId;
     } else {
         ret = NO_INIT;
     }
@@ -340,7 +342,6 @@ static const char * const audio_interfaces[] = {
     AUDIO_HARDWARE_MODULE_ID_A2DP,
     AUDIO_HARDWARE_MODULE_ID_USB,
 };
-#define ARRAY_SIZE(x) (sizeof((x))/sizeof(((x)[0])))
 
 AudioHwDevice* AudioFlinger::findSuitableHwDev_l(
         audio_module_handle_t module,
@@ -350,7 +351,7 @@ AudioHwDevice* AudioFlinger::findSuitableHwDev_l(
     // well known modules
     if (module == 0) {
         ALOGW("findSuitableHwDev_l() loading well know audio hw modules");
-        for (size_t i = 0; i < ARRAY_SIZE(audio_interfaces); i++) {
+        for (size_t i = 0; i < arraysize(audio_interfaces); i++) {
             loadHwModule_l(audio_interfaces[i]);
         }
         // then try to find a module supporting the requested device.
@@ -520,7 +521,7 @@ status_t AudioFlinger::dump(int fd, const Vector<String16>& args)
 #ifdef TEE_SINK
         // dump the serially shared record tee sink
         if (mRecordTeeSource != 0) {
-            dumpTee(fd, mRecordTeeSource);
+            dumpTee(fd, mRecordTeeSource, AUDIO_IO_HANDLE_NONE, 'C');
         }
 #endif
 
@@ -3265,7 +3266,7 @@ int comparEntry(const void *p1, const void *p2)
 }
 
 #ifdef TEE_SINK
-void AudioFlinger::dumpTee(int fd, const sp<NBAIO_Source>& source, audio_io_handle_t id)
+void AudioFlinger::dumpTee(int fd, const sp<NBAIO_Source>& source, audio_io_handle_t id, char suffix)
 {
     NBAIO_Source *teeSource = source.get();
     if (teeSource != NULL) {
@@ -3327,7 +3328,8 @@ void AudioFlinger::dumpTee(int fd, const sp<NBAIO_Source>& source, audio_io_hand
         struct tm tm;
         localtime_r(&tv.tv_sec, &tm);
         strftime(teeTime, sizeof(teeTime), "%Y%m%d%H%M%S", &tm);
-        snprintf(&teePath[teePathLen], sizeof(teePath) - teePathLen, "%s_%d.wav", teeTime, id);
+        snprintf(&teePath[teePathLen], sizeof(teePath) - teePathLen, "%s_%d_%c.wav", teeTime, id,
+                suffix);
         // if 2 dumpsys are done within 1 second, and rotation didn't work, then discard 2nd
         int teeFd = open(teePath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR);
         if (teeFd >= 0) {

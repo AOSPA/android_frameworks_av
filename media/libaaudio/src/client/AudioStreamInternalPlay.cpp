@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "AAudio"
+#define LOG_TAG (mInService ? "AAudioService" : "AAudio")
 //#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
@@ -34,6 +34,55 @@ AudioStreamInternalPlay::AudioStreamInternalPlay(AAudioServiceInterface  &servic
 AudioStreamInternalPlay::~AudioStreamInternalPlay() {}
 
 
+aaudio_result_t AudioStreamInternalPlay::requestPauseInternal()
+{
+    if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
+        ALOGE("AudioStreamInternal::requestPauseInternal() mServiceStreamHandle invalid = 0x%08X",
+              mServiceStreamHandle);
+        return AAUDIO_ERROR_INVALID_STATE;
+    }
+
+    mClockModel.stop(AudioClock::getNanoseconds());
+    setState(AAUDIO_STREAM_STATE_PAUSING);
+    return AAudioConvert_androidToAAudioResult(pauseWithStatus());
+}
+
+aaudio_result_t AudioStreamInternalPlay::requestPause()
+{
+    aaudio_result_t result = stopCallback();
+    if (result != AAUDIO_OK) {
+        return result;
+    }
+    result = requestPauseInternal();
+    return result;
+}
+
+aaudio_result_t AudioStreamInternalPlay::requestFlush() {
+    if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
+        ALOGE("AudioStreamInternal::requestFlush() mServiceStreamHandle invalid = 0x%08X",
+              mServiceStreamHandle);
+        return AAUDIO_ERROR_INVALID_STATE;
+    }
+
+    setState(AAUDIO_STREAM_STATE_FLUSHING);
+    return mServiceInterface.flushStream(mServiceStreamHandle);
+}
+
+void AudioStreamInternalPlay::onFlushFromServer() {
+    int64_t readCounter = mAudioEndpoint.getDataReadCounter();
+    int64_t writeCounter = mAudioEndpoint.getDataWriteCounter();
+
+    // Bump offset so caller does not see the retrograde motion in getFramesRead().
+    int64_t framesFlushed = writeCounter - readCounter;
+    mFramesOffsetFromService += framesFlushed;
+    ALOGD("AudioStreamInternal::onFlushFromServer() readN = %lld, writeN = %lld, offset = %lld",
+          (long long)readCounter, (long long)writeCounter, (long long)mFramesOffsetFromService);
+
+    // Flush written frames by forcing writeCounter to readCounter.
+    // This is because we cannot move the read counter in the hardware.
+    mAudioEndpoint.setDataWriteCounter(readCounter);
+}
+
 // Write the data, block if needed and timeoutMillis > 0
 aaudio_result_t AudioStreamInternalPlay::write(const void *buffer, int32_t numFrames,
                                            int64_t timeoutNanoseconds)
@@ -51,15 +100,17 @@ aaudio_result_t AudioStreamInternalPlay::processDataNow(void *buffer, int32_t nu
     }
 
     if (mAudioEndpoint.isFreeRunning()) {
-        //ALOGD("AudioStreamInternal::processDataNow() - update read counter");
         // Update data queue based on the timing model.
         int64_t estimatedReadCounter = mClockModel.convertTimeToPosition(currentNanoTime);
+        // ALOGD("AudioStreamInternal::processDataNow() - estimatedReadCounter = %d", (int)estimatedReadCounter);
         mAudioEndpoint.setDataReadCounter(estimatedReadCounter);
     }
-    // TODO else query from endpoint cuz set by actual reader, maybe
 
     // If the read index passed the write index then consider it an underrun.
     if (mAudioEndpoint.getFullFramesAvailable() < 0) {
+        ALOGV("AudioStreamInternal::processDataNow() - XRun! write = %d, read = %d",
+              (int)mAudioEndpoint.getDataWriteCounter(),
+              (int)mAudioEndpoint.getDataReadCounter());
         mXRunCount++;
     }
 
@@ -201,9 +252,6 @@ aaudio_result_t AudioStreamInternalPlay::writeNowWithConversion(const void *buff
     int32_t framesWritten = numFrames - framesLeft;
     mAudioEndpoint.advanceWriteIndex(framesWritten);
 
-    if (framesWritten > 0) {
-        incrementFramesWritten(framesWritten);
-    }
     // ALOGD("AudioStreamInternal::writeNowWithConversion() returns %d", framesWritten);
     return framesWritten;
 }
@@ -211,25 +259,29 @@ aaudio_result_t AudioStreamInternalPlay::writeNowWithConversion(const void *buff
 
 int64_t AudioStreamInternalPlay::getFramesRead()
 {
-    int64_t framesRead =
-            mClockModel.convertTimeToPosition(AudioClock::getNanoseconds())
-            + mFramesOffsetFromService;
+    int64_t framesReadHardware;
+    if (isActive()) {
+        framesReadHardware = mClockModel.convertTimeToPosition(AudioClock::getNanoseconds());
+    } else {
+        framesReadHardware = mAudioEndpoint.getDataReadCounter();
+    }
+    int64_t framesRead = framesReadHardware + mFramesOffsetFromService;
     // Prevent retrograde motion.
     if (framesRead < mLastFramesRead) {
         framesRead = mLastFramesRead;
     } else {
         mLastFramesRead = framesRead;
     }
-    ALOGD("AudioStreamInternal::getFramesRead() returns %lld", (long long)framesRead);
+    //ALOGD("AudioStreamInternalPlay::getFramesRead() returns %lld", (long long)framesRead);
     return framesRead;
 }
 
 int64_t AudioStreamInternalPlay::getFramesWritten()
 {
-    int64_t getFramesWritten = mAudioEndpoint.getDataWriteCounter()
+    int64_t framesWritten = mAudioEndpoint.getDataWriteCounter()
                                + mFramesOffsetFromService;
-    ALOGD("AudioStreamInternal::getFramesWritten() returns %lld", (long long)getFramesWritten);
-    return getFramesWritten;
+    //ALOGD("AudioStreamInternalPlay::getFramesWritten() returns %lld", (long long)framesWritten);
+    return framesWritten;
 }
 
 

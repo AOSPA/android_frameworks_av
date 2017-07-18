@@ -31,8 +31,7 @@ LOCAL_SHARED_LIBRARIES := \
 	android.hardware.camera.provider@2.4 \
 	android.hardware.camera.device@1.0 \
 	vendor.qti.hardware.camera.device@1.0 \
-	android.hardware.camera.device@3.2 \
-	android.hidl.manager@1.0
+	android.hardware.camera.device@3.2
 
 LOCAL_MODULE:= cameraserver
 LOCAL_32_BIT_ONLY := true

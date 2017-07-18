@@ -819,7 +819,7 @@ status_t AudioSystem::getOutputForAttr(const audio_attributes_t *attr,
                                         uid_t uid,
                                         const audio_config_t *config,
                                         audio_output_flags_t flags,
-                                        audio_port_handle_t selectedDeviceId,
+                                        audio_port_handle_t *selectedDeviceId,
                                         audio_port_handle_t *portId)
 {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
@@ -863,7 +863,7 @@ status_t AudioSystem::getInputForAttr(const audio_attributes_t *attr,
                                 uid_t uid,
                                 const audio_config_base_t *config,
                                 audio_input_flags_t flags,
-                                audio_port_handle_t selectedDeviceId,
+                                audio_port_handle_t *selectedDeviceId,
                                 audio_port_handle_t *portId)
 {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
@@ -1225,6 +1225,13 @@ status_t AudioSystem::getMasterMono(bool *mono)
     return aps->getMasterMono(mono);
 }
 
+float AudioSystem::getStreamVolumeDB(audio_stream_type_t stream, int index, audio_devices_t device)
+{
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0) return NAN;
+    return aps->getStreamVolumeDB(stream, index, device);
+}
+
 // ---------------------------------------------------------------------------
 
 int AudioSystem::AudioPolicyServiceClient::addAudioPortCallback(
@@ -1290,7 +1297,7 @@ void AudioSystem::AudioPolicyServiceClient::onDynamicPolicyMixStateUpdate(
 }
 
 void AudioSystem::AudioPolicyServiceClient::onRecordingConfigurationUpdate(
-        int event, audio_session_t session, audio_source_t source,
+        int event, const record_client_info_t *clientInfo,
         const audio_config_base_t *clientConfig, const audio_config_base_t *deviceConfig,
         audio_patch_handle_t patchHandle) {
     record_config_callback cb = NULL;
@@ -1300,7 +1307,7 @@ void AudioSystem::AudioPolicyServiceClient::onRecordingConfigurationUpdate(
     }
 
     if (cb != NULL) {
-        cb(event, session, source, clientConfig, deviceConfig, patchHandle);
+        cb(event, clientInfo, clientConfig, deviceConfig, patchHandle);
     }
 }
 

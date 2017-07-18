@@ -229,8 +229,7 @@ public:
         virtual     void        binderDied(const wp<IBinder>& who);
 
     private:
-                    PMDeathRecipient(const PMDeathRecipient&);
-                    PMDeathRecipient& operator = (const PMDeathRecipient&);
+        DISALLOW_COPY_AND_ASSIGN(PMDeathRecipient);
 
         wp<ThreadBase> mThread;
     };
@@ -510,9 +509,10 @@ protected:
                 template <typename T>
                 class ActiveTracks {
                 public:
-                    ActiveTracks()
+                    explicit ActiveTracks(SimpleLog *localLog = nullptr)
                         : mActiveTracksGeneration(0)
                         , mLastActiveTracksGeneration(0)
+                        , mLocalLog(localLog)
                     { }
 
                     ~ActiveTracks() {
@@ -564,6 +564,8 @@ protected:
                     void            updatePowerState(sp<ThreadBase> thread, bool force = false);
 
                 private:
+                    void            logTrack(const char *funcName, const sp<T> &track) const;
+
                     SortedVector<uid_t> getWakeLockUids() {
                         SortedVector<uid_t> wakeLockUids;
                         for (const sp<T> &track : mActiveTracks) {
@@ -578,6 +580,7 @@ protected:
                     int                 mActiveTracksGeneration;
                     int                 mLastActiveTracksGeneration;
                     wp<T>               mLatestActiveTrack; // latest track added to ActiveTracks
+                    SimpleLog * const   mLocalLog;
                 };
 
                 SimpleLog mLocalLog;
@@ -901,7 +904,7 @@ private:
 
     friend class AudioFlinger;      // for numerous
 
-    PlaybackThread& operator = (const PlaybackThread&);
+    DISALLOW_COPY_AND_ASSIGN(PlaybackThread);
 
     status_t    addTrack_l(const sp<Track>& track);
     bool        destroyTrack_l(const sp<Track>& track);
@@ -982,7 +985,7 @@ private:
     sp<NBAIO_Source>        mTeeSource;
 #endif
     uint32_t                mScreenState;   // cached copy of gScreenState
-    static const size_t     kFastMixerLogSize = 4 * 1024;
+    static const size_t     kFastMixerLogSize = 8 * 1024;
     sp<NBLog::Writer>       mFastMixerNBLogWriter;
 
 
@@ -1483,7 +1486,7 @@ class MmapThread : public ThreadBase
     status_t createMmapBuffer(int32_t minSizeFrames,
                                       struct audio_mmap_buffer_info *info);
     status_t getMmapPosition(struct audio_mmap_position *position);
-    status_t start(const MmapStreamInterface::Client& client, audio_port_handle_t *handle);
+    status_t start(const AudioClient& client, audio_port_handle_t *handle);
     status_t stop(audio_port_handle_t handle);
     status_t standby();
 

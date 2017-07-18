@@ -46,8 +46,8 @@ AAudioServiceEndpointPlay::AAudioServiceEndpointPlay(AAudioService &audioService
 AAudioServiceEndpointPlay::~AAudioServiceEndpointPlay() {
 }
 
-aaudio_result_t AAudioServiceEndpointPlay::open(int32_t deviceId) {
-    aaudio_result_t result = AAudioServiceEndpoint::open(deviceId);
+aaudio_result_t AAudioServiceEndpointPlay::open(const AAudioStreamConfiguration& configuration) {
+    aaudio_result_t result = AAudioServiceEndpoint::open(configuration);
     if (result == AAUDIO_OK) {
         mMixer.allocate(getStreamInternal()->getSamplesPerFrame(),
                         getStreamInternal()->getFramesPerBurst());
@@ -68,9 +68,7 @@ aaudio_result_t AAudioServiceEndpointPlay::open(int32_t deviceId) {
 void *AAudioServiceEndpointPlay::callbackLoop() {
     ALOGD("AAudioServiceEndpointPlay(): callbackLoop() entering");
     int32_t underflowCount = 0;
-
-    aaudio_result_t result = getStreamInternal()->requestStart();
-
+    aaudio_result_t result = AAUDIO_OK;
     int64_t timeoutNanos = getStreamInternal()->calculateReasonableTimeout();
 
     // result might be a frame count
@@ -79,13 +77,15 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
         mMixer.clear();
         { // use lock guard
             std::lock_guard <std::mutex> lock(mLockStreams);
-            for (AAudioServiceStreamShared *sharedStream : mRunningStreams) {
-                FifoBuffer *fifo = sharedStream->getDataFifoBuffer();
-                float volume = 0.5; // TODO get from system
-                bool underflowed = mMixer.mix(fifo, volume);
-                underflowCount += underflowed ? 1 : 0;
-                // TODO log underflows in each stream
-                sharedStream->markTransferTime(AudioClock::getNanoseconds());
+            for (sp<AAudioServiceStreamShared> sharedStream : mRegisteredStreams) {
+                if (sharedStream->isRunning()) {
+                    FifoBuffer *fifo = sharedStream->getDataFifoBuffer();
+                    float volume = 1.0; // to match legacy volume
+                    bool underflowed = mMixer.mix(fifo, volume);
+                    underflowCount += underflowed ? 1 : 0;
+                    // TODO log underflows in each stream
+                    sharedStream->markTransferTime(AudioClock::getNanoseconds());
+                }
             }
         }
 
@@ -101,8 +101,6 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
             break;
         }
     }
-
-    result = getStreamInternal()->requestStop();
 
     ALOGD("AAudioServiceEndpointPlay(): callbackLoop() exiting, %d underflows", underflowCount);
     return NULL; // TODO review

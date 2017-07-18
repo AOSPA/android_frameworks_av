@@ -21,7 +21,7 @@
 #include <OMX_IndexExt.h>
 
 #include <media/OMXBuffer.h>
-#include <IOMX.h>
+#include <media/IOMX.h>
 
 #include "OMXUtils.h"
 #include "BWGraphicBufferSource.h"
@@ -158,6 +158,11 @@ BWGraphicBufferSource::BWGraphicBufferSource(
 ::android::binder::Status BWGraphicBufferSource::setStopTimeUs(
         int64_t stopTimeUs) {
     return Status::fromStatusT(mBase->setStopTimeUs(stopTimeUs));
+}
+
+::android::binder::Status BWGraphicBufferSource::getStopTimeOffsetUs(
+        int64_t *stopTimeOffsetUs) {
+    return Status::fromStatusT(mBase->getStopTimeOffsetUs(stopTimeOffsetUs));
 }
 
 ::android::binder::Status BWGraphicBufferSource::setColorAspects(

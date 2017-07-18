@@ -27,7 +27,7 @@
  *
  */
 
-#include <stagefright/ExtendedMediaDefs.h>
+#include <ExtendedMediaDefs.h>
 
 namespace android {
 

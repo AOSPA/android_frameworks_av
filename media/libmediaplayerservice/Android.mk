@@ -52,10 +52,10 @@ LOCAL_WHOLE_STATIC_LIBRARIES := \
     libavmediaserviceextensions \
 
 LOCAL_C_INCLUDES :=                                                 \
-    $(TOP)/frameworks/av/media/libstagefright/include               \
-    $(TOP)/frameworks/av/media/libstagefright/rtsp                  \
-    $(TOP)/frameworks/av/media/libstagefright/wifi-display          \
-    $(TOP)/frameworks/av/media/libstagefright/webm                  \
+    frameworks/av/media/libstagefright/include               \
+    frameworks/av/media/libstagefright/rtsp                  \
+    frameworks/av/media/libstagefright/wifi-display          \
+    frameworks/av/media/libstagefright/webm                  \
     $(LOCAL_PATH)/include/media                              \
     $(TOP)/frameworks/av/include/camera                             \
     $(TOP)/frameworks/native/include/media/openmax                  \
@@ -69,6 +69,9 @@ LOCAL_CFLAGS += -Werror -Wno-error=deprecated-declarations -Wall
 LOCAL_MODULE:= libmediaplayerservice
 
 #LOCAL_32_BIT_ONLY := true
+
+LOCAL_SANITIZE := cfi
+LOCAL_SANITIZE_DIAG := cfi
 
 include $(BUILD_SHARED_LIBRARY)
 

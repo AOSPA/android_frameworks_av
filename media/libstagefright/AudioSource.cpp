@@ -58,13 +58,16 @@ AudioSource::AudioSource(
       mOutSampleRate(outSampleRate > 0 ? outSampleRate : sampleRate),
       mTrackMaxAmplitude(false),
       mStartTimeUs(0),
+      mStopSystemTimeUs(-1),
+      mLastFrameTimestampUs(0),
       mMaxAmplitude(0),
       mPrevSampleTimeUs(0),
       mInitialReadTimeUs(0),
       mNumFramesReceived(0),
       mNumFramesSkipped(0),
       mNumFramesLost(0),
-      mNumClientOwnedBuffers(0) {
+      mNumClientOwnedBuffers(0),
+      mNoMoreFramesToRead(false) {
     ALOGV("sampleRate: %u, outSampleRate: %u, channelCount: %u",
             sampleRate, outSampleRate, channelCount);
     CHECK(channelCount == 1 || channelCount == 2 || channelCount == 6);
@@ -176,6 +179,8 @@ status_t AudioSource::reset() {
     }
 
     mStarted = false;
+    mStopSystemTimeUs = -1;
+    mNoMoreFramesToRead = false;
     mFrameAvailableCondition.signal();
 
     mRecord->stop();
@@ -244,6 +249,9 @@ status_t AudioSource::read(
 
     while (mStarted && mBuffersReceived.empty()) {
         mFrameAvailableCondition.wait(mLock);
+        if (mNoMoreFramesToRead) {
+            return OK;
+        }
     }
     if (!mStarted) {
         return OK;
@@ -284,6 +292,21 @@ status_t AudioSource::read(
     }
 
     *out = buffer;
+    return OK;
+}
+
+status_t AudioSource::setStopTimeUs(int64_t stopTimeUs) {
+    Mutex::Autolock autoLock(mLock);
+    ALOGV("Set stoptime: %lld us", (long long)stopTimeUs);
+
+    if (stopTimeUs < -1) {
+        ALOGE("Invalid stop time %lld us", (long long)stopTimeUs);
+        return BAD_VALUE;
+    } else if (stopTimeUs == -1) {
+        ALOGI("reset stopTime to be -1");
+    }
+
+    mStopSystemTimeUs = stopTimeUs;
     return OK;
 }
 
@@ -339,6 +362,14 @@ status_t AudioSource::dataCallback(const AudioRecord::Buffer& audioBuffer) {
         return OK;
     }
 
+    if (mStopSystemTimeUs != -1 && timeUs >= mStopSystemTimeUs) {
+        ALOGV("Drop Audio frame at %lld  stop time: %lld us",
+                (long long)timeUs, (long long)mStopSystemTimeUs);
+        mNoMoreFramesToRead = true;
+        mFrameAvailableCondition.signal();
+        return OK;
+    }
+
     if (mNumFramesReceived == 0 && mPrevSampleTimeUs == 0) {
         mInitialReadTimeUs = timeUs;
         // Initial delay
@@ -347,6 +378,7 @@ status_t AudioSource::dataCallback(const AudioRecord::Buffer& audioBuffer) {
         }
         mPrevSampleTimeUs = mStartTimeUs;
     }
+    mLastFrameTimestampUs = timeUs;
 
     size_t numLostBytes = 0;
     if (mNumFramesReceived > 0) {  // Ignore earlier frame lost

@@ -565,6 +565,12 @@ public:
             status_t    reload();
 
 public:
+    /**
+     * @param transferType
+     * @return text string that matches the enum name
+     */
+            static const char * convertTransferToText(transfer_type transferType);
+
     /* Returns a handle on the audio output used by this AudioTrack.
      *
      * Parameters:
@@ -927,6 +933,8 @@ protected:
             // caller must hold lock on mLock for all _l methods
             uint32_t latency_l();
 
+            void updateLatency_l(); // updates mAfLatency and mLatency from AudioSystem cache
+
             status_t createTrack_l();
 
             // can only be called when mState != STATE_ACTIVE
@@ -962,7 +970,7 @@ protected:
             Modulo<uint32_t> updateAndGetPosition_l();
 
             // check sample rate and speed is compatible with AudioTrack
-            bool     isSampleRateSpeedAllowed_l(uint32_t sampleRate, float speed) const;
+            bool     isSampleRateSpeedAllowed_l(uint32_t sampleRate, float speed);
 
             void     restartIfDisabled();
 
@@ -1133,7 +1141,10 @@ protected:
 
     // For Device Selection API
     //  a value of AUDIO_PORT_HANDLE_NONE indicated default (AudioPolicyManager) routing.
-    audio_port_handle_t     mSelectedDeviceId;
+    audio_port_handle_t    mSelectedDeviceId; // Device requested by the application.
+    audio_port_handle_t    mRoutedDeviceId;   // Device actually selected by audio policy manager:
+                                              // May not match the app selection depending on other
+                                              // activity and connected devices.
 
     sp<VolumeHandler>       mVolumeHandler;
 

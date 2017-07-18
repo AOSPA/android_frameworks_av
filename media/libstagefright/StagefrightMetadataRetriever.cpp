@@ -44,7 +44,7 @@
 #include <media/stagefright/MetaData.h>
 #include <media/stagefright/Utils.h>
 
-#include <CharacterEncodingDetector.h>
+#include <media/CharacterEncodingDetector.h>
 
 #include <stagefright/AVExtensions.h>
 

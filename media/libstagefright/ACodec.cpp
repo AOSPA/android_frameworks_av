@@ -971,7 +971,9 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
                             return NO_MEMORY;
                         }
                         hidlMem = mapMemory(hidlMemToken);
-
+                        if (hidlMem == nullptr) {
+                            return NO_MEMORY;
+                        }
                         err = mOMXNode->useBuffer(
                                 portIndex, hidlMemToken, &info.mBufferID);
                     } else {
@@ -1019,6 +1021,9 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
                                 return NO_MEMORY;
                             }
                             hidlMem = mapMemory(hidlMemToken);
+                            if (hidlMem == nullptr) {
+                                return NO_MEMORY;
+                            }
                             info.mData = new SharedMemoryBuffer(format, hidlMem);
                             info.mMemRef = hidlMem;
                         } else {
@@ -4101,7 +4106,8 @@ status_t ACodec::setupMPEG4EncoderParameters(const sp<AMessage> &msg) {
         mpeg4type.eLevel = static_cast<OMX_VIDEO_MPEG4LEVELTYPE>(level);
     }
 
-    setBFrames(&mpeg4type);
+    //Fix me
+    //setBFrames(&mpeg4type);
     err = mOMXNode->setParameter(
             OMX_IndexParamVideoMpeg4, &mpeg4type, sizeof(mpeg4type));
 
@@ -4361,7 +4367,8 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
         h264type.nCabacInitIdc = 1;
     }
 
-    setBFrames(&h264type, iFrameInterval, frameRate);
+    //Fix me
+    //setBFrames(&h264type, iFrameInterval, frameRate);
     if (h264type.nBFrames != 0) {
         h264type.nAllowedPictureTypes |= OMX_VIDEO_PictureTypeB;
     }
@@ -4872,9 +4879,9 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                             rect.nTop < 0 ||
                             rect.nLeft + rect.nWidth > videoDef->nFrameWidth ||
                             rect.nTop + rect.nHeight > videoDef->nFrameHeight) {
-                            ALOGE("Wrong cropped rect (%d, %d) - (%u, %u) vs. frame (%u, %u)",
+                            ALOGE("Wrong cropped rect (%d, %d, %u, %u) vs. frame (%u, %u)",
                                     rect.nLeft, rect.nTop,
-                                    rect.nLeft + rect.nWidth, rect.nTop + rect.nHeight,
+                                    rect.nWidth, rect.nHeight,
                                     videoDef->nFrameWidth, videoDef->nFrameHeight);
                             return BAD_VALUE;
                         }
@@ -5343,7 +5350,8 @@ void ACodec::sendFormatChange() {
 
     int32_t isVQZIPSession;
     if (mInputFormat->findInt32("vqzip", &isVQZIPSession) && isVQZIPSession) {
-        getVQZIPInfo(mOutputFormat);
+        //Fix me
+        //getVQZIPInfo(mOutputFormat);
     }
 
     // mLastOutputFormat is not used when tunneled; doing this just to stay consistent
@@ -7301,6 +7309,16 @@ status_t ACodec::setParameters(const sp<AMessage> &params) {
             ALOGE("Failed to set parameter 'stop-time-us' (err %d)", err);
             return err;
         }
+
+        int64_t stopTimeOffsetUs;
+        err = statusFromBinderStatus(
+                mGraphicBufferSource->getStopTimeOffsetUs(&stopTimeOffsetUs));
+
+        if (err != OK) {
+            ALOGE("Failed to get stop time offset (err %d)", err);
+            return err;
+        }
+        mInputFormat->setInt64("android._stop-time-offset-us", stopTimeOffsetUs);
     }
 
     int32_t dummy;

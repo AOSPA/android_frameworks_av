@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "AAudioService"
+#define LOG_TAG "AAudioServiceStreamMMAP"
 //#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
@@ -38,26 +38,31 @@ using namespace aaudio;
 #define AAUDIO_SAMPLE_RATE_DEFAULT    48000
 
 /**
- * Stream that uses an MMAP buffer.
+ * Service Stream that uses an MMAP buffer.
  */
 
-AAudioServiceStreamMMAP::AAudioServiceStreamMMAP()
+AAudioServiceStreamMMAP::AAudioServiceStreamMMAP(const android::AudioClient& serviceClient,
+                                                 bool inService)
         : AAudioServiceStreamBase()
         , mMmapStreamCallback(new MyMmapStreamCallback(*this))
         , mPreviousFrameCounter(0)
-        , mMmapStream(nullptr) {
-}
-
-AAudioServiceStreamMMAP::~AAudioServiceStreamMMAP() {
-    close();
+        , mMmapStream(nullptr)
+        , mServiceClient(serviceClient)
+        , mInService(inService) {
 }
 
 aaudio_result_t AAudioServiceStreamMMAP::close() {
-    mMmapStream.clear(); // TODO review. Is that all we have to do?
-    // Apparently the above close is asynchronous. An attempt to open a new device
-    // right after a close can fail. Also some callbacks may still be in flight!
-    // FIXME Make closing synchronous.
-    AudioClock::sleepForNanos(100 * AAUDIO_NANOS_PER_MILLISECOND);
+    if (mState == AAUDIO_STREAM_STATE_CLOSED) {
+        return AAUDIO_OK;
+    }
+    stop();
+    if (mMmapStream != 0) {
+        mMmapStream.clear(); // TODO review. Is that all we have to do?
+        // Apparently the above close is asynchronous. An attempt to open a new device
+        // right after a close can fail. Also some callbacks may still be in flight!
+        // FIXME Make closing synchronous.
+        AudioClock::sleepForNanos(100 * AAUDIO_NANOS_PER_MILLISECOND);
+    }
 
     if (mAudioDataFileDescriptor != -1) {
         ::close(mAudioDataFileDescriptor);
@@ -87,9 +92,6 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
 
     const AAudioStreamConfiguration &configurationInput = request.getConstantConfiguration();
     audio_port_handle_t deviceId = configurationInput.getDeviceId();
-
-    mMmapClient.clientUid = request.getUserId();
-    mMmapClient.clientPid = request.getProcessId();
     aaudio_direction_t direction = request.getDirection();
 
     // Fill in config
@@ -120,8 +122,6 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
         return AAUDIO_ERROR_ILLEGAL_ARGUMENT;
     }
 
-    mMmapClient.packageName.setTo(String16("aaudio_service")); // FIXME what should we do here?
-
     MmapStreamInterface::stream_direction_t streamDirection = (direction == AAUDIO_DIRECTION_OUTPUT)
         ? MmapStreamInterface::DIRECTION_OUTPUT : MmapStreamInterface::DIRECTION_INPUT;
 
@@ -132,27 +132,51 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
                                                           mMmapClient,
                                                           &deviceId,
                                                           mMmapStreamCallback,
-                                                          mMmapStream);
+                                                          mMmapStream,
+                                                          &mPortHandle);
     if (status != OK) {
         ALOGE("openMmapStream returned status %d", status);
         return AAUDIO_ERROR_UNAVAILABLE;
     }
 
+    if (deviceId == AAUDIO_UNSPECIFIED) {
+        ALOGW("AAudioServiceStreamMMAP::open() - openMmapStream() failed to set deviceId");
+    }
+
     // Create MMAP/NOIRQ buffer.
     int32_t minSizeFrames = configurationInput.getBufferCapacity();
-    if (minSizeFrames == 0) { // zero will get rejected
+    if (minSizeFrames <= 0) { // zero will get rejected
         minSizeFrames = AAUDIO_BUFFER_CAPACITY_MIN;
     }
     status = mMmapStream->createMmapBuffer(minSizeFrames, &mMmapBufferinfo);
     if (status != OK) {
-        ALOGE("%s: createMmapBuffer() returned status %d, return AAUDIO_ERROR_UNAVAILABLE",
-              __FILE__, status);
+        ALOGE("AAudioServiceStreamMMAP::open() - createMmapBuffer() returned status %d",
+              status);
         return AAUDIO_ERROR_UNAVAILABLE;
     } else {
-        ALOGD("createMmapBuffer status %d shared_address = %p buffer_size %d burst_size %d",
+        ALOGD("createMmapBuffer status %d shared_address = %p buffer_size %d burst_size %d"
+                "Sharable FD: %s",
               status, mMmapBufferinfo.shared_memory_address,
-              mMmapBufferinfo.buffer_size_frames,
-              mMmapBufferinfo.burst_size_frames);
+              abs(mMmapBufferinfo.buffer_size_frames),
+              mMmapBufferinfo.burst_size_frames,
+              mMmapBufferinfo.buffer_size_frames < 0 ? "Yes" : "No");
+    }
+
+    mCapacityInFrames = mMmapBufferinfo.buffer_size_frames;
+    // FIXME: the audio HAL indicates if the shared memory fd can be shared outside of audioserver
+    // by returning a negative buffer size
+    if (mCapacityInFrames < 0) {
+        // Exclusive mode is possible from any client
+        mCapacityInFrames = -mCapacityInFrames;
+    } else {
+        // exclusive mode is only possible if the final fd destination is inside audioserver
+        if ((mMmapClient.clientUid != mServiceClient.clientUid) &&
+                configurationInput.getSharingMode() == AAUDIO_SHARING_MODE_EXCLUSIVE) {
+            // Fallback is handled by caller but indicate what is possible in case
+            // this is used in the future
+            configurationOutput.setSharingMode(AAUDIO_SHARING_MODE_SHARED);
+            return AAUDIO_ERROR_UNAVAILABLE;
+        }
     }
 
     // Get information about the stream and pass it back to the caller.
@@ -162,7 +186,6 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
 
     mAudioDataFileDescriptor = mMmapBufferinfo.shared_memory_fd;
     mFramesPerBurst = mMmapBufferinfo.burst_size_frames;
-    mCapacityInFrames = mMmapBufferinfo.buffer_size_frames;
     mAudioFormat = AAudioConvert_androidToAAudioDataFormat(config.format);
     mSampleRate = config.sample_rate;
 
@@ -181,12 +204,16 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
     ALOGD("AAudioServiceStreamMMAP::open() original burst = %d, minMicros = %d, final burst = %d\n",
           mMmapBufferinfo.burst_size_frames, burstMinMicros, mFramesPerBurst);
 
+    ALOGD("AAudioServiceStreamMMAP::open() actual rate = %d, channels = %d, deviceId = %d\n",
+          mSampleRate, mSamplesPerFrame, deviceId);
+
     // Fill in AAudioStreamConfiguration
     configurationOutput.setSampleRate(mSampleRate);
     configurationOutput.setSamplesPerFrame(mSamplesPerFrame);
     configurationOutput.setAudioFormat(mAudioFormat);
     configurationOutput.setDeviceId(deviceId);
 
+    setState(AAUDIO_STREAM_STATE_OPEN);
     return AAUDIO_OK;
 }
 
@@ -194,15 +221,21 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
  * Start the flow of data.
  */
 aaudio_result_t AAudioServiceStreamMMAP::start() {
+    if (isRunning()) {
+        return AAUDIO_OK;
+    }
     if (mMmapStream == nullptr) return AAUDIO_ERROR_NULL;
     aaudio_result_t result;
-    status_t status = mMmapStream->start(mMmapClient, &mPortHandle);
+    status_t status = mMmapStream->start(mServiceClient, &mPortHandle);
     if (status != OK) {
         ALOGE("AAudioServiceStreamMMAP::start() mMmapStream->start() returned %d", status);
-        processError();
+        disconnect();
         result = AAudioConvert_androidToAAudioResult(status);
     } else {
         result = AAudioServiceStreamBase::start();
+        if (!mInService && result == AAUDIO_OK) {
+            startClient(mMmapClient, &mClientHandle);
+        }
     }
     return result;
 }
@@ -211,18 +244,28 @@ aaudio_result_t AAudioServiceStreamMMAP::start() {
  * Stop the flow of data such that start() can resume with loss of data.
  */
 aaudio_result_t AAudioServiceStreamMMAP::pause() {
+    if (!isRunning()) {
+        return AAUDIO_OK;
+    }
     if (mMmapStream == nullptr) return AAUDIO_ERROR_NULL;
-
     aaudio_result_t result1 = AAudioServiceStreamBase::pause();
+    if (!mInService) {
+        stopClient(mClientHandle);
+    }
     status_t status = mMmapStream->stop(mPortHandle);
     mFramesRead.reset32();
     return (result1 != AAUDIO_OK) ? result1 : AAudioConvert_androidToAAudioResult(status);
 }
 
 aaudio_result_t AAudioServiceStreamMMAP::stop() {
+    if (!isRunning()) {
+        return AAUDIO_OK;
+    }
     if (mMmapStream == nullptr) return AAUDIO_ERROR_NULL;
-
     aaudio_result_t result1 = AAudioServiceStreamBase::stop();
+    if (!mInService) {
+        stopClient(mClientHandle);
+    }
     aaudio_result_t status = mMmapStream->stop(mPortHandle);
     mFramesRead.reset32();
     return (result1 != AAUDIO_OK) ? result1 :  AAudioConvert_androidToAAudioResult(status);
@@ -234,23 +277,29 @@ aaudio_result_t AAudioServiceStreamMMAP::stop() {
 aaudio_result_t AAudioServiceStreamMMAP::flush() {
     if (mMmapStream == nullptr) return AAUDIO_ERROR_NULL;
     // TODO how do we flush an MMAP/NOIRQ buffer? sync pointers?
-    sendServiceEvent(AAUDIO_SERVICE_EVENT_FLUSHED);
-    mState = AAUDIO_STREAM_STATE_FLUSHED;
     return AAudioServiceStreamBase::flush();;
 }
 
+aaudio_result_t AAudioServiceStreamMMAP::startClient(const android::AudioClient& client,
+                                                     audio_port_handle_t *clientHandle) {
+    return AAudioConvert_androidToAAudioResult(mMmapStream->start(client, clientHandle));
+}
+
+aaudio_result_t AAudioServiceStreamMMAP::stopClient(audio_port_handle_t clientHandle) {
+    return AAudioConvert_androidToAAudioResult(mMmapStream->stop(clientHandle));
+}
 
 aaudio_result_t AAudioServiceStreamMMAP::getFreeRunningPosition(int64_t *positionFrames,
                                                                 int64_t *timeNanos) {
     struct audio_mmap_position position;
     if (mMmapStream == nullptr) {
-        processError();
+        disconnect();
         return AAUDIO_ERROR_NULL;
     }
     status_t status = mMmapStream->getMmapPosition(&position);
     if (status != OK) {
         ALOGE("sendCurrentTimestamp(): getMmapPosition() returned %d", status);
-        processError();
+        disconnect();
         return AAudioConvert_androidToAAudioResult(status);
     } else {
         mFramesRead.update32(position.position_frames);
@@ -261,7 +310,8 @@ aaudio_result_t AAudioServiceStreamMMAP::getFreeRunningPosition(int64_t *positio
 }
 
 void AAudioServiceStreamMMAP::onTearDown() {
-    ALOGE("AAudioServiceStreamMMAP::onTearDown() called - TODO");
+    ALOGD("AAudioServiceStreamMMAP::onTearDown() called");
+    disconnect();
 };
 
 void AAudioServiceStreamMMAP::onVolumeChanged(audio_channel_mask_t channels,
@@ -274,11 +324,11 @@ void AAudioServiceStreamMMAP::onVolumeChanged(audio_channel_mask_t channels,
 
 void AAudioServiceStreamMMAP::onRoutingChanged(audio_port_handle_t deviceId) {
     ALOGD("AAudioServiceStreamMMAP::onRoutingChanged() called with %d, old = %d",
-          deviceId, mPortHandle);
-    if (mPortHandle > 0 && mPortHandle != deviceId) {
-        sendServiceEvent(AAUDIO_SERVICE_EVENT_DISCONNECTED);
+          deviceId, mDeviceId);
+    if (mDeviceId != AUDIO_PORT_HANDLE_NONE  && mDeviceId != deviceId) {
+        disconnect();
     }
-    mPortHandle = deviceId;
+    mDeviceId = deviceId;
 };
 
 /**

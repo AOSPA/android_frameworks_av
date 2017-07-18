@@ -141,7 +141,7 @@ struct MyHandler : public AHandler {
           mCheckPending(false),
           mCheckGeneration(0),
           mCheckTimeoutGeneration(0),
-          mTryTCPInterleaving(false),
+          mTryTCPInterleaving(property_get_bool("rtp.transport.TCP", false)),
           mTryFakeRTCP(false),
           mReceivedFirstRTCPPacket(false),
           mReceivedFirstRTPPacket(false),
