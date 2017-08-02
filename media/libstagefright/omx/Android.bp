@@ -25,14 +25,25 @@ cc_library_shared {
         "1.0/WOmxBufferSource.cpp",
     ],
 
+    export_include_dirs: [
+        "include",
+    ],
+
     include_dirs: [
-        "frameworks/av/include", // for media/vndk/xmlparser/1.0/MediaCodecsXmlParser.h
         "frameworks/av/include/media/",
         "frameworks/av/media/libstagefright",
         "frameworks/av/media/libstagefright/include",
         "frameworks/native/include", // for media/hardware/MetadataBufferType.h
         "frameworks/native/include/media/hardware",
         "frameworks/native/include/media/openmax",
+    ],
+
+    header_libs: [
+        "media_plugin_headers",
+    ],
+
+    export_header_lib_headers: [
+        "media_plugin_headers",
     ],
 
     shared_libs: [
@@ -45,12 +56,12 @@ cc_library_shared {
         "libgui",
         "libcutils",
         "libstagefright_foundation",
+        "libstagefright_xmlparser",
         "libdl",
         "libhidlbase",
         "libhidlmemory",
         "libhidltransport",
         "libnativewindow", // TODO(b/62923479): use header library
-        "libstagefright_xmlparser@1.0",
         "android.hidl.memory@1.0",
         "android.hidl.token@1.0-utils",
         "android.hardware.media@1.0",
@@ -59,7 +70,12 @@ cc_library_shared {
         "android.hardware.graphics.bufferqueue@1.0",
     ],
 
-    export_shared_lib_headers: ["android.hidl.memory@1.0"],
+    export_shared_lib_headers: [
+        "android.hidl.memory@1.0",
+        "libmedia_omx",
+        "libstagefright_foundation",
+        "libstagefright_xmlparser",
+    ],
 
     cflags: [
         "-Werror",
@@ -83,12 +99,21 @@ cc_library_shared {
 cc_library_static {
     name: "libstagefright_omx_utils",
     srcs: ["OMXUtils.cpp"],
-    include_dirs: [
-        "frameworks/av/media/libstagefright",
-        "frameworks/native/include/media/hardware",
-        "frameworks/native/include/media/openmax",
+    export_include_dirs: [
+        "include",
     ],
-    shared_libs: ["libmedia"],
+    header_libs: [
+        "media_plugin_headers",
+    ],
+    export_header_lib_headers: [
+        "media_plugin_headers",
+    ],
+    shared_libs: [
+        "libmedia",
+    ],
+    export_shared_lib_headers: [
+        "libmedia",
+    ],
     sanitize: {
         misc_undefined: [
             "signed-integer-overflow",

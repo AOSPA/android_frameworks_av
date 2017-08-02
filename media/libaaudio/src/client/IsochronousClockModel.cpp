@@ -16,7 +16,7 @@
 
 #define LOG_TAG "AAudio"
 //#define LOG_NDEBUG 0
-#include <utils/Log.h>
+#include <log/log.h>
 
 #include <stdint.h>
 
@@ -25,7 +25,6 @@
 
 #define MIN_LATENESS_NANOS (10 * AAUDIO_NANOS_PER_MICROSECOND)
 
-using namespace android;
 using namespace aaudio;
 
 IsochronousClockModel::IsochronousClockModel()
@@ -150,7 +149,7 @@ int64_t IsochronousClockModel::convertPositionToTime(int64_t framePosition) cons
     int64_t nextBurstPosition = mFramesPerBurst * nextBurstIndex;
     int64_t framesDelta = nextBurstPosition - mMarkerFramePosition;
     int64_t nanosDelta = convertDeltaPositionToTime(framesDelta);
-    int64_t time = (int64_t) (mMarkerNanoTime + nanosDelta);
+    int64_t time = mMarkerNanoTime + nanosDelta;
 //    ALOGD("IsochronousClockModel::convertPositionToTime: pos = %llu --> time = %llu",
 //         (unsigned long long)framePosition,
 //         (unsigned long long)time);

@@ -991,13 +991,6 @@ void AudioFlinger::ThreadBase::PMDeathRecipient::binderDied(const wp<IBinder>& w
     ALOGW("power manager service died !!!");
 }
 
-void AudioFlinger::ThreadBase::setEffectSuspended(
-        const effect_uuid_t *type, bool suspend, audio_session_t sessionId)
-{
-    Mutex::Autolock _l(mLock);
-    setEffectSuspended_l(type, suspend, sessionId);
-}
-
 void AudioFlinger::ThreadBase::setEffectSuspended_l(
         const effect_uuid_t *type, bool suspend, audio_session_t sessionId)
 {
@@ -1176,6 +1169,11 @@ status_t AudioFlinger::PlaybackThread::checkEffectCompatibility_l(
         return BAD_VALUE;
     }
 
+    // always allow effects without processing load or latency
+    if ((desc->flags & EFFECT_FLAG_NO_PROCESS_MASK) == EFFECT_FLAG_NO_PROCESS) {
+        return NO_ERROR;
+    }
+
     switch (mType) {
     case MIXER: {
         // Reject any effect on mixer multichannel sinks.
@@ -1206,10 +1204,6 @@ status_t AudioFlinger::PlaybackThread::checkEffectCompatibility_l(
                 }
             }
 
-            // always allow effects without processing load or latency
-            if ((desc->flags & EFFECT_FLAG_NO_PROCESS_MASK) == EFFECT_FLAG_NO_PROCESS) {
-                break;
-            }
             if (flags & AUDIO_OUTPUT_FLAG_RAW) {
                 ALOGW("checkEffectCompatibility_l(): effect %s on playback thread in raw mode",
                       desc->name);
@@ -1448,6 +1442,7 @@ status_t AudioFlinger::ThreadBase::addEffect_l(const sp<EffectModule>& effect)
     effect->setDevice(mInDevice);
     effect->setMode(mAudioFlinger->getMode());
     effect->setAudioSource(mAudioSource);
+
     return NO_ERROR;
 }
 
@@ -5982,6 +5977,7 @@ AudioFlinger::RecordThread::RecordThread(const sp<AudioFlinger>& audioFlinger,
     // mPipeMemory
     // mFastCaptureNBLogWriter
     , mFastTrackAvail(false)
+    , mBtNrecSuspended(false)
 {
     snprintf(mThreadName, kThreadNameLength, "AudioIn_%X", id);
     mNBLogWriter = audioFlinger->newWriter_l(kLogSize, mThreadName);
@@ -6747,12 +6743,6 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         }
         mTracks.add(track);
 
-        // disable AEC and NS if the device is a BT SCO headset supporting those pre processings
-        bool suspend = audio_is_bluetooth_sco_device(mInDevice) &&
-                        mAudioFlinger->btNrecIsOff();
-        setEffectSuspended_l(FX_IID_AEC, suspend, sessionId);
-        setEffectSuspended_l(FX_IID_NS, suspend, sessionId);
-
         if ((*flags & AUDIO_INPUT_FLAG_FAST) && (tid != -1)) {
             pid_t callingPid = IPCThreadState::self()->getCallingPid();
             // we don't have CAP_SYS_NICE, nor do we want to have it as it's too powerful,
@@ -7126,6 +7116,26 @@ void AudioFlinger::RecordThread::ResamplerBufferProvider::releaseBuffer(
     buffer->frameCount = 0;
 }
 
+void AudioFlinger::RecordThread::checkBtNrec()
+{
+    Mutex::Autolock _l(mLock);
+    checkBtNrec_l();
+}
+
+void AudioFlinger::RecordThread::checkBtNrec_l()
+{
+    // disable AEC and NS if the device is a BT SCO headset supporting those
+    // pre processings
+    bool suspend = audio_is_bluetooth_sco_device(mInDevice) &&
+                        mAudioFlinger->btNrecIsOff();
+    if (mBtNrecSuspended.exchange(suspend) != suspend) {
+        for (size_t i = 0; i < mEffectChains.size(); i++) {
+            setEffectSuspended_l(FX_IID_AEC, suspend, mEffectChains[i]->sessionId());
+            setEffectSuspended_l(FX_IID_NS, suspend, mEffectChains[i]->sessionId());
+        }
+    }
+}
+
 
 bool AudioFlinger::RecordThread::checkForNewParameter_l(const String8& keyValuePair,
                                                         status_t& status)
@@ -7198,17 +7208,7 @@ bool AudioFlinger::RecordThread::checkForNewParameter_l(const String8& keyValueP
             if (value != AUDIO_DEVICE_NONE) {
                 mPrevInDevice = value;
             }
-            // disable AEC and NS if the device is a BT SCO headset supporting those
-            // pre processings
-            if (mTracks.size() > 0) {
-                bool suspend = audio_is_bluetooth_sco_device(mInDevice) &&
-                                    mAudioFlinger->btNrecIsOff();
-                for (size_t i = 0; i < mTracks.size(); i++) {
-                    sp<RecordTrack> track = mTracks[i];
-                    setEffectSuspended_l(FX_IID_AEC, suspend, track->sessionId());
-                    setEffectSuspended_l(FX_IID_NS, suspend, track->sessionId());
-                }
-            }
+            checkBtNrec_l();
         }
     }
     if (param.getInt(String8(AudioParameter::keyInputSource), value) == NO_ERROR &&
@@ -7441,17 +7441,7 @@ status_t AudioFlinger::RecordThread::createAudioPatch_l(const struct audio_patch
         mEffectChains[i]->setDevice_l(mInDevice);
     }
 
-    // disable AEC and NS if the device is a BT SCO headset supporting those
-    // pre processings
-    if (mTracks.size() > 0) {
-        bool suspend = audio_is_bluetooth_sco_device(mInDevice) &&
-                            mAudioFlinger->btNrecIsOff();
-        for (size_t i = 0; i < mTracks.size(); i++) {
-            sp<RecordTrack> track = mTracks[i];
-            setEffectSuspended_l(FX_IID_AEC, suspend, track->sessionId());
-            setEffectSuspended_l(FX_IID_NS, suspend, track->sessionId());
-        }
-    }
+    checkBtNrec_l();
 
     // store new source and send to effects
     if (mAudioSource != patch->sinks[0].ext.mix.usecase.source) {
@@ -7913,17 +7903,34 @@ bool AudioFlinger::MmapThread::checkForNewParameter_l(const String8& keyValuePai
 {
     AudioParameter param = AudioParameter(keyValuePair);
     int value;
+    bool sendToHal = true;
     if (param.getInt(String8(AudioParameter::keyRouting), value) == NO_ERROR) {
+        audio_devices_t device = (audio_devices_t)value;
         // forward device change to effects that have requested to be
         // aware of attached audio device.
-        if (value != AUDIO_DEVICE_NONE) {
-            mOutDevice = value;
+        if (device != AUDIO_DEVICE_NONE) {
             for (size_t i = 0; i < mEffectChains.size(); i++) {
-                mEffectChains[i]->setDevice_l(mOutDevice);
+                mEffectChains[i]->setDevice_l(device);
             }
         }
+        if (audio_is_output_devices(device)) {
+            mOutDevice = device;
+            if (!isOutput()) {
+                sendToHal = false;
+            }
+        } else {
+            mInDevice = device;
+            if (device != AUDIO_DEVICE_NONE) {
+                mPrevInDevice = value;
+            }
+            // TODO: implement and call checkBtNrec_l();
+        }
     }
-    status = mHalStream->setParameters(keyValuePair);
+    if (sendToHal) {
+        status = mHalStream->setParameters(keyValuePair);
+    } else {
+        status = NO_ERROR;
+    }
 
     return false;
 }

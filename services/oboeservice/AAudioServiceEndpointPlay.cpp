@@ -57,7 +57,6 @@ aaudio_result_t AAudioServiceEndpointPlay::open(const AAudioStreamConfiguration&
             mLatencyTuningEnabled = true;
             burstsPerBuffer = BURSTS_PER_BUFFER_DEFAULT;
         }
-        ALOGD("AAudioServiceEndpoint(): burstsPerBuffer = %d", burstsPerBuffer);
         int32_t desiredBufferSize = burstsPerBuffer * getStreamInternal()->getFramesPerBurst();
         getStreamInternal()->setBufferSize(desiredBufferSize);
     }
@@ -66,7 +65,6 @@ aaudio_result_t AAudioServiceEndpointPlay::open(const AAudioStreamConfiguration&
 
 // Mix data from each application stream and write result to the shared MMAP stream.
 void *AAudioServiceEndpointPlay::callbackLoop() {
-    ALOGD("AAudioServiceEndpointPlay(): callbackLoop() entering");
     int32_t underflowCount = 0;
     aaudio_result_t result = AAUDIO_OK;
     int64_t timeoutNanos = getStreamInternal()->calculateReasonableTimeout();
@@ -76,16 +74,18 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
         // Mix data from each active stream.
         mMixer.clear();
         { // use lock guard
+            int index = 0;
             std::lock_guard <std::mutex> lock(mLockStreams);
             for (sp<AAudioServiceStreamShared> sharedStream : mRegisteredStreams) {
                 if (sharedStream->isRunning()) {
                     FifoBuffer *fifo = sharedStream->getDataFifoBuffer();
                     float volume = 1.0; // to match legacy volume
-                    bool underflowed = mMixer.mix(fifo, volume);
+                    bool underflowed = mMixer.mix(index, fifo, volume);
                     underflowCount += underflowed ? 1 : 0;
                     // TODO log underflows in each stream
                     sharedStream->markTransferTime(AudioClock::getNanoseconds());
                 }
+                index++;
             }
         }
 
@@ -102,6 +102,8 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
         }
     }
 
-    ALOGD("AAudioServiceEndpointPlay(): callbackLoop() exiting, %d underflows", underflowCount);
+    ALOGW_IF((underflowCount > 0),
+             "AAudioServiceEndpointPlay(): callbackLoop() had %d underflows", underflowCount);
+
     return NULL; // TODO review
 }

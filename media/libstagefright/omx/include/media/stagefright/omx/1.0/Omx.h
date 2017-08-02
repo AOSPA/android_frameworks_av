@@ -20,10 +20,9 @@
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
 
-#include "../../include/OMXNodeInstance.h"
-
+#include <media/stagefright/omx/OMXNodeInstance.h>
+#include <media/stagefright/xmlparser/MediaCodecsXmlParser.h>
 #include <android/hardware/media/omx/1.0/IOmx.h>
-#include <media/vndk/xmlparser/1.0/MediaCodecsXmlParser.h>
 
 namespace android {
 

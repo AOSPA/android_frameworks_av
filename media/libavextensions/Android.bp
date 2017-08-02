@@ -56,6 +56,7 @@ cc_library_static {
         "system/core/base/include",
         "hardware/qcom/media/mm-core/inc",
         "frameworks/av/media/libstagefright/include",
+        "frameworks/av/media/libstagefright/omx/include/media/stagefright",
     ],
     cflags: [
         "-Wno-multichar",

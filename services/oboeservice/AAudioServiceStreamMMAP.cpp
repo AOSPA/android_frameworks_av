@@ -95,7 +95,7 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
     aaudio_direction_t direction = request.getDirection();
 
     // Fill in config
-    aaudio_format_t aaudioFormat = configurationInput.getAudioFormat();
+    aaudio_format_t aaudioFormat = configurationInput.getFormat();
     if (aaudioFormat == AAUDIO_UNSPECIFIED || aaudioFormat == AAUDIO_FORMAT_PCM_FLOAT) {
         aaudioFormat = AAUDIO_FORMAT_PCM_I16;
     }
@@ -154,9 +154,9 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
               status);
         return AAUDIO_ERROR_UNAVAILABLE;
     } else {
-        ALOGD("createMmapBuffer status %d shared_address = %p buffer_size %d burst_size %d"
-                "Sharable FD: %s",
-              status, mMmapBufferinfo.shared_memory_address,
+        ALOGD("createMmapBuffer status = %d, buffer_size = %d, burst_size %d"
+                ", Sharable FD: %s",
+              status,
               abs(mMmapBufferinfo.buffer_size_frames),
               mMmapBufferinfo.burst_size_frames,
               mMmapBufferinfo.buffer_size_frames < 0 ? "Yes" : "No");
@@ -210,7 +210,7 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
     // Fill in AAudioStreamConfiguration
     configurationOutput.setSampleRate(mSampleRate);
     configurationOutput.setSamplesPerFrame(mSamplesPerFrame);
-    configurationOutput.setAudioFormat(mAudioFormat);
+    configurationOutput.setFormat(mAudioFormat);
     configurationOutput.setDeviceId(deviceId);
 
     setState(AAUDIO_STREAM_STATE_OPEN);
@@ -297,16 +297,18 @@ aaudio_result_t AAudioServiceStreamMMAP::getFreeRunningPosition(int64_t *positio
         return AAUDIO_ERROR_NULL;
     }
     status_t status = mMmapStream->getMmapPosition(&position);
-    if (status != OK) {
-        ALOGE("sendCurrentTimestamp(): getMmapPosition() returned %d", status);
+    aaudio_result_t result = AAudioConvert_androidToAAudioResult(status);
+    if (result == AAUDIO_ERROR_UNAVAILABLE) {
+        ALOGW("sendCurrentTimestamp(): getMmapPosition() has no position data yet");
+    } else if (result != AAUDIO_OK) {
+        ALOGE("sendCurrentTimestamp(): getMmapPosition() returned status %d", status);
         disconnect();
-        return AAudioConvert_androidToAAudioResult(status);
     } else {
         mFramesRead.update32(position.position_frames);
         *positionFrames = mFramesRead.get();
         *timeNanos = position.time_nanoseconds;
     }
-    return AAUDIO_OK;
+    return result;
 }
 
 void AAudioServiceStreamMMAP::onTearDown() {

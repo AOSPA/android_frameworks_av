@@ -24,8 +24,8 @@
 *     Calls LOG_HIST_TS
 * LOG_HIST_TS
 *     Hashes file name and line number, and writes single timestamp to buffer
-*     calls NBLOG::Writer::logHistTS once
-* NBLOG::Writer::logHistTS
+*     calls NBLOG::Writer::logEventHistTS once
+* NBLOG::Writer::logEventHistTS
 *     calls NBLOG::Writer::log on hash and current timestamp
 *     time is in CLOCK_MONOTONIC converted to ns
 * NBLOG::Writer::log(Event, const void*, size_t)
@@ -44,6 +44,8 @@
 * ssize_t audio_utils_fifo_reader::obtain
 *     Determines readable buffer section via pointer arithmetic on reader
 *     and writer pointers
+* Similarly, LOG_AUDIO_STATE() is called by onStateChange whenever audio is
+* turned on or off, and writes this notification to the FIFO.
 *
 * 2) reading the data from shared memory
 * Thread::threadloop()
@@ -106,6 +108,7 @@
 #include <audio_utils/roundup.h>
 #include <media/nbaio/NBLog.h>
 #include <media/nbaio/PerformanceAnalysis.h>
+#include <media/nbaio/ReportPerformance.h>
 // #include <utils/CallStack.h> // used to print callstack
 #include <utils/Log.h>
 #include <utils/String8.h>
@@ -138,6 +141,7 @@ std::unique_ptr<NBLog::AbstractEntry> NBLog::AbstractEntry::buildEntry(const uin
     switch (type) {
     case EVENT_START_FMT:
         return std::make_unique<FormatEntry>(FormatEntry(ptr));
+    case EVENT_AUDIO_STATE:
     case EVENT_HISTOGRAM_ENTRY_TS:
         return std::make_unique<HistogramEntry>(HistogramEntry(ptr));
     default:
@@ -516,7 +520,7 @@ void NBLog::Writer::logHash(log_hash_t hash)
     log(EVENT_HASH, &hash, sizeof(hash));
 }
 
-void NBLog::Writer::logHistTS(log_hash_t hash)
+void NBLog::Writer::logEventHistTs(Event event, log_hash_t hash)
 {
     if (!mEnabled) {
         return;
@@ -525,7 +529,7 @@ void NBLog::Writer::logHistTS(log_hash_t hash)
     data.hash = hash;
     data.ts = get_monotonic_ns();
     if (data.ts > 0) {
-        log(EVENT_HISTOGRAM_ENTRY_TS, &data, sizeof(data));
+        log(event, &data, sizeof(data));
     } else {
         ALOGE("Failed to get timestamp");
     }
@@ -758,7 +762,9 @@ bool NBLog::LockedWriter::setEnabled(bool enabled)
 const std::set<NBLog::Event> NBLog::Reader::startingTypes {NBLog::Event::EVENT_START_FMT,
                                                            NBLog::Event::EVENT_HISTOGRAM_ENTRY_TS};
 const std::set<NBLog::Event> NBLog::Reader::endingTypes   {NBLog::Event::EVENT_END_FMT,
-                                                           NBLog::Event::EVENT_HISTOGRAM_ENTRY_TS};
+                                                           NBLog::Event::EVENT_HISTOGRAM_ENTRY_TS,
+                                                           NBLog::Event::EVENT_AUDIO_STATE};
+
 NBLog::Reader::Reader(const void *shared, size_t size)
     : mShared((/*const*/ Shared *) shared), /*mIMemory*/
       mFd(-1), mIndent(0),
@@ -864,42 +870,17 @@ std::unique_ptr<NBLog::Reader::Snapshot> NBLog::Reader::getSnapshot()
 
 }
 
-// writes sample deltas to file, either truncating or appending
-inline void writeHistToFile(const std::vector<int64_t> &samples, bool append) {
-    // name of file on audioserver
-    static const char* const kName = (char *)"/data/misc/audioserver/sample_results.txt";
-    // stores deltas between the samples
-    std::vector<int64_t> intervals;
-    if (samples.size() == 0) return;
-    for (size_t i = 1; i < samples.size(); ++i) {
-        intervals.push_back(deltaMs(samples[i - 1], samples[i]));
-    }
-    // Deletes maximum value in a histogram. Temp quick fix.
-    // FIXME: need to find root cause of approx. 35th element from the end
-    // consistently being an outlier in the first histogram of a flush
-    // ALOGW("%" PRId64 "before", (int64_t) *(std::max_element(intervals.begin(), intervals.end())));
-    intervals.erase(std::max_element(intervals.begin(), intervals.end()));
-    // ALOGW("%" PRId64 "after", (int64_t) *(std::max_element(intervals.begin(), intervals.end())));
-    std::ofstream ofs;
-    ofs.open(kName, append ? std::ios::app : std::ios::trunc);
-    if (!ofs) {
-        ALOGW("couldn't open file %s", kName);
-        return;
-    }
-    for (size_t i = 0; i < intervals.size(); ++i) {
-        ofs << intervals[i] << "\n";
-    }
-    ofs.close();
-}
-
+// TODO: move this to PerformanceAnalysis
+// TODO: make call to dump periodic so that data in shared FIFO does not get overwritten
 void NBLog::Reader::dump(int fd, size_t indent, NBLog::Reader::Snapshot &snapshot)
 {
-    //  CallStack cs(LOG_TAG);
     mFd = fd;
     mIndent = indent;
     String8 timestamp, body;
     // FIXME: this is not thread safe
-    static PerformanceAnalysis performanceAnalysis; // used to store data and to call analysis functions
+    // TODO: need a separate instance of performanceAnalysis for each thread
+    // used to store data and to call analysis functions
+    static ReportPerformance::PerformanceAnalysis performanceAnalysis;
     size_t lost = snapshot.lost() + (snapshot.begin() - EntryIterator(snapshot.data()));
     if (lost > 0) {
         body.appendFormat("warning: lost %zu bytes worth of events", lost);
@@ -921,7 +902,12 @@ void NBLog::Reader::dump(int fd, size_t indent, NBLog::Reader::Snapshot &snapsho
             memcpy(&hash, &(data->hash), sizeof(hash));
             int64_t ts;
             memcpy(&ts, &data->ts, sizeof(ts));
-            performanceAnalysis.logTsEntry(data->author, ts);
+            performanceAnalysis.logTsEntry(ts);
+            ++entry;
+            break;
+        }
+        case EVENT_AUDIO_STATE: {
+            performanceAnalysis.handleStateChange();
             ++entry;
             break;
         }
