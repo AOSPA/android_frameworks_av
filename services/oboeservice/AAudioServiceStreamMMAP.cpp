@@ -31,11 +31,17 @@
 #include "SharedMemoryProxy.h"
 #include "utility/AAudioUtilities.h"
 
+using android::base::unique_fd;
 using namespace android;
 using namespace aaudio;
 
 #define AAUDIO_BUFFER_CAPACITY_MIN    4 * 512
 #define AAUDIO_SAMPLE_RATE_DEFAULT    48000
+
+// This is an estimate of the time difference between the HW and the MMAP time.
+// TODO Get presentation timestamps from the HAL instead of using these estimates.
+#define OUTPUT_ESTIMATED_HARDWARE_OFFSET_NANOS  (3 * AAUDIO_NANOS_PER_MILLISECOND)
+#define INPUT_ESTIMATED_HARDWARE_OFFSET_NANOS   (-1 * AAUDIO_NANOS_PER_MILLISECOND)
 
 /**
  * Service Stream that uses an MMAP buffer.
@@ -62,11 +68,6 @@ aaudio_result_t AAudioServiceStreamMMAP::close() {
         // right after a close can fail. Also some callbacks may still be in flight!
         // FIXME Make closing synchronous.
         AudioClock::sleepForNanos(100 * AAUDIO_NANOS_PER_MILLISECOND);
-    }
-
-    if (mAudioDataFileDescriptor != -1) {
-        ::close(mAudioDataFileDescriptor);
-        mAudioDataFileDescriptor = -1;
     }
 
     return AAudioServiceStreamBase::close();
@@ -113,10 +114,14 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
         config.channel_mask = (aaudioSamplesPerFrame == AAUDIO_UNSPECIFIED)
                             ? AUDIO_CHANNEL_OUT_STEREO
                             : audio_channel_out_mask_from_count(aaudioSamplesPerFrame);
+        mHardwareTimeOffsetNanos = OUTPUT_ESTIMATED_HARDWARE_OFFSET_NANOS; // frames at DAC later
+
     } else if (direction == AAUDIO_DIRECTION_INPUT) {
         config.channel_mask =  (aaudioSamplesPerFrame == AAUDIO_UNSPECIFIED)
                             ? AUDIO_CHANNEL_IN_STEREO
                             : audio_channel_in_mask_from_count(aaudioSamplesPerFrame);
+        mHardwareTimeOffsetNanos = INPUT_ESTIMATED_HARDWARE_OFFSET_NANOS; // frames at ADC earlier
+
     } else {
         ALOGE("openMmapStream - invalid direction = %d", direction);
         return AAUDIO_ERROR_ILLEGAL_ARGUMENT;
@@ -184,7 +189,13 @@ aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest 
                            ? audio_channel_count_from_out_mask(config.channel_mask)
                            : audio_channel_count_from_in_mask(config.channel_mask);
 
-    mAudioDataFileDescriptor = mMmapBufferinfo.shared_memory_fd;
+    // AAudio creates a copy of this FD and retains ownership of the copy.
+    // Assume that AudioFlinger will close the original shared_memory_fd.
+    mAudioDataFileDescriptor.reset(dup(mMmapBufferinfo.shared_memory_fd));
+    if (mAudioDataFileDescriptor.get() == -1) {
+        ALOGE("AAudioServiceStreamMMAP::open() - could not dup shared_memory_fd");
+        return AAUDIO_ERROR_INTERNAL; // TODO review
+    }
     mFramesPerBurst = mMmapBufferinfo.burst_size_frames;
     mAudioFormat = AAudioConvert_androidToAAudioDataFormat(config.format);
     mSampleRate = config.sample_rate;
@@ -289,6 +300,7 @@ aaudio_result_t AAudioServiceStreamMMAP::stopClient(audio_port_handle_t clientHa
     return AAudioConvert_androidToAAudioResult(mMmapStream->stop(clientHandle));
 }
 
+// Get free-running DSP or DMA hardware position from the HAL.
 aaudio_result_t AAudioServiceStreamMMAP::getFreeRunningPosition(int64_t *positionFrames,
                                                                 int64_t *timeNanos) {
     struct audio_mmap_position position;
@@ -305,10 +317,27 @@ aaudio_result_t AAudioServiceStreamMMAP::getFreeRunningPosition(int64_t *positio
         disconnect();
     } else {
         mFramesRead.update32(position.position_frames);
-        *positionFrames = mFramesRead.get();
-        *timeNanos = position.time_nanoseconds;
+
+        Timestamp timestamp(mFramesRead.get(), position.time_nanoseconds);
+        mAtomicTimestamp.write(timestamp);
+        *positionFrames = timestamp.getPosition();
+        *timeNanos = timestamp.getNanoseconds();
     }
     return result;
+}
+
+// Get timestamp that was written by getFreeRunningPosition()
+aaudio_result_t AAudioServiceStreamMMAP::getHardwareTimestamp(int64_t *positionFrames,
+                                                                int64_t *timeNanos) {
+    // TODO Get presentation timestamp from the HAL
+    if (mAtomicTimestamp.isValid()) {
+        Timestamp timestamp = mAtomicTimestamp.read();
+        *positionFrames = timestamp.getPosition();
+        *timeNanos = timestamp.getNanoseconds() + mHardwareTimeOffsetNanos;
+        return AAUDIO_OK;
+    } else {
+        return AAUDIO_ERROR_UNAVAILABLE;
+    }
 }
 
 void AAudioServiceStreamMMAP::onTearDown() {

@@ -353,7 +353,7 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
             format, mSurface, crypto, 0 /* flags */);
 
     if (err != OK) {
-        ALOGE("Failed to configure %s decoder (err=%d)", mComponentName.c_str(), err);
+        ALOGE("Failed to configure [%s] decoder (err=%d)", mComponentName.c_str(), err);
         mCodec->release();
         mCodec.clear();
         handleError(err);
@@ -382,7 +382,7 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
 
     err = mCodec->start();
     if (err != OK) {
-        ALOGE("Failed to start %s decoder (err=%d)", mComponentName.c_str(), err);
+        ALOGE("Failed to start [%s] decoder (err=%d)", mComponentName.c_str(), err);
         mCodec->release();
         mCodec.clear();
         handleError(err);
@@ -470,6 +470,12 @@ void NuPlayer::Decoder::onResume(bool notifyComplete) {
     if (notifyComplete) {
         mResumePending = true;
     }
+
+    if (mCodec == NULL) {
+        ALOGE("[%s] onResume without a valid codec", mComponentName.c_str());
+        handleError(NO_INIT);
+        return;
+    }
     mCodec->start();
 }
 
@@ -491,7 +497,7 @@ void NuPlayer::Decoder::doFlush(bool notifyComplete) {
     }
 
     if (err != OK) {
-        ALOGE("failed to flush %s (err=%d)", mComponentName.c_str(), err);
+        ALOGE("failed to flush [%s] (err=%d)", mComponentName.c_str(), err);
         handleError(err);
         // finish with posting kWhatFlushCompleted.
         // we attempt to release the buffers even if flush fails.
@@ -540,7 +546,7 @@ void NuPlayer::Decoder::onShutdown(bool notifyComplete) {
     releaseAndResetMediaBuffers();
 
     if (err != OK) {
-        ALOGE("failed to release %s (err=%d)", mComponentName.c_str(), err);
+        ALOGE("failed to release [%s] (err=%d)", mComponentName.c_str(), err);
         handleError(err);
         // finish with posting kWhatShutdownCompleted.
     }
@@ -641,10 +647,17 @@ bool NuPlayer::Decoder::handleAnInputBuffer(size_t index) {
         return false;
     }
 
+    if (mCodec == NULL) {
+        ALOGE("[%s] handleAnInputBuffer without a valid codec", mComponentName.c_str());
+        handleError(NO_INIT);
+        return false;
+    }
+
     sp<MediaCodecBuffer> buffer;
     mCodec->getInputBuffer(index, &buffer);
 
     if (buffer == NULL) {
+        ALOGE("[%s] handleAnInputBuffer, failed to get input buffer", mComponentName.c_str());
         handleError(UNKNOWN_ERROR);
         return false;
     }
@@ -707,11 +720,18 @@ bool NuPlayer::Decoder::handleAnOutputBuffer(
         size_t size,
         int64_t timeUs,
         int32_t flags) {
+    if (mCodec == NULL) {
+        ALOGE("[%s] handleAnOutputBuffer without a valid codec", mComponentName.c_str());
+        handleError(NO_INIT);
+        return false;
+    }
+
 //    CHECK_LT(bufferIx, mOutputBuffers.size());
     sp<MediaCodecBuffer> buffer;
     mCodec->getOutputBuffer(index, &buffer);
 
     if (buffer == NULL) {
+        ALOGE("[%s] handleAnOutputBuffer, failed to get output buffer", mComponentName.c_str());
         handleError(UNKNOWN_ERROR);
         return false;
     }
@@ -966,6 +986,12 @@ status_t NuPlayer::Decoder::fetchInputData(sp<AMessage> &reply) {
 }
 
 bool NuPlayer::Decoder::onInputBufferFetched(const sp<AMessage> &msg) {
+    if (mCodec == NULL) {
+        ALOGE("[%s] onInputBufferFetched without a valid codec", mComponentName.c_str());
+        handleError(NO_INIT);
+        return false;
+    }
+
     size_t bufferIx;
     CHECK(msg->findSize("buffer-ix", &bufferIx));
     CHECK_LT(bufferIx, mInputBuffers.size());
@@ -996,7 +1022,7 @@ bool NuPlayer::Decoder::onInputBufferFetched(const sp<AMessage> &msg) {
         }
 
         if (streamErr != ERROR_END_OF_STREAM) {
-            ALOGE("Stream error for %s (err=%d), EOS %s queued",
+            ALOGE("Stream error for [%s] (err=%d), EOS %s queued",
                     mComponentName.c_str(),
                     streamErr,
                     err == OK ? "successfully" : "unsuccessfully");
@@ -1090,7 +1116,7 @@ bool NuPlayer::Decoder::onInputBufferFetched(const sp<AMessage> &msg) {
         } // no cryptInfo
 
         if (err != OK) {
-            ALOGE("onInputBufferFetched: queue%sInputBuffer failed for %s (err=%d, %s)",
+            ALOGE("onInputBufferFetched: queue%sInputBuffer failed for [%s] (err=%d, %s)",
                     (cryptInfo != NULL ? "Secure" : ""),
                     mComponentName.c_str(), err, errorDetailMsg.c_str());
             handleError(err);
@@ -1119,7 +1145,9 @@ void NuPlayer::Decoder::onRenderBuffer(const sp<AMessage> &msg) {
         }
     }
 
-    if (msg->findInt32("render", &render) && render) {
+    if (mCodec == NULL) {
+        err = NO_INIT;
+    } else if (msg->findInt32("render", &render) && render) {
         int64_t timestampNs;
         CHECK(msg->findInt64("timestampNs", &timestampNs));
         err = mCodec->renderOutputBufferAndRelease(bufferIx, timestampNs);
@@ -1128,7 +1156,7 @@ void NuPlayer::Decoder::onRenderBuffer(const sp<AMessage> &msg) {
         err = mCodec->releaseOutputBuffer(bufferIx);
     }
     if (err != OK) {
-        ALOGE("failed to release output buffer for %s (err=%d)",
+        ALOGE("failed to release output buffer for [%s] (err=%d)",
                 mComponentName.c_str(), err);
         handleError(err);
     }

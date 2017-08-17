@@ -32,14 +32,17 @@ using namespace aaudio;
 #define RIDICULOUSLY_LARGE_FRAME_SIZE        4096
 
 AudioEndpoint::AudioEndpoint()
-    : mFreeRunning(false)
+    : mUpCommandQueue(nullptr)
+    , mDataQueue(nullptr)
+    , mFreeRunning(false)
     , mDataReadCounter(0)
     , mDataWriteCounter(0)
 {
 }
 
-AudioEndpoint::~AudioEndpoint()
-{
+AudioEndpoint::~AudioEndpoint() {
+    delete mDataQueue;
+    delete mUpCommandQueue;
 }
 
 static aaudio_result_t AudioEndpoint_validateQueueDescriptor(const char *type,
@@ -253,4 +256,8 @@ int32_t AudioEndpoint::getBufferCapacityInFrames() const
 void AudioEndpoint::dump() const {
     ALOGD("AudioEndpoint: data readCounter  = %lld", (long long) mDataQueue->getReadCounter());
     ALOGD("AudioEndpoint: data writeCounter = %lld", (long long) mDataQueue->getWriteCounter());
+}
+
+void AudioEndpoint::eraseDataMemory() {
+    mDataQueue->eraseMemory();
 }

@@ -18,6 +18,8 @@
 //#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
+#include <iomanip>
+#include <iostream>
 #include <mutex>
 
 #include "binding/IAAudioService.h"
@@ -37,7 +39,8 @@ using namespace aaudio;   // TODO just import names needed
 
 AAudioServiceStreamBase::AAudioServiceStreamBase()
         : mUpMessageQueue(nullptr)
-        , mAAudioThread() {
+        , mAAudioThread()
+        , mAtomicTimestamp() {
     mMmapClient.clientUid = -1;
     mMmapClient.clientPid = -1;
     mMmapClient.packageName = String16("");
@@ -53,16 +56,22 @@ AAudioServiceStreamBase::~AAudioServiceStreamBase() {
                         "service stream still open, state = %d", mState);
 }
 
+std::string AAudioServiceStreamBase::dumpHeader() {
+    return std::string("    T   Handle   UId Run State Format Burst Chan Capacity");
+}
+
 std::string AAudioServiceStreamBase::dump() const {
     std::stringstream result;
 
-    result << "      -------- handle = 0x" << std::hex << mHandle << std::dec << "\n";
-    result << "      state          = " << AAudio_convertStreamStateToText(mState) << "\n";
-    result << "      format         = " << mAudioFormat << "\n";
-    result << "      framesPerBurst = " << mFramesPerBurst << "\n";
-    result << "      channelCount   = " << mSamplesPerFrame << "\n";
-    result << "      capacityFrames = " << mCapacityInFrames << "\n";
-    result << "      owner uid      = " << mMmapClient.clientUid << "\n";
+    result << "    0x" << std::setfill('0') << std::setw(8) << std::hex << mHandle
+           << std::dec << std::setfill(' ') ;
+    result << std::setw(6) << mMmapClient.clientUid;
+    result << std::setw(4) << (isRunning() ? "yes" : " no");
+    result << std::setw(6) << mState;
+    result << std::setw(7) << mAudioFormat;
+    result << std::setw(6) << mFramesPerBurst;
+    result << std::setw(5) << mSamplesPerFrame;
+    result << std::setw(9) << mCapacityInFrames;
 
     return result.str();
 }
@@ -211,15 +220,25 @@ aaudio_result_t AAudioServiceStreamBase::writeUpMessageQueue(AAudioServiceMessag
 
 aaudio_result_t AAudioServiceStreamBase::sendCurrentTimestamp() {
     AAudioServiceMessage command;
+    // Send a timestamp for the clock model.
     aaudio_result_t result = getFreeRunningPosition(&command.timestamp.position,
                                                     &command.timestamp.timestamp);
     if (result == AAUDIO_OK) {
-    //    ALOGD("sendCurrentTimestamp(): position = %lld, nanos = %lld",
-    //          (long long) command.timestamp.position,
-    //          (long long) command.timestamp.timestamp);
-        command.what = AAudioServiceMessage::code::TIMESTAMP;
+        command.what = AAudioServiceMessage::code::TIMESTAMP_SERVICE;
         result = writeUpMessageQueue(&command);
-    } else if (result == AAUDIO_ERROR_UNAVAILABLE) {
+
+        if (result == AAUDIO_OK) {
+            // Send a hardware timestamp for presentation time.
+            result = getHardwareTimestamp(&command.timestamp.position,
+                                          &command.timestamp.timestamp);
+            if (result == AAUDIO_OK) {
+                command.what = AAudioServiceMessage::code::TIMESTAMP_HARDWARE;
+                result = writeUpMessageQueue(&command);
+            }
+        }
+    }
+
+    if (result == AAUDIO_ERROR_UNAVAILABLE) {
         result = AAUDIO_OK; // just not available yet, try again later
     }
     return result;

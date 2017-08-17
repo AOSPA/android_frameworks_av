@@ -18,6 +18,8 @@
 //#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
+#include <iomanip>
+#include <iostream>
 #include <mutex>
 
 #include <aaudio/AAudio.h>
@@ -41,7 +43,31 @@ using namespace aaudio;
 
 AAudioServiceStreamShared::AAudioServiceStreamShared(AAudioService &audioService)
     : mAudioService(audioService)
+    , mTimestampPositionOffset(0)
+    , mXRunCount(0)
     {
+}
+
+std::string AAudioServiceStreamShared::dumpHeader() {
+    std::stringstream result;
+    result << AAudioServiceStreamBase::dumpHeader();
+    result << "    Write#     Read#   Avail   XRuns";
+    return result.str();
+}
+
+std::string AAudioServiceStreamShared::dump() const {
+    std::stringstream result;
+    result << AAudioServiceStreamBase::dump();
+
+    auto fifo = mAudioDataQueue->getFifoBuffer();
+    int32_t readCounter = fifo->getReadCounter();
+    int32_t writeCounter = fifo->getWriteCounter();
+    result << std::setw(10) << writeCounter;
+    result << std::setw(10) << readCounter;
+    result << std::setw(8) << (writeCounter - readCounter);
+    result << std::setw(8) << getXRunCount();
+
+    return result.str();
 }
 
 int32_t AAudioServiceStreamShared::calculateBufferCapacity(int32_t requestedCapacityFrames,
@@ -105,7 +131,7 @@ aaudio_result_t AAudioServiceStreamShared::open(const aaudio::AAudioStreamReques
     aaudio_direction_t direction = request.getDirection();
 
     AAudioEndpointManager &mEndpointManager = AAudioEndpointManager::getInstance();
-    mServiceEndpoint = mEndpointManager.openEndpoint(mAudioService, configurationOutput, direction);
+    mServiceEndpoint = mEndpointManager.openEndpoint(mAudioService, configurationInput, direction);
     if (mServiceEndpoint == nullptr) {
         ALOGE("AAudioServiceStreamShared::open() mServiceEndPoint = %p", mServiceEndpoint);
         return AAUDIO_ERROR_UNAVAILABLE;
@@ -196,6 +222,7 @@ aaudio_result_t AAudioServiceStreamShared::start()  {
     }
     AAudioServiceEndpoint *endpoint = mServiceEndpoint;
     if (endpoint == nullptr) {
+        ALOGE("AAudioServiceStreamShared::start() missing endpoint");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     // For output streams, this will add the stream to the mixer.
@@ -223,6 +250,7 @@ aaudio_result_t AAudioServiceStreamShared::pause()  {
     }
     AAudioServiceEndpoint *endpoint = mServiceEndpoint;
     if (endpoint == nullptr) {
+        ALOGE("AAudioServiceStreamShared::pause() missing endpoint");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     endpoint->getStreamInternal()->stopClient(mClientHandle);
@@ -240,6 +268,7 @@ aaudio_result_t AAudioServiceStreamShared::stop()  {
     }
     AAudioServiceEndpoint *endpoint = mServiceEndpoint;
     if (endpoint == nullptr) {
+        ALOGE("AAudioServiceStreamShared::stop() missing endpoint");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     endpoint->getStreamInternal()->stopClient(mClientHandle);
@@ -259,6 +288,7 @@ aaudio_result_t AAudioServiceStreamShared::stop()  {
 aaudio_result_t AAudioServiceStreamShared::flush()  {
     AAudioServiceEndpoint *endpoint = mServiceEndpoint;
     if (endpoint == nullptr) {
+        ALOGE("AAudioServiceStreamShared::flush() missing endpoint");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     if (mState != AAUDIO_STREAM_STATE_PAUSED) {
@@ -307,15 +337,30 @@ aaudio_result_t AAudioServiceStreamShared::getDownDataDescription(AudioEndpointP
     return AAUDIO_OK;
 }
 
-void AAudioServiceStreamShared::markTransferTime(int64_t nanoseconds) {
-    mMarkedPosition = mAudioDataQueue->getFifoBuffer()->getReadCounter();
-    mMarkedTime = nanoseconds;
+void AAudioServiceStreamShared::markTransferTime(Timestamp &timestamp) {
+    mAtomicTimestamp.write(timestamp);
 }
 
+// Get timestamp that was written by the real-time service thread, eg. mixer.
 aaudio_result_t AAudioServiceStreamShared::getFreeRunningPosition(int64_t *positionFrames,
                                                                 int64_t *timeNanos) {
-    // TODO get these two numbers as an atomic pair
-    *positionFrames = mMarkedPosition;
-    *timeNanos = mMarkedTime;
-    return AAUDIO_OK;
+    if (mAtomicTimestamp.isValid()) {
+        Timestamp timestamp = mAtomicTimestamp.read();
+        *positionFrames = timestamp.getPosition();
+        *timeNanos = timestamp.getNanoseconds();
+        return AAUDIO_OK;
+    } else {
+        return AAUDIO_ERROR_UNAVAILABLE;
+    }
+}
+
+// Get timestamp from lower level service.
+aaudio_result_t AAudioServiceStreamShared::getHardwareTimestamp(int64_t *positionFrames,
+                                                              int64_t *timeNanos) {
+
+    aaudio_result_t result = mServiceEndpoint->getTimestamp(positionFrames, timeNanos);
+    if (result == AAUDIO_OK) {
+        *positionFrames -= mTimestampPositionOffset.load(); // Offset from shared MMAP stream
+    }
+    return result;
 }

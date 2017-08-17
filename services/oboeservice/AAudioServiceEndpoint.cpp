@@ -64,8 +64,9 @@ std::string AAudioServiceEndpoint::dump() const {
     }
 
     result << "    Registered Streams:" << "\n";
+    result << AAudioServiceStreamShared::dumpHeader() << "\n";
     for (sp<AAudioServiceStreamShared> sharedStream : mRegisteredStreams) {
-        result << sharedStream->dump();
+        result << sharedStream->dump() << "\n";
     }
 
     if (isLocked) {
@@ -177,7 +178,10 @@ bool AAudioServiceEndpoint::matches(const AAudioStreamConfiguration& configurati
             configuration.getSamplesPerFrame() != mStreamInternal->getSamplesPerFrame()) {
         return false;
     }
-
     return true;
 }
 
+
+aaudio_result_t AAudioServiceEndpoint::getTimestamp(int64_t *positionFrames, int64_t *timeNanos) {
+    return mStreamInternal->getTimestamp(CLOCK_MONOTONIC, positionFrames, timeNanos);
+}

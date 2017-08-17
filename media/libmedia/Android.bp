@@ -15,6 +15,9 @@ cc_library_headers {
 cc_library {
     name: "libmedia_helper",
     vendor_available: true,
+    vndk: {
+        enabled: true,
+    },
     srcs: ["AudioParameter.cpp", "TypeConverter.cpp"],
     cflags: [
         "-Werror",
@@ -121,6 +124,9 @@ cc_defaults {
 cc_library_shared {
     name: "libmedia_omx",
     vendor_available: true,
+    vndk: {
+        enabled: true,
+    },
 
     defaults: ["libmedia_omx_defaults"],
 }

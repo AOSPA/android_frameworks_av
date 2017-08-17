@@ -68,6 +68,7 @@ AudioStreamInternal::AudioStreamInternal(AAudioServiceInterface  &serviceInterfa
         , mServiceInterface(serviceInterface)
         , mWakeupDelayNanos(AAudioProperty_getWakeupDelayMicros() * AAUDIO_NANOS_PER_MICROSECOND)
         , mMinimumSleepNanos(AAudioProperty_getMinimumSleepMicros() * AAUDIO_NANOS_PER_MICROSECOND)
+        , mAtomicTimestamp()
         {
     ALOGD("AudioStreamInternal(): mWakeupDelayNanos = %d, mMinimumSleepNanos = %d",
           mWakeupDelayNanos, mMinimumSleepNanos);
@@ -240,9 +241,11 @@ aaudio_result_t AudioStreamInternal::requestStart()
     int64_t startTime;
     ALOGD("AudioStreamInternal()::requestStart()");
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
+        ALOGE("AudioStreamInternal::requestStart() mServiceStreamHandle invalid");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     if (isActive()) {
+        ALOGE("AudioStreamInternal::requestStart() already active");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     aaudio_stream_state_t originalState = getState();
@@ -319,6 +322,7 @@ aaudio_result_t AudioStreamInternal::requestStop()
 
 aaudio_result_t AudioStreamInternal::registerThread() {
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
+        ALOGE("AudioStreamInternal::registerThread() mServiceStreamHandle invalid");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     return mServiceInterface.registerAudioThread(mServiceStreamHandle,
@@ -328,6 +332,7 @@ aaudio_result_t AudioStreamInternal::registerThread() {
 
 aaudio_result_t AudioStreamInternal::unregisterThread() {
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
+        ALOGE("AudioStreamInternal::unregisterThread() mServiceStreamHandle invalid");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     return mServiceInterface.unregisterAudioThread(mServiceStreamHandle, gettid());
@@ -351,15 +356,18 @@ aaudio_result_t AudioStreamInternal::stopClient(audio_port_handle_t clientHandle
 aaudio_result_t AudioStreamInternal::getTimestamp(clockid_t clockId,
                            int64_t *framePosition,
                            int64_t *timeNanoseconds) {
-    // TODO Generate in server and pass to client. Return latest.
-    int64_t time = AudioClock::getNanoseconds();
-    *framePosition = mClockModel.convertTimeToPosition(time) + mFramesOffsetFromService;
-    // TODO Get a more accurate timestamp from the service. This code just adds a fudge factor.
-    *timeNanoseconds = time + (6 * AAUDIO_NANOS_PER_MILLISECOND);
-    return AAUDIO_OK;
+    // Generated in server and passed to client. Return latest.
+    if (mAtomicTimestamp.isValid()) {
+        Timestamp timestamp = mAtomicTimestamp.read();
+        *framePosition = timestamp.getPosition();
+        *timeNanoseconds = timestamp.getNanoseconds();
+        return AAUDIO_OK;
+    } else {
+        return AAUDIO_ERROR_UNAVAILABLE;
+    }
 }
 
-aaudio_result_t AudioStreamInternal::updateStateWhileWaiting() {
+aaudio_result_t AudioStreamInternal::updateStateMachine() {
     if (isDataCallbackActive()) {
         return AAUDIO_OK; // state is getting updated by the callback thread read/write call
     }
@@ -385,7 +393,7 @@ void AudioStreamInternal::logTimestamp(AAudioServiceMessage &command) {
     oldTime = nanoTime;
 }
 
-aaudio_result_t AudioStreamInternal::onTimestampFromServer(AAudioServiceMessage *message) {
+aaudio_result_t AudioStreamInternal::onTimestampService(AAudioServiceMessage *message) {
 #if LOG_TIMESTAMPS
     logTimestamp(*message);
 #endif
@@ -393,23 +401,29 @@ aaudio_result_t AudioStreamInternal::onTimestampFromServer(AAudioServiceMessage 
     return AAUDIO_OK;
 }
 
+aaudio_result_t AudioStreamInternal::onTimestampHardware(AAudioServiceMessage *message) {
+    Timestamp timestamp(message->timestamp.position, message->timestamp.timestamp);
+    mAtomicTimestamp.write(timestamp);
+    return AAUDIO_OK;
+}
+
 aaudio_result_t AudioStreamInternal::onEventFromServer(AAudioServiceMessage *message) {
     aaudio_result_t result = AAUDIO_OK;
     switch (message->event.event) {
         case AAUDIO_SERVICE_EVENT_STARTED:
-            ALOGD("AudioStreamInternal::onEventFromServergot() AAUDIO_SERVICE_EVENT_STARTED");
+            ALOGD("AudioStreamInternal::onEventFromServer() got AAUDIO_SERVICE_EVENT_STARTED");
             if (getState() == AAUDIO_STREAM_STATE_STARTING) {
                 setState(AAUDIO_STREAM_STATE_STARTED);
             }
             break;
         case AAUDIO_SERVICE_EVENT_PAUSED:
-            ALOGD("AudioStreamInternal::onEventFromServergot() AAUDIO_SERVICE_EVENT_PAUSED");
+            ALOGD("AudioStreamInternal::onEventFromServer() got AAUDIO_SERVICE_EVENT_PAUSED");
             if (getState() == AAUDIO_STREAM_STATE_PAUSING) {
                 setState(AAUDIO_STREAM_STATE_PAUSED);
             }
             break;
         case AAUDIO_SERVICE_EVENT_STOPPED:
-            ALOGD("AudioStreamInternal::onEventFromServergot() AAUDIO_SERVICE_EVENT_STOPPED");
+            ALOGD("AudioStreamInternal::onEventFromServer() got AAUDIO_SERVICE_EVENT_STOPPED");
             if (getState() == AAUDIO_STREAM_STATE_STOPPING) {
                 setState(AAUDIO_STREAM_STATE_STOPPED);
             }
@@ -426,10 +440,14 @@ aaudio_result_t AudioStreamInternal::onEventFromServer(AAudioServiceMessage *mes
             setState(AAUDIO_STREAM_STATE_CLOSED);
             break;
         case AAUDIO_SERVICE_EVENT_DISCONNECTED:
+            // Prevent hardware from looping on old data and making buzzing sounds.
+            if (getDirection() == AAUDIO_DIRECTION_OUTPUT) {
+                mAudioEndpoint.eraseDataMemory();
+            }
             result = AAUDIO_ERROR_DISCONNECTED;
             setState(AAUDIO_STREAM_STATE_DISCONNECTED);
             ALOGW("WARNING - AudioStreamInternal::onEventFromServer()"
-                          " AAUDIO_SERVICE_EVENT_DISCONNECTED");
+                          " AAUDIO_SERVICE_EVENT_DISCONNECTED - FIFO cleared");
             break;
         case AAUDIO_SERVICE_EVENT_VOLUME:
             mStreamVolume = (float)message->event.dataDouble;
@@ -456,8 +474,12 @@ aaudio_result_t AudioStreamInternal::processCommands() {
             break; // no command this time, no problem
         }
         switch (message.what) {
-        case AAudioServiceMessage::code::TIMESTAMP:
-            result = onTimestampFromServer(&message);
+        case AAudioServiceMessage::code::TIMESTAMP_SERVICE:
+            result = onTimestampService(&message);
+            break;
+
+        case AAudioServiceMessage::code::TIMESTAMP_HARDWARE:
+            result = onTimestampHardware(&message);
             break;
 
         case AAudioServiceMessage::code::EVENT:

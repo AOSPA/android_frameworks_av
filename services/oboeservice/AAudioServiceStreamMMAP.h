@@ -19,6 +19,7 @@
 
 #include <atomic>
 
+#include <android-base/unique_fd.h>
 #include <media/audiohal/StreamHalInterface.h>
 #include <media/MmapStreamCallback.h>
 #include <media/MmapStreamInterface.h>
@@ -32,6 +33,7 @@
 #include "SharedMemoryProxy.h"
 #include "TimestampScheduler.h"
 #include "utility/MonotonicCounter.h"
+
 
 namespace aaudio {
 
@@ -100,6 +102,8 @@ protected:
     aaudio_result_t getDownDataDescription(AudioEndpointParcelable &parcelable) override;
 
     aaudio_result_t getFreeRunningPosition(int64_t *positionFrames, int64_t *timeNanos) override;
+    virtual aaudio_result_t getHardwareTimestamp(int64_t *positionFrames,
+                                                 int64_t *timeNanos) override;
 
 private:
     // This proxy class was needed to prevent a crash in AudioFlinger
@@ -131,7 +135,8 @@ private:
     MonotonicCounter                    mFramesWritten;
     MonotonicCounter                    mFramesRead;
     int32_t                             mPreviousFrameCounter = 0;   // from HAL
-    int                                 mAudioDataFileDescriptor = -1;
+    int64_t                             mHardwareTimeOffsetNanos = 0; // TODO get from HAL
+
 
     // Interface to the AudioFlinger MMAP support.
     android::sp<android::MmapStreamInterface> mMmapStream;
@@ -140,6 +145,7 @@ private:
     audio_port_handle_t                       mDeviceId = AUDIO_PORT_HANDLE_NONE;
     android::AudioClient                      mServiceClient;
     bool                                      mInService = false;
+    android::base::unique_fd                  mAudioDataFileDescriptor;
 };
 
 } // namespace aaudio

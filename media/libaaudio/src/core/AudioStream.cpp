@@ -98,7 +98,7 @@ aaudio_result_t AudioStream::waitForStateChange(aaudio_stream_state_t currentSta
                                                 aaudio_stream_state_t *nextState,
                                                 int64_t timeoutNanoseconds)
 {
-    aaudio_result_t result = updateStateWhileWaiting();
+    aaudio_result_t result = updateStateMachine();
     if (result != AAUDIO_OK) {
         return result;
     }
@@ -112,7 +112,7 @@ aaudio_result_t AudioStream::waitForStateChange(aaudio_stream_state_t currentSta
         AudioClock::sleepForNanos(durationNanos);
         timeoutNanoseconds -= durationNanos;
 
-        aaudio_result_t result = updateStateWhileWaiting();
+        aaudio_result_t result = updateStateMachine();
         if (result != AAUDIO_OK) {
             return result;
         }
@@ -153,6 +153,7 @@ aaudio_result_t AudioStream::createThread(int64_t periodNanoseconds,
                                      void* threadArg)
 {
     if (mHasThread) {
+        ALOGE("AudioStream::createThread() - mHasThread already true");
         return AAUDIO_ERROR_INVALID_STATE;
     }
     if (threadProc == nullptr) {
@@ -174,6 +175,7 @@ aaudio_result_t AudioStream::createThread(int64_t periodNanoseconds,
 aaudio_result_t AudioStream::joinThread(void** returnArg, int64_t timeoutNanoseconds)
 {
     if (!mHasThread) {
+        ALOGE("AudioStream::joinThread() - but has no thread");
         return AAUDIO_ERROR_INVALID_STATE;
     }
 #if 0

@@ -257,6 +257,11 @@ sp<IDrmPlugin> DrmHal::makeDrmPlugin(const sp<IDrmFactory>& factory,
                 plugin = hPlugin;
             }
         );
+
+    if (!hResult.isOk()) {
+        ALOGE("createPlugin remote call failed");
+    }
+
     return plugin;
 }
 
@@ -408,8 +413,11 @@ status_t DrmHal::createPlugin(const uint8_t uuid[16],
     if (mPlugin == NULL) {
         mInitCheck = ERROR_UNSUPPORTED;
     } else {
-        mInitCheck = OK;
-        mPlugin->setListener(this);
+        if (!mPlugin->setListener(this).isOk()) {
+            mInitCheck = DEAD_OBJECT;
+        } else {
+            mInitCheck = OK;
+        }
     }
 
     return mInitCheck;
@@ -424,12 +432,14 @@ status_t DrmHal::destroyPlugin() {
     closeOpenSessions();
     reportMetrics();
     setListener(NULL);
-    if (mPlugin != NULL) {
-        mPlugin->setListener(NULL);
-    }
-    mPlugin.clear();
     mInitCheck = NO_INIT;
 
+    if (mPlugin != NULL) {
+        if (!mPlugin->setListener(NULL).isOk()) {
+            mInitCheck = DEAD_OBJECT;
+        }
+    }
+    mPlugin.clear();
     return OK;
 }
 
@@ -486,18 +496,21 @@ status_t DrmHal::closeSession(Vector<uint8_t> const &sessionId) {
         return mInitCheck;
     }
 
-    Status status = mPlugin->closeSession(toHidlVec(sessionId));
-    if (status == Status::OK) {
-        DrmSessionManager::Instance()->removeSession(sessionId);
-        for (size_t i = 0; i < mOpenSessions.size(); i++) {
-            if (mOpenSessions[i] == sessionId) {
-                mOpenSessions.removeAt(i);
-                break;
+    Return<Status> status = mPlugin->closeSession(toHidlVec(sessionId));
+    if (status.isOk()) {
+        if (status == Status::OK) {
+            DrmSessionManager::Instance()->removeSession(sessionId);
+            for (size_t i = 0; i < mOpenSessions.size(); i++) {
+                if (mOpenSessions[i] == sessionId) {
+                    mOpenSessions.removeAt(i);
+                    break;
+                }
             }
         }
+        reportMetrics();
+        return toStatusT(status);
     }
-    reportMetrics();
-    return toStatusT(status);
+    return DEAD_OBJECT;
 }
 
 status_t DrmHal::getKeyRequest(Vector<uint8_t> const &sessionId,
@@ -997,11 +1010,14 @@ void DrmHal::binderDied(const wp<IBinder> &the_late_who __unused)
     Mutex::Autolock autoLock(mLock);
     closeOpenSessions();
     setListener(NULL);
+    mInitCheck = NO_INIT;
+
     if (mPlugin != NULL) {
-        mPlugin->setListener(NULL);
+        if (!mPlugin->setListener(NULL).isOk()) {
+            mInitCheck = DEAD_OBJECT;
+        }
     }
     mPlugin.clear();
-    mInitCheck = NO_INIT;
 }
 
 void DrmHal::writeByteArray(Parcel &obj, hidl_vec<uint8_t> const &vec)
