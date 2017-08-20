@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "1b037487_f9f0acbf",
+        "filename": "services/camera/libcameraservice/Android.mk",
+        "patchSetId": 1
+      },
+      "lineNbr": 91,
+      "author": {
+        "id": 1000009
+      },
+      "writtenOn": "2017-08-20T22:52:02Z",
+      "side": 1,
+      "message": "Remove this, this change only covers TARGET_CAMERASERVICE_CLOSES_NATIVE_HANDLES.",
+      "revId": "8af2fea55efb13e2293f8c0a1f22d6ba1f8af742",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad",
+      "unresolved": false
+    }
+  ]
+}
