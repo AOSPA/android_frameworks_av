@@ -303,13 +303,6 @@ status_t AudioPolicyService::getInputForAttr(const audio_attributes_t *attr,
         return BAD_VALUE;
     }
 
-    if ((attr->source == AUDIO_SOURCE_HOTWORD) && !captureHotwordAllowed()) {
-        return BAD_VALUE;
-    }
-    sp<AudioPolicyEffects>audioPolicyEffects;
-    status_t status;
-    AudioPolicyInterface::input_type_t inputType;
-
     bool updatePid = (pid == -1);
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
     if (!isTrustedCallingUid(callingUid)) {
@@ -327,7 +320,15 @@ status_t AudioPolicyService::getInputForAttr(const audio_attributes_t *attr,
         pid = callingPid;
     }
 
+    if ((attr->source == AUDIO_SOURCE_HOTWORD) && !captureHotwordAllowed(pid, uid)) {
+        return BAD_VALUE;
+    }
+
+    sp<AudioPolicyEffects>audioPolicyEffects;
     {
+        status_t status;
+        AudioPolicyInterface::input_type_t inputType;
+
         Mutex::Autolock _l(mLock);
         // the audio_in_acoustics_t parameter is ignored by get_input()
         status = mAudioPolicyManager->getInputForAttr(attr, input, session, uid,
