@@ -105,13 +105,13 @@ aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder) {
     // Build the request to send to the server.
     request.setUserId(getuid());
     request.setProcessId(getpid());
-    request.setDirection(getDirection());
     request.setSharingModeMatchRequired(isSharingModeMatchRequired());
     request.setInService(mInService);
 
     request.getConfiguration().setDeviceId(getDeviceId());
     request.getConfiguration().setSampleRate(getSampleRate());
     request.getConfiguration().setSamplesPerFrame(getSamplesPerFrame());
+    request.getConfiguration().setDirection(getDirection());
     request.getConfiguration().setSharingMode(getSharingMode());
 
     request.getConfiguration().setBufferCapacity(builder.getBufferCapacity());
@@ -357,6 +357,7 @@ aaudio_result_t AudioStreamInternal::startClient(const android::AudioClient& cli
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
         return AAUDIO_ERROR_INVALID_STATE;
     }
+
     return mServiceInterface.startClient(mServiceStreamHandle, client, clientHandle);
 }
 
@@ -553,12 +554,19 @@ aaudio_result_t AudioStreamInternal::processData(void *buffer, int32_t numFrames
                 wakeTimeNanos += mWakeupDelayNanos;
             }
 
+            currentTimeNanos = AudioClock::getNanoseconds();
+            int64_t earliestWakeTime = currentTimeNanos + mMinimumSleepNanos;
+            // Guarantee a minimum sleep time.
+            if (wakeTimeNanos < earliestWakeTime) {
+                wakeTimeNanos = earliestWakeTime;
+            }
+
             if (wakeTimeNanos > deadlineNanos) {
                 // If we time out, just return the framesWritten so far.
                 // TODO remove after we fix the deadline bug
                 ALOGW("AudioStreamInternal::processData(): entered at %lld nanos, currently %lld",
                       (long long) entryTimeNanos, (long long) currentTimeNanos);
-                ALOGW("AudioStreamInternal::processData(): timed out after %lld nanos",
+                ALOGW("AudioStreamInternal::processData(): TIMEOUT after %lld nanos",
                       (long long) timeoutNanoseconds);
                 ALOGW("AudioStreamInternal::processData(): wakeTime = %lld, deadline = %lld nanos",
                       (long long) wakeTimeNanos, (long long) deadlineNanos);
@@ -567,13 +575,6 @@ aaudio_result_t AudioStreamInternal::processData(void *buffer, int32_t numFrames
                 mClockModel.dump();
                 mAudioEndpoint.dump();
                 break;
-            }
-
-            currentTimeNanos = AudioClock::getNanoseconds();
-            int64_t earliestWakeTime = currentTimeNanos + mMinimumSleepNanos;
-            // Guarantee a minimum sleep time.
-            if (wakeTimeNanos < earliestWakeTime) {
-                wakeTimeNanos = earliestWakeTime;
             }
 
             if (ATRACE_ENABLED()) {
