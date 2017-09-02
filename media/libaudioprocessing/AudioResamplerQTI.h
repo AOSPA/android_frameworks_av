@@ -20,7 +20,7 @@
 #include <sys/types.h>
 #include <cutils/log.h>
 
-#include "AudioResampler.h"
+#include "media/AudioResampler.h"
 
 namespace android {
 // ----------------------------------------------------------------------------
