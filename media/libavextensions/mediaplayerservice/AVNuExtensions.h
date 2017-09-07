@@ -31,6 +31,7 @@
 
 #include <common/AVExtensionsCommon.h>
 #include <media/MediaCodecBuffer.h>
+#include <media/stagefright/MediaCodec.h>
 
 namespace android {
 
@@ -80,6 +81,8 @@ struct AVNuUtils {
     virtual void checkFormatChange(bool *formatChange, const sp<ABuffer> &accessUnit);
     virtual bool isAccurateSeek() { return false; }
     virtual bool dropBufferIfNeeded (sp<MediaCodecBuffer>, int32_t, bool*) { return false; }
+    virtual void setPerfModeDecoder (sp<NuPlayer::DecoderBase>, bool) { return; }
+    virtual void sendCodecPerfHints (sp<MediaCodec>, const sp<AMessage> &) { return; }
 
     // ----- NO TRESSPASSING BEYOND THIS LINE ------
     DECLARE_LOADABLE_SINGLETON(AVNuUtils);

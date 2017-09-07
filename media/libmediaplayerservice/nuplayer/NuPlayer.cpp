@@ -1269,6 +1269,9 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
             } else if (what == Renderer::kWhatMediaRenderingStart) {
                 ALOGV("media rendering started");
                 notifyListener(MEDIA_STARTED, 0, 0);
+                if (AVNuUtils::get()->isAccurateSeek()) {
+                    AVNuUtils::get()->setPerfModeDecoder(mVideoDecoder, false);
+                }
             } else if (what == Renderer::kWhatAudioTearDown) {
                 int32_t reason;
                 CHECK(msg->findInt32("reason", &reason));
