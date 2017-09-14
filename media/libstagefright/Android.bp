@@ -51,6 +51,7 @@ cc_library_shared {
         "NuCachedSource2.cpp",
         "NuMediaExtractor.cpp",
         "OMXClient.cpp",
+        "OmxInfoBuilder.cpp",
         "OggExtractor.cpp",
         "SampleIterator.cpp",
         "SampleTable.cpp",
@@ -100,6 +101,7 @@ cc_library_shared {
         "libnativewindow",
 
         "libmedia_helper",
+        "libstagefright_omx_utils",
         "libstagefright_flacdec",
         "libstagefright_foundation",
         "libstagefright_xmlparser",
@@ -121,7 +123,6 @@ cc_library_shared {
         "libstagefright_aacenc",
         "libstagefright_matroska",
         "libstagefright_mediafilter",
-        "libstagefright_omx_utils",
         "libstagefright_webm",
         "libstagefright_timedtext",
         "libvpx",
@@ -132,9 +133,12 @@ cc_library_shared {
         "libavextensions",
     ],
 
-    export_shared_lib_headers: ["libmedia"],
+    export_shared_lib_headers: [
+        "libmedia",
+        "android.hidl.allocator@1.0",
+    ],
+
     export_include_dirs: [
-        ".",
         "include",
     ],
 

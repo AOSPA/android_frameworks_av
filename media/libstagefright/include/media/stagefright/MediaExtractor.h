@@ -79,6 +79,7 @@ public:
             float *confidence, sp<AMessage> *meta);
 
     virtual void setExtraFlags(uint32_t) {}
+    virtual void release() {}
 
 protected:
     MediaExtractor();
