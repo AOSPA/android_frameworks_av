@@ -77,6 +77,11 @@ static const char *kCodecRotation = "android.media.mediacodec.rotation-degrees";
 static const char *kCodecCrypto = "android.media.mediacodec.crypto";   /* 0,1 */
 static const char *kCodecEncoder = "android.media.mediacodec.encoder"; /* 0,1 */
 
+static const char *kCodecBytesIn = "android.media.mediacodec.bytesin";  /* 0..n */
+static const char *kCodecProfile = "android.media.mediacodec.profile";  /* 0..n */
+static const char *kCodecLevel = "android.media.mediacodec.level";  /* 0..n */
+static const char *kCodecMaxWidth = "android.media.mediacodec.maxwidth";  /* 0..n */
+static const char *kCodecMaxHeight = "android.media.mediacodec.maxheight";  /* 0..n */
 
 
 static int64_t getId(const sp<IResourceManagerClient> &client) {
@@ -695,10 +700,21 @@ status_t MediaCodec::configure(
     VTRACE_METHOD();
     sp<AMessage> msg = new AMessage(kWhatConfigure, this);
 
+    if (mAnalyticsItem != NULL) {
+        int32_t profile = 0;
+        if (format->findInt32("profile", &profile)) {
+            mAnalyticsItem->setInt32(kCodecProfile, profile);
+        }
+        int32_t level = 0;
+        if (format->findInt32("level", &level)) {
+            mAnalyticsItem->setInt32(kCodecLevel, level);
+        }
+    }
+
     if (mIsVideo) {
         format->findInt32("width", &mVideoWidth);
         format->findInt32("height", &mVideoHeight);
-        if (!format->findInt32(kCodecRotation, &mRotationDegrees)) {
+        if (!format->findInt32("rotation-degrees", &mRotationDegrees)) {
             mRotationDegrees = 0;
         }
 
@@ -706,6 +722,14 @@ status_t MediaCodec::configure(
             mAnalyticsItem->setInt32(kCodecWidth, mVideoWidth);
             mAnalyticsItem->setInt32(kCodecHeight, mVideoHeight);
             mAnalyticsItem->setInt32(kCodecRotation, mRotationDegrees);
+            int32_t maxWidth = 0;
+            if (format->findInt32("max-width", &maxWidth)) {
+                mAnalyticsItem->setInt32(kCodecMaxWidth, maxWidth);
+            }
+            int32_t maxHeight = 0;
+            if (format->findInt32("max-height", &maxHeight)) {
+                mAnalyticsItem->setInt32(kCodecMaxHeight, maxHeight);
+            }
         }
 
         // Prevent possible integer overflow in downstream code.
@@ -1601,6 +1625,19 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     }
                     setState(CONFIGURED);
                     (new AMessage)->postReply(mReplyID);
+
+                    // augment our media metrics info, now that we know more things
+                    if (mAnalyticsItem != NULL) {
+                        sp<AMessage> format;
+                        if (mConfigureMsg != NULL &&
+                            mConfigureMsg->findMessage("format", &format)) {
+                                // format includes: mime
+                                AString mime;
+                                if (format->findString("mime", &mime)) {
+                                    mAnalyticsItem->setCString(kCodecMime, mime.c_str());
+                                }
+                            }
+                    }
                     break;
                 }
 
@@ -2831,6 +2868,9 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         Mutex::Autolock al(mBufferLock);
         info->mOwnedByClient = false;
         info->mData.clear();
+        if (mAnalyticsItem != NULL) {
+            mAnalyticsItem->addInt64(kCodecBytesIn, size);
+        }
     }
 
     return err;
