@@ -1665,7 +1665,8 @@ AudioFlinger::PlaybackThread::PlaybackThread(const sp<AudioFlinger>& audioFlinge
         mScreenState(AudioFlinger::mScreenState),
         // index 0 is reserved for normal mixer's submix
         mFastTrackAvailMask(((1 << FastMixerState::sMaxFastTracks) - 1) & ~1),
-        mHwSupportsPause(false), mHwPaused(false), mFlushPending(false)
+        mHwSupportsPause(false), mHwPaused(false), mFlushPending(false),
+        mLeftVolFloat(-1.0), mRightVolFloat(-1.0)
 {
     snprintf(mThreadName, kThreadNameLength, "AudioOut_%X", id);
     mNBLogWriter = audioFlinger->newWriter_l(kLogSize, mThreadName);
@@ -2250,6 +2251,7 @@ void AudioFlinger::PlaybackThread::ioConfigChanged(audio_io_config_event event, 
 
     switch (event) {
     case AUDIO_OUTPUT_OPENED:
+    case AUDIO_OUTPUT_REGISTERED:
     case AUDIO_OUTPUT_CONFIG_CHANGED:
         desc->mPatch = mPatch;
         desc->mChannelMask = mChannelMask;
@@ -4284,6 +4286,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     param = AudioMixer::RAMP_VOLUME;
                 }
                 mAudioMixer->setParameter(name, AudioMixer::RESAMPLE, AudioMixer::RESET, NULL);
+                mLeftVolFloat = -1.0;
             // FIXME should not make a decision based on mServer
             } else if (cblk->mServer != 0) {
                 // If the track is stopped before the first frame was mixed,
@@ -4294,6 +4297,10 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
             // compute volume for this track
             uint32_t vl, vr;       // in U8.24 integer format
             float vlf, vrf, vaf;   // in [0.0, 1.0] float format
+            // read original volumes with volume control
+            float typeVolume = mStreamTypes[track->streamType()].volume;
+            float v = masterVolume * typeVolume;
+
             if (track->isPausing() || mStreamTypes[track->streamType()].mute) {
                 vl = vr = 0;
                 vlf = vrf = vaf = 0.;
@@ -4301,10 +4308,6 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     track->setPaused();
                 }
             } else {
-
-                // read original volumes with volume control
-                float typeVolume = mStreamTypes[track->streamType()].volume;
-                float v = masterVolume * typeVolume;
                 sp<AudioTrackServerProxy> proxy = track->mAudioTrackServerProxy;
                 gain_minifloat_packed_t vlr = proxy->getVolumeLR();
                 vlf = float_from_gain(gain_minifloat_unpack_left(vlr));
@@ -4356,6 +4359,25 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 track->mHasVolumeController = false;
             }
 
+            // For dedicated VoIP outputs, let the HAL apply the stream volume. Track volume is
+            // still applied by the mixer.
+            if ((mOutput->flags & AUDIO_OUTPUT_FLAG_VOIP_RX) != 0) {
+                v = mStreamTypes[track->streamType()].mute ? 0.0f : v;
+                if (v != mLeftVolFloat) {
+                    status_t result = mOutput->stream->setVolume(v, v);
+                    ALOGE_IF(result != OK, "Error when setting output stream volume: %d", result);
+                    if (result == OK) {
+                        mLeftVolFloat = v;
+                    }
+                }
+                // if stream volume was successfully sent to the HAL, mLeftVolFloat == v here and we
+                // remove stream volume contribution from software volume.
+                if (v != 0.0f && mLeftVolFloat == v) {
+                   vlf = min(1.0f, vlf / v);
+                   vrf = min(1.0f, vrf / v);
+                   vaf = min(1.0f, vaf / v);
+               }
+            }
             // XXX: these things DON'T need to be done each time
             mAudioMixer->setBufferProvider(name, track);
             mAudioMixer->enable(name);
@@ -7268,6 +7290,7 @@ void AudioFlinger::RecordThread::ioConfigChanged(audio_io_config_event event, pi
 
     switch (event) {
     case AUDIO_INPUT_OPENED:
+    case AUDIO_INPUT_REGISTERED:
     case AUDIO_INPUT_CONFIG_CHANGED:
         desc->mPatch = mPatch;
         desc->mChannelMask = mChannelMask;
@@ -7939,8 +7962,10 @@ void AudioFlinger::MmapThread::ioConfigChanged(audio_io_config_event event, pid_
 
     switch (event) {
     case AUDIO_INPUT_OPENED:
+    case AUDIO_INPUT_REGISTERED:
     case AUDIO_INPUT_CONFIG_CHANGED:
     case AUDIO_OUTPUT_OPENED:
+    case AUDIO_OUTPUT_REGISTERED:
     case AUDIO_OUTPUT_CONFIG_CHANGED:
         desc->mPatch = mPatch;
         desc->mChannelMask = mChannelMask;

@@ -316,6 +316,8 @@ private:
     SoftwareRenderer *mSoftRenderer;
 
     MediaAnalyticsItem *mAnalyticsItem;
+    void initAnalyticsItem();
+    void flushAnalyticsItem();
 
     sp<AMessage> mOutputFormat;
     sp<AMessage> mInputFormat;
