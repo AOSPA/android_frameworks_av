@@ -229,6 +229,8 @@ private:
 
     template<typename TProviderPtr>
     status_t initializeImpl(TProviderPtr providerPtr);
+
+    bool isZslEnabledInStillTemplate();
 };
 
 }; // namespace android
