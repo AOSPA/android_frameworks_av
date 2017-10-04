@@ -139,7 +139,7 @@ status_t Camera3Device::initialize(sp<CameraProviderManager> manager) {
         return DEAD_OBJECT;
     }
     auto resultQueueRet = session->getCaptureResultMetadataQueue(
-        [&queue = mResultMetadataQueue](const auto& descriptor) {
+        [&queue](const auto& descriptor) {
             queue = std::make_unique<ResultMetadataQueue>(descriptor);
             if (!queue->isValid() ||  queue->availableToWrite() <= 0) {
                 ALOGE("HAL returns empty result metadata fmq, not use it");
