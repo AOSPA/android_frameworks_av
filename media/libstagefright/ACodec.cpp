@@ -6405,7 +6405,14 @@ bool ACodec::UninitializedState::onAllocateComponent(const sp<AMessage> &msg) {
     int32_t encoder = false;
     if (msg->findString("componentName", &componentName)) {
         sp<IMediaCodecList> list = MediaCodecList::getInstance();
-        if (list == nullptr) {
+        //make sure if the component name contains qcom/qti, we add it to matchingCodecs
+        //as these components are not present in media_codecs.xml and MediaCodecList won't find
+        //these component by findCodecByName
+        bool qtiComponent = false;
+        if (componentName.find("qcom", 0) > 0 || componentName.find("qti", 0)) {
+            qtiComponent = true;
+        }
+        if (list == nullptr && qtiComponent == false) {
             ALOGE("Unable to obtain MediaCodecList while "
                     "attempting to create codec \"%s\"",
                     componentName.c_str());
@@ -6413,30 +6420,27 @@ bool ACodec::UninitializedState::onAllocateComponent(const sp<AMessage> &msg) {
             return false;
         }
         ssize_t index = list->findCodecByName(componentName.c_str());
-        if (index < 0) {
+        if (index < 0 && qtiComponent == false) {
             ALOGE("Unable to find codec \"%s\"",
                     componentName.c_str());
             mCodec->signalError(OMX_ErrorInvalidComponent, NAME_NOT_FOUND);
             return false;
         }
         sp<MediaCodecInfo> info = list->getCodecInfo(index);
-        if (info == nullptr) {
+        if (info == nullptr && qtiComponent == false) {
             ALOGE("Unexpected error (index out-of-bound) while "
                     "retrieving information for codec \"%s\"",
                     componentName.c_str());
             mCodec->signalError(OMX_ErrorUndefined, UNKNOWN_ERROR);
             return false;
         }
-        matchingCodecs.add(info->getCodecName());
-        owners.add(info->getOwnerName() == nullptr ?
-                "default" : info->getOwnerName());
-        //make sure if the component name contains qcom/qti, we add it to matchingCodecs
-        //as these components are not present in media_codecs.xml and MediaCodecList won't find
-        //these component by findCodecByName
-        if (matchingCodecs.size() == 0 && (componentName.find("qcom", 0) > 0 ||
-            componentName.find("qti", 0) > 0)) {
-            matchingCodecs.add(componentName);
-        }
+        matchingCodecs.add(qtiComponent ? componentName : info->getCodecName());
+        if (qtiComponent == false) {
+            owners.add(info->getOwnerName() == nullptr ?
+                    "default" : info->getOwnerName());
+       } else {
+            owners.add("default");
+       }
     } else {
         CHECK(msg->findString("mime", &mime));
 
