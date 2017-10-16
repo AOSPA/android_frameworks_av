@@ -40,6 +40,7 @@ static const int kDumpLockSleepUs = 20000;
 
 #include "mediaplayerservice/AVNuExtensions.h"
 #include "mediaplayerservice/AVMediaServiceExtensions.h"
+#include <common/LogOverride.h>
 
 namespace android {
 

@@ -40,6 +40,7 @@
 #include <media/stagefright/Utils.h>
 #include <stagefright/AVExtensions.h>
 #include <OMX_Core.h>
+#include <common/LogOverride.h>
 
 namespace android {
 

@@ -30,6 +30,7 @@
 #include <camera/CameraParameters.h>
 #include <utils/String8.h>
 #include <utils/Vector.h>
+#include <common/LogOverride.h>
 
 namespace android {
 

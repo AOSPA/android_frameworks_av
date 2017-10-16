@@ -60,6 +60,7 @@
 #include <utils/Log.h>
 #include <utils/Singleton.h>
 #include <stagefright/AVExtensions.h>
+#include <common/LogOverride.h>
 
 namespace android {
 

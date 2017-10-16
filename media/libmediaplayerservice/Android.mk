@@ -72,4 +72,21 @@ LOCAL_MODULE:= libmediaplayerservice
 
 include $(BUILD_SHARED_LIBRARY)
 
+ifeq ($(TARGET_BUILD_VARIANT),userdebug)
+OVERRIDE_BUILT_MODULE_PATH :=
+LOCAL_BUILT_MODULE :=
+LOCAL_INSTALLED_MODULE :=
+LOCAL_MODULE_STEM :=
+LOCAL_BUILT_MODULE_STEM :=
+LOCAL_INSTALLED_MODULE_STEM :=
+LOCAL_INTERMEDIATE_TARGETS :=
+LOCAL_MODULE:= libmediaplayerservice_debug
+LOCAL_STATIC_LIBRARIES :=         \
+    libstagefright_nuplayer_debug \
+    libstagefright_rtsp           \
+    libstagefright_timedtext
+LOCAL_CFLAGS += -DENABLE_DYNAMIC_LOG
+include $(BUILD_SHARED_LIBRARY)
+endif
+
 include $(call all-makefiles-under,$(LOCAL_PATH))
