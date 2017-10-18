@@ -28,6 +28,7 @@
 #include <media/stagefright/foundation/ADebug.h>
 #include <OMX_Video.h>
 #include <sys/stat.h>
+#include "media/AVMediaExtensions.h"
 
 namespace android {
 
@@ -626,6 +627,10 @@ MediaProfiles::getInstance()
                 sInstance = createInstanceFromXmlFile(xmlFile);
             }
         } else {
+            if (!strncmp(value, "/vendor/etc", strlen("/vendor/etc"))) {
+                 AVMediaUtils::get()->getCustomProfileLocation(value,
+                    PROPERTY_VALUE_MAX);
+            }
             sInstance = createInstanceFromXmlFile(value);
         }
         CHECK(sInstance != NULL);

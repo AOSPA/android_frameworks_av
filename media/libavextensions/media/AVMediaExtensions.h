@@ -47,6 +47,8 @@ struct AVMediaUtils {
 
     virtual bool AudioTrackIsTrackOffloaded(audio_io_handle_t /*output*/);
 
+    virtual void getCustomProfileLocation(char *, int32_t);
+
     // ----- NO TRESSPASSING BEYOND THIS LINE ------
     DECLARE_LOADABLE_SINGLETON(AVMediaUtils);
 };
