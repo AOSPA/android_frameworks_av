@@ -61,6 +61,7 @@
     ALOGW("Condition %s failed "  message, #condition, ##__VA_ARGS__); \
     true; \
 }))
+#include <common/LogOverride.h>
 
 namespace android {
 

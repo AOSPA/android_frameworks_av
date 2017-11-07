@@ -43,6 +43,7 @@
 #else
 #define UNUSED_UNLESS_VERBOSE(x)
 #endif
+#include <common/LogOverride.h>
 
 namespace android {
 
