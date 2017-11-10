@@ -1131,10 +1131,11 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
 
     sp<MediaCodecSource> audioEncoder =
             MediaCodecSource::Create(mLooper, format, audioSource);
-    mAudioSourceNode = audioSource;
 
     if (audioEncoder == NULL) {
         ALOGE("Failed to create audio encoder");
+    } else {
+        mAudioSourceNode = audioSource;
     }
 
     return audioEncoder;
@@ -1200,6 +1201,7 @@ status_t StagefrightRecorder::setupRawAudioRecording() {
             ALOGE("Recording source is null");
             return BAD_VALUE;
         }
+        mAudioSourceNode =  reinterpret_cast<AudioSource* > (src.get());
         CHECK(mWriter != 0);
         mWriter->addSource(src);
     }
