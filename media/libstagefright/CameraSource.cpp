@@ -43,6 +43,7 @@
 #else
 #define UNUSED_UNLESS_VERBOSE(x)
 #endif
+#include <common/LogOverride.h>
 
 namespace android {
 
@@ -986,6 +987,14 @@ void CameraSource::releaseRecordingFrame(const sp<IMemory>& frame) {
         }
 
         if (handle != nullptr) {
+            ssize_t offset;
+            size_t size;
+            sp<IMemoryHeap> heap = frame->getMemory(&offset, &size);
+            if (heap->getHeapID() != mMemoryHeapBase->getHeapID()) {
+                ALOGE("%s: Mismatched heap ID, ignoring release (got %x, expected %x)",
+		     __FUNCTION__, heap->getHeapID(), mMemoryHeapBase->getHeapID());
+                return;
+            }
             uint32_t batchSize = 0;
             {
                 Mutex::Autolock autoLock(mBatchLock);

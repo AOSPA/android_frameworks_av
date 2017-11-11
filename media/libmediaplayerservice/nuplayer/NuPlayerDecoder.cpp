@@ -48,6 +48,7 @@
 
 #include "avc_utils.h"
 #include "ATSParser.h"
+#include <common/LogOverride.h>
 
 namespace android {
 
@@ -458,6 +459,7 @@ void NuPlayer::Decoder::onSetParameters(const sp<AMessage> &params) {
         codecParams->setFloat("operating-rate", decodeFrameRate * mPlaybackSpeed);
         mCodec->setParameters(codecParams);
     }
+    AVNuUtils::get()->sendCodecPerfHints(mCodec, params);
 }
 
 void NuPlayer::Decoder::onSetRenderer(const sp<Renderer> &renderer) {

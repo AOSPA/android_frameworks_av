@@ -41,6 +41,7 @@
 #include "../../libstagefright/include/NuCachedSource2.h"
 #include "../../libstagefright/include/HTTPBase.h"
 #include "mediaplayerservice/AVNuExtensions.h"
+#include <common/LogOverride.h>
 
 namespace android {
 
@@ -1242,9 +1243,7 @@ status_t NuPlayer::GenericSource::doSeek(int64_t seekTimeUs, MediaPlayerSeekMode
         readBuffer(MEDIA_TRACK_TYPE_VIDEO, seekTimeUs, mode, &actualTimeUs);
 
         if (mode != MediaPlayerSeekMode::SEEK_CLOSEST) {
-            if (!AVNuUtils::get()->isAccurateSeek()) {
                 seekTimeUs = actualTimeUs;
-            }
         }
         mVideoLastDequeueTimeUs = actualTimeUs;
     }
