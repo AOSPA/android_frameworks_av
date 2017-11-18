@@ -35,6 +35,7 @@
 #include "api1/client2/CallbackProcessor.h"
 #include "api1/client2/ZslProcessor.h"
 #else
+#include "api1/QTICamera2Client.h"
 #include "api1/qticlient2/StreamingProcessor.h"
 #include "api1/qticlient2/JpegProcessor.h"
 #include "api1/qticlient2/CaptureSequencer.h"
@@ -124,6 +125,10 @@ status_t Camera2Client::initializeImpl(TProviderPtr providerPtr)
     }
 
     String8 threadName;
+
+#ifdef USE_QTI_CAMERA2CLIENT
+    mQTICamera2Client = new QTICamera2Client(this);
+#endif
 
     mStreamingProcessor = new StreamingProcessor(this);
     threadName = String8::format("C2-%d-StreamProc",
@@ -1023,6 +1028,11 @@ status_t Camera2Client::startRecording() {
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
     SharedParameters::Lock l(mParameters);
 
+#ifdef USE_QTI_CAMERA2CLIENT
+    if (l.mParameters.qtiParams->hfrMode) {
+        return mQTICamera2Client->startHFRRecording(l.mParameters);
+    }
+#endif
     return startRecordingL(l.mParameters, false);
 }
 
@@ -1209,6 +1219,12 @@ void Camera2Client::stopRecording() {
 
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return;
+
+#ifdef USE_QTI_CAMERA2CLIENT
+    if (l.mParameters.qtiParams->hfrMode) {
+        return mQTICamera2Client->stopHFRRecording(l.mParameters);
+    }
+#endif
 
     switch (l.mParameters.state) {
         case Parameters::RECORD:
@@ -1542,6 +1558,10 @@ status_t Camera2Client::setParameters(const String8& params) {
     if (l.mParameters.allowZslMode && focusModeAfter != focusModeBefore) {
         mZslProcessor->clearZslQueue();
     }
+
+#ifdef USE_QTI_CAMERA2CLIENT
+    if ( (res = mQTICamera2Client->setParametersExtn(l.mParameters) ) != OK) return res;
+#endif
 
     res = updateRequests(l.mParameters);
 
