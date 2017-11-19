@@ -44,6 +44,10 @@ bool AVMediaUtils::AudioTrackIsTrackOffloaded(audio_io_handle_t output __unused)
     return false;
 }
 
+void AVMediaUtils::getCustomProfileLocation(char *, int32_t) {
+    return;
+}
+
 // ----- NO TRESSPASSING BEYOND THIS LINE ------
 AVMediaUtils::AVMediaUtils() {
 }

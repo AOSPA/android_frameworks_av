@@ -19,6 +19,7 @@
 #include <inttypes.h>
 #include <utils/Log.h>
 
+#include <cutils/properties.h>
 #include <inttypes.h>
 #include "WebmWriter.h"
 #include "StagefrightRecorder.h"
@@ -87,6 +88,7 @@ static const char *kRecorderVideoLevel = "android.media.mediarecorder.video-enco
 static const char *kRecorderCaptureFpsEnable = "android.media.mediarecorder.capture-fpsenable";
 static const char *kRecorderCaptureFps = "android.media.mediarecorder.capture-fps";
 static const char *kRecorderRotation = "android.media.mediarecorder.rotation";
+static const int64_t kMax32BitFileSize = 0x00ffffffffLL; // 4GB
 
 // To collect the encoder usage for the battery app
 static void addBatteryData(uint32_t params) {
@@ -581,6 +583,10 @@ status_t StagefrightRecorder::setParamMaxFileSizeBytes(int64_t bytes) {
     }
 
     mMaxFileSizeBytes = bytes;
+
+    // If requested size is >4GB, force 64-bit offsets
+    mUse64BitFileOffset |= (bytes >= kMax32BitFileSize);
+
     return OK;
 }
 
@@ -1126,10 +1132,11 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
 
     sp<MediaCodecSource> audioEncoder =
             MediaCodecSource::Create(mLooper, format, audioSource);
-    mAudioSourceNode = audioSource;
 
     if (audioEncoder == NULL) {
         ALOGE("Failed to create audio encoder");
+    } else {
+        mAudioSourceNode = audioSource;
     }
 
     return audioEncoder;
@@ -1195,6 +1202,7 @@ status_t StagefrightRecorder::setupRawAudioRecording() {
             ALOGE("Recording source is null");
             return BAD_VALUE;
         }
+        mAudioSourceNode =  reinterpret_cast<AudioSource* > (src.get());
         CHECK(mWriter != 0);
         mWriter->addSource(src);
     }
@@ -1975,9 +1983,15 @@ status_t StagefrightRecorder::resume() {
         if (mPauseStartTimeUs < bufferStartTimeUs) {
             mPauseStartTimeUs = bufferStartTimeUs;
         }
-        // 30 ms buffer to avoid timestamp overlap
-        mTotalPausedDurationUs += (systemTime() / 1000) - mPauseStartTimeUs - 30000;
+        mTotalPausedDurationUs += resumeStartTimeUs - mPauseStartTimeUs;
+
+        bool isQCHwAACEnc = property_get_bool("vendor.audio.hw.aac.encoder", true);
+        if (!isQCHwAACEnc || mAudioEncoder != AUDIO_ENCODER_AAC) {
+            // 30 ms buffer to avoid timestamp overlap
+            mTotalPausedDurationUs -= (30000*(mCaptureFpsEnable ? (mCaptureFps / mFrameRate) : 1));
+        }
     }
+
     double timeOffset = -mTotalPausedDurationUs;
     if (mCaptureFpsEnable) {
         timeOffset *= mCaptureFps / mFrameRate;

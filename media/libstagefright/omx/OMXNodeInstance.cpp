@@ -384,6 +384,9 @@ OMXNodeInstance::OMXNodeInstance(
     mGraphicBufferEnabled[1] = false;
     mIsSecure = AString(name).endsWith(".secure");
     mLegacyAdaptiveExperiment = ADebug::isExperimentEnabled("legacy-adaptive");
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        mQuirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnInputPorts;
+    }
 }
 
 OMXNodeInstance::~OMXNodeInstance() {
@@ -1958,6 +1961,9 @@ status_t OMXNodeInstance::setQuirks(OMX_U32 quirks) {
         return BAD_VALUE;
     }
 
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        quirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnOutputPorts;
+    }
     mQuirks = quirks;
 
     return OK;
