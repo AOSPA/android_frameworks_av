@@ -41,6 +41,7 @@ namespace audio_policy
 Engine::Engine()
     : mManagerInterface(this),
       mPhoneState(AUDIO_MODE_NORMAL),
+      mDpConnAndAllowedForVoice(false),
       mApmObserver(NULL)
 {
     for (int i = 0; i < AUDIO_POLICY_FORCE_USE_CNT; i++) {
@@ -61,6 +62,11 @@ void Engine::setObserver(AudioPolicyManagerObserver *observer)
 status_t Engine::initCheck()
 {
     return (mApmObserver != NULL) ?  NO_ERROR : NO_INIT;
+}
+
+void Engine::setDpConnAndAllowedForVoice(bool connAndAllowed)
+{
+    mDpConnAndAllowedForVoice = connAndAllowed;
 }
 
 status_t Engine::setPhoneState(audio_mode_t state)
@@ -371,6 +377,10 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
             if (device) break;
             device = availableOutputDevicesType & AUDIO_DEVICE_OUT_USB_DEVICE;
             if (device) break;
+            if (getDpConnAndAllowedForVoice() && isInCall()) {
+                device = availableOutputDevicesType & AUDIO_DEVICE_OUT_AUX_DIGITAL;
+                if (device) break;
+            }
             if (!isInCall()) {
                 device = availableOutputDevicesType & AUDIO_DEVICE_OUT_USB_ACCESSORY;
                 if (device) break;
@@ -445,6 +455,16 @@ audio_devices_t Engine::getDeviceForStrategyInt(routing_strategy strategy,
                 device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_BLUETOOTH_SCO;
             }
 
+            if (device2 != AUDIO_DEVICE_NONE) {
+                device |= device2;
+                break;
+            }
+        }
+
+        // if display-port is connected and being used in voice usecase,
+        // play ringtone over speaker and display-port
+        if ((strategy == STRATEGY_SONIFICATION) && getDpConnAndAllowedForVoice()) {
+            uint32_t device2 = availableOutputDevicesType & AUDIO_DEVICE_OUT_AUX_DIGITAL;
             if (device2 != AUDIO_DEVICE_NONE) {
                 device |= device2;
                 break;
