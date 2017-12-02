@@ -956,7 +956,7 @@ status_t Parameters::initialize(const CameraMetadata *info, int deviceVersion,
         }
     }
 
-    if (slowJpegMode || property_get_bool("camera.disable_zsl_mode", false)) {
+    if (slowJpegMode || property_get_bool("camera.disable_zsl_mode", true)) {
         ALOGI("Camera %d: Disabling ZSL mode", cameraId);
         allowZslMode = false;
     } else {
@@ -2008,7 +2008,7 @@ status_t Parameters::set(const String8& paramString) {
     if (previewFpsRange[1] > 1e9/minFrameDurationNs + FPS_MARGIN) {
         slowJpegMode = true;
     }
-    if (slowJpegMode || property_get_bool("camera.disable_zsl_mode", false)) {
+    if (slowJpegMode || property_get_bool("camera.disable_zsl_mode", true)) {
         allowZslMode = false;
     } else {
         allowZslMode = isZslReprocessPresent;
