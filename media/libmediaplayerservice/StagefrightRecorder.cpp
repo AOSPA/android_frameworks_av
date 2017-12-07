@@ -1993,7 +1993,7 @@ status_t StagefrightRecorder::resume() {
     }
 
     double timeOffset = -mTotalPausedDurationUs;
-    if (mCaptureFpsEnable) {
+    if (mCaptureFpsEnable && mVideoSource != VIDEO_SOURCE_SURFACE) {
         timeOffset *= mCaptureFps / mFrameRate;
     }
     sp<MetaData> meta = new MetaData;
