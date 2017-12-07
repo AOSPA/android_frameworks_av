@@ -1835,8 +1835,7 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     sp<MediaWriter> writer;
     sp<MPEG4Writer> mp4writer;
     if (mOutputFormat == OUTPUT_FORMAT_WEBM) {
-        //Fix me
-        //writer = new WebmWriter(mOutputFd);
+        writer = new WebmWriter(mOutputFd);
     } else {
         writer = mp4writer = AVFactory::get()->CreateMPEG4Writer(mOutputFd);
     }
