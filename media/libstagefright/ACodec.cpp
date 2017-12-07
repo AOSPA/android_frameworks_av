@@ -6878,6 +6878,9 @@ void ACodec::LoadedToIdleState::stateEntered() {
         if (mCodec->allYourBuffersAreBelongToUs(kPortIndexOutput)) {
             mCodec->freeBuffersOnPort(kPortIndexOutput);
         }
+        if (mCodec->allYourBuffersAreBelongToUs(kPortIndexInputExtradata)) {
+            mCodec->freeBuffersOnPort(kPortIndexInputExtradata);
+        }
         if (mCodec->allYourBuffersAreBelongToUs(kPortIndexOutputExtradata)) {
             mCodec->freeBuffersOnPort(kPortIndexOutputExtradata);
         }
@@ -6896,7 +6899,7 @@ status_t ACodec::LoadedToIdleState::allocateBuffers() {
     if (err != OK) {
         return err;
     }
-
+    err = mCodec->allocateBuffersOnPort(kPortIndexInputExtradata);
     err = mCodec->allocateBuffersOnPort(kPortIndexOutputExtradata);
     if (err != OK) {
         err = OK; // Ignore Extradata buffer allocation failure
@@ -8080,9 +8083,13 @@ void ACodec::ExecutingToIdleState::changeStateIfWeOwnAllBuffers() {
             if (err == OK) {
                 err = err2;
             }
-            status_t err3 = mCodec->freeBuffersOnPort(kPortIndexOutputExtradata);
+            status_t err3 = mCodec->freeBuffersOnPort(kPortIndexInputExtradata);
             if (err == OK) {
                 err = err3;
+            }
+            status_t err4 = mCodec->freeBuffersOnPort(kPortIndexOutputExtradata);
+            if (err == OK) {
+                err = err4;
             }
 
         }

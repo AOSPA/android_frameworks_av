@@ -1684,7 +1684,10 @@ status_t OMXNodeInstance::emptyBuffer_l(
         return INVALID_OPERATION;
     }
 
-    OMX_BUFFERHEADERTYPE *header = findBufferHeader(buffer, kPortIndexInput);
+    OMX_BUFFERHEADERTYPE *header = NULL;
+    OMX_BOOL extradata_buffer = ((header = findBufferHeader(buffer, kPortIndexInput)) != NULL) ?
+        OMX_FALSE : ((header = findBufferHeader(buffer, kPortIndexInputExtradata)) != NULL) ?
+        OMX_TRUE : OMX_FALSE;
     if (header == NULL) {
         ALOGE("b/25884056");
         return BAD_VALUE;
@@ -1694,7 +1697,7 @@ status_t OMXNodeInstance::emptyBuffer_l(
 
     // set up proper filled length if component is configured for gralloc metadata mode
     // ignore rangeOffset in this case (as client may be assuming ANW meta buffers).
-    if (mMetadataType[kPortIndexInput] == kMetadataBufferTypeGrallocSource) {
+    if (!extradata_buffer && mMetadataType[kPortIndexInput] == kMetadataBufferTypeGrallocSource) {
         header->nFilledLen = rangeLength ? sizeof(VideoGrallocMetadata) : 0;
         header->nOffset = 0;
     } else {
