@@ -157,8 +157,8 @@ struct AVUtils {
     virtual void cacheCaptureBuffers(sp<hardware::ICamera> camera, video_encoder encoder);
     virtual void getHFRParams(bool*, int32_t*, sp<AMessage>);
     virtual int64_t overwriteTimeOffset(bool, int64_t, int64_t *, int64_t, int32_t);
-    virtual const char *getCustomCodecsLocation();
-    virtual const char *getCustomCodecsPerformanceLocation();
+    virtual void  getCustomCodecsLocation(std::string *outPath);
+    virtual void  getCustomCodecsPerformanceLocation(std::string *outPath);
 
     virtual void setIntraPeriod(
                 int nPFrames, int nBFrames, sp<IOMXNode> mOMXNode);
