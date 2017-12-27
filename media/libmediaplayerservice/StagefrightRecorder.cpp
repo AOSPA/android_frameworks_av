@@ -2019,13 +2019,18 @@ status_t StagefrightRecorder::stop() {
         mCameraSourceTimeLapse = NULL;
     }
 
-    int64_t stopTimeUs = systemTime() / 1000;
-    for (const auto &source : { mAudioEncoderSource, mVideoEncoderSource }) {
-        if (source != nullptr && OK != source->setStopTimeUs(stopTimeUs)) {
-            ALOGW("Failed to set stopTime %lld us for %s",
-                    (long long)stopTimeUs, source->isVideo() ? "Video" : "Audio");
-        }
+    if (mVideoEncoderSource != NULL) {
+        int64_t stopTimeUs = systemTime() / 1000;
+        sp<MetaData> meta = new MetaData;
+        err = mVideoEncoderSource->setStopStimeUs(stopTimeUs);
+        mVideoEncoderSource->notifyPerformanceMode();
     }
+
+#ifdef NOTIFY_PERFORMANCE_MODE
+    if (mCameraSource != NULL) {
+        mCameraSource->notifyPerformanceMode();
+    }
+#endif
 
     if (mWriter != NULL) {
         err = mWriter->stop();
