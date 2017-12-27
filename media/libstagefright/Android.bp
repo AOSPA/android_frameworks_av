@@ -154,6 +154,9 @@ cc_library_shared {
             // enable experiments only in userdebug and eng builds
             cflags: ["-DENABLE_STAGEFRIGHT_EXPERIMENTS"],
         },
+        CameraEnablesNotifyPerformanceMode: {
+            // enable notify performance mode
+            cflags: ["-DNOTIFY_PERFORMANCE_MODE"],
     },
 
     sanitize: {
