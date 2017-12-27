@@ -20,19 +20,32 @@ cc_library_static {
     },
 
     srcs: [
-  // Fix me
-  /*    "EbmlUtil.cpp",
-        "WebmElement.cpp",
-        "WebmFrame.cpp",
-        "WebmFrameThread.cpp",
-        "WebmWriter.cpp",*/
+      "EbmlUtil.cpp",
+      "WebmElement.cpp",
+      "WebmFrame.cpp",
+      "WebmFrameThread.cpp",
+      "WebmWriter.cpp",
     ],
 
-    include_dirs: ["frameworks/av/include"],
+    include_dirs: [
+      "frameworks/av/include",
+      "frameworks/av/media/libstagefright/include",
+      "frameworks/av/media/libavextensions",
+      "frameworks/native/include/media/openmax",
+      "frameworks/av/media/libstagefright/mpeg2ts",
+      "external/boringssl/include",
+    ],
 
     shared_libs: [
         "libstagefright_foundation",
         "libutils",
         "liblog",
+        "android.hidl.memory@1.0",
+        "libhidlbase",
+        "libhidlmemory",
+        "android.hidl.allocator@1.0",
+        "android.hidl.memory@1.0",
+        "android.hidl.token@1.0-utils",
+        "android.hardware.media.omx@1.0",
     ],
 }
