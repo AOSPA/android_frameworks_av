@@ -576,15 +576,7 @@ static VideoFrame *extractVideoFrame(
         }
     } while (err == OK && !done);
 
-    if (err != OK || size <= 0 || outputFormat == NULL) {
-        ALOGE("Failed to decode thumbnail frame");
-        source->stop();
-        decoder->release();
-        return NULL;
-    }
-
     ALOGV("successfully decoded video frame.");
-    sp<MediaCodecBuffer> videoFrameBuffer = outputBuffers.itemAt(index);
 
     if (thumbNailTime >= 0) {
         if (timeUs != thumbNailTime) {
@@ -596,76 +588,6 @@ static VideoFrame *extractVideoFrame(
         }
     }
 
-    int32_t width, height, stride, slice_height;
-    CHECK(outputFormat->findInt32("width", &width));
-    CHECK(outputFormat->findInt32("height", &height));
-    CHECK(outputFormat->findInt32("stride", &stride));
-    CHECK(outputFormat->findInt32("slice-height", &slice_height));
-
-    int32_t crop_left, crop_top, crop_right, crop_bottom;
-    if (!outputFormat->findRect("crop", &crop_left, &crop_top, &crop_right, &crop_bottom)) {
-        crop_left = crop_top = 0;
-        crop_right = width - 1;
-        crop_bottom = height - 1;
-    }
-
-    int32_t rotationAngle;
-    if (!trackMeta->findInt32(kKeyRotation, &rotationAngle)) {
-        rotationAngle = 0;  // By default, no rotation
-    }
-
-    frame->mWidth = crop_right - crop_left + 1;
-    frame->mHeight = crop_bottom - crop_top + 1;
-    frame->mDisplayWidth = frame->mWidth;
-    frame->mDisplayHeight = frame->mHeight;
-    frame->mSize = frame->mWidth * frame->mHeight * 2;
-    frame->mData = new uint8_t[frame->mSize];
-    frame->mRotationAngle = rotationAngle;
-
-    int32_t sarWidth, sarHeight;
-    if (trackMeta->findInt32(kKeySARWidth, &sarWidth)
-            && trackMeta->findInt32(kKeySARHeight, &sarHeight)
-            && sarHeight != 0) {
-        frame->mDisplayWidth = (frame->mDisplayWidth * sarWidth) / sarHeight;
-    } else {
-        int32_t width, height;
-        if (trackMeta->findInt32(kKeyDisplayWidth, &width)
-                && trackMeta->findInt32(kKeyDisplayHeight, &height)
-                && frame->mDisplayWidth > 0 && frame->mDisplayHeight > 0
-                && width > 0 && height > 0) {
-            if (frame->mDisplayHeight * (int64_t)width / height > (int64_t)frame->mDisplayWidth) {
-                frame->mDisplayHeight =
-                        (int32_t)(height * (int64_t)frame->mDisplayWidth / width);
-            } else {
-                frame->mDisplayWidth =
-                        (int32_t)(frame->mDisplayHeight * (int64_t)width / height);
-            }
-            ALOGV("thumbNail width and height are overridden to %d x %d",
-                    frame->mDisplayWidth, frame->mDisplayHeight);
-        }
-    }
-
-    int32_t srcFormat;
-    CHECK(outputFormat->findInt32("color-format", &srcFormat));
-
-    ColorConverter converter((OMX_COLOR_FORMATTYPE)srcFormat, OMX_COLOR_Format16bitRGB565);
-
-    if (converter.isValid()) {
-        err = converter.convert(
-                (const uint8_t *)videoFrameBuffer->data(),
-                stride, slice_height,
-                crop_left, crop_top, crop_right, crop_bottom,
-                frame->mData,
-                frame->mWidth,
-                frame->mHeight,
-                0, 0, frame->mWidth - 1, frame->mHeight - 1);
-    } else {
-        ALOGE("Unable to convert from format 0x%08x to RGB565", srcFormat);
-
-        err = ERROR_UNSUPPORTED;
-    }
-
-    videoFrameBuffer.clear();
     source->stop();
     decoder->release();
 
