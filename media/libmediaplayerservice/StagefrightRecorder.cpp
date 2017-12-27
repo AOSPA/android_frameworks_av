@@ -2027,9 +2027,11 @@ status_t StagefrightRecorder::stop() {
         err = mVideoEncoderSource->setStopStimeUs(stopTimeUs);
         mVideoEncoderSource->notifyPerformanceMode();
     }
+#ifdef NOTIFY_PERFORMANCE_MODE
     if (mCameraSource != NULL) {
         mCameraSource->notifyPerformanceMode();
     }
+#endif
 
     if (mWriter != NULL) {
         err = mWriter->stop();
