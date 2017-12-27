@@ -129,6 +129,10 @@ public:
 
     virtual void signalBufferReturned(MediaBuffer* buffer);
 
+#ifdef NOTIFY_PERFORMANCE_MODE
+    virtual void notifyPerformanceMode() {}
+#endif
+
 protected:
 
     /**
