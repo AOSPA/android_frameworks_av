@@ -568,14 +568,12 @@ protected:
     // Send EOS on input stream.
     void onSignalEndOfInputStream();
 
-    //Fix me
-    /*virtual void setBFrames(OMX_VIDEO_PARAM_MPEG4TYPE *mpeg4type) {}
-    virtual void setBFrames(OMX_VIDEO_PARAM_AVCTYPE *h264type,
-        const int32_t iFramesInterval, const int32_t frameRate) {}
-
-    virtual status_t getVQZIPInfo(const sp<AMessage> &msg) {
+    virtual void setBFrames(OMX_VIDEO_PARAM_MPEG4TYPE * /*mpeg4type*/) {}
+    virtual void setBFrames(OMX_VIDEO_PARAM_AVCTYPE * /*h264type*/,
+        const int32_t /*iFramesInterval*/, const int32_t /*frameRate*/) {}
+    virtual status_t getVQZIPInfo(const sp<AMessage> & /*msg*/) {
         return OK;
-    }*/
+    }
 
     sp<IOMXObserver> createObserver();
 

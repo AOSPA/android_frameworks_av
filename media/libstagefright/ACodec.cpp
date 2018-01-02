@@ -4103,8 +4103,7 @@ status_t ACodec::setupMPEG4EncoderParameters(const sp<AMessage> &msg) {
         mpeg4type.eLevel = static_cast<OMX_VIDEO_MPEG4LEVELTYPE>(level);
     }
 
-    //Fix me
-    //setBFrames(&mpeg4type);
+    setBFrames(&mpeg4type);
     err = mOMXNode->setParameter(
             OMX_IndexParamVideoMpeg4, &mpeg4type, sizeof(mpeg4type));
 
@@ -4370,8 +4369,7 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
         h264type.nCabacInitIdc = 1;
     }
 
-    //Fix me
-    //setBFrames(&h264type, iFrameInterval, frameRate);
+    setBFrames(&h264type, iFrameInterval, frameRate);
     if (h264type.nBFrames != 0) {
         h264type.nAllowedPictureTypes |= OMX_VIDEO_PictureTypeB;
     }
@@ -5353,8 +5351,7 @@ void ACodec::sendFormatChange() {
 
     int32_t isVQZIPSession;
     if (mInputFormat->findInt32("vqzip", &isVQZIPSession) && isVQZIPSession) {
-        //Fix me
-        //getVQZIPInfo(mOutputFormat);
+        getVQZIPInfo(mOutputFormat);
     }
 
     // mLastOutputFormat is not used when tunneled; doing this just to stay consistent
