@@ -127,6 +127,7 @@ public:
     static const char *getFourCCForMime(const char *mime);
     const char *getTrackType() const;
     void resetInternal();
+    int32_t skipStartCodeSearch() {return mSkipStartCodeSearch; }
 
 private:
     enum {
@@ -290,6 +291,7 @@ private:
     int64_t mTrackDurationUs;
     int64_t mMaxChunkDurationUs;
     int64_t mLastDecodingTimeUs;
+    int32_t mSkipStartCodeSearch;
 
     int64_t mEstimatedTrackSizeBytes;
     int64_t mMdatSizeBytes;
@@ -1646,6 +1648,7 @@ MPEG4Writer::Track::Track(
       mIsMalformed(false),
       mTrackId(trackId),
       mTrackDurationUs(0),
+      mSkipStartCodeSearch(0),
       mEstimatedTrackSizeBytes(0),
       mSamplesHaveSameSize(true),
       mStszTableEntries(new ListTableEntries<uint32_t, 1>(1000)),
@@ -1674,6 +1677,8 @@ MPEG4Writer::Track::Track(
     mIsVideo = !strncasecmp(mime, "video/", 6);
     mIsMPEG4 = !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_MPEG4) ||
                !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC);
+
+    mMeta->findInt32(kKeySkipStartCodeSearch, &mSkipStartCodeSearch);
 
     // store temporal layer count
     if (mIsVideo) {
@@ -1956,6 +1961,7 @@ void MPEG4Writer::writeChunkToFile(Chunk* chunk) {
         List<MediaBuffer *>::iterator it = chunk->mSamples.begin();
 
         off64_t offset = (chunk->mTrack->isAvc() || chunk->mTrack->isHevc())
+                                && (!chunk->mTrack->skipStartCodeSearch())
                                 ? addMultipleLengthPrefixedSamples_l(*it)
                                 : addSample_l(*it);
 
@@ -2701,7 +2707,7 @@ status_t MPEG4Writer::Track::threadEntry() {
         if (mIsAvc || mIsHevc) StripStartcode(copy);
 
         size_t sampleSize = copy->range_length();
-        if (mIsAvc || mIsHevc) {
+        if ((mIsAvc || mIsHevc) && !mSkipStartCodeSearch) {
             if (mOwner->useNalLengthFour()) {
                 sampleSize += 4;
             } else {
@@ -2963,7 +2969,8 @@ status_t MPEG4Writer::Track::threadEntry() {
             trackProgressStatus(timestampUs);
         }
         if (!hasMultipleTracks) {
-            off64_t offset = (mIsAvc || mIsHevc) ? mOwner->addMultipleLengthPrefixedSamples_l(copy)
+            off64_t offset = ((mIsAvc || mIsHevc) && (!mSkipStartCodeSearch))
+                                 ? mOwner->addMultipleLengthPrefixedSamples_l(copy)
                                  : mOwner->addSample_l(copy);
 
             uint32_t count = (mOwner->use32BitFileOffset()

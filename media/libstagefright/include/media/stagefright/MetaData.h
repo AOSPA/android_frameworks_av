@@ -216,6 +216,7 @@ enum {
     kKeyGridWidth        = 'grdW', // int32_t, HEIF grid width
     kKeyGridHeight       = 'grdH', // int32_t, HEIF grid height
     kKeyIccProfile       = 'prof', // raw data, ICC prifile data
+    kKeySkipStartCodeSearch = 'sscs', // int32_t key to check to avoid start code search in writer
 };
 
 enum {
