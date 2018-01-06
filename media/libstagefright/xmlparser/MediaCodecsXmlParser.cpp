@@ -123,12 +123,18 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
     mCodecCounter(0) {
     std::string path;
     if (findFileInDirs(searchDirs, mainXmlName, &path)) {
+        if (!strncmp(path.c_str(), "/vendor/etc", strlen("/vendor/etc"))){
+              AVUtils::get()->getCustomCodecsLocation(&path);
+        }
         parseTopLevelXMLFile(path.c_str(), false);
     } else {
         ALOGE("Cannot find %s", mainXmlName);
         mParsingStatus = NAME_NOT_FOUND;
     }
     if (findFileInDirs(searchDirs, performanceXmlName, &path)) {
+        if (!strncmp(path.c_str(), "/vendor/etc", strlen("/vendor/etc"))){
+            AVUtils::get()->getCustomCodecsPerformanceLocation(&path);
+        }
         parseTopLevelXMLFile(path.c_str(), true);
     }
     if (profilingResultsXmlPath != nullptr) {

@@ -48,8 +48,7 @@ MediaMuxer::MediaMuxer(int fd, OutputFormat format)
     if (format == OUTPUT_FORMAT_MPEG_4 || format == OUTPUT_FORMAT_THREE_GPP) {
         mWriter = AVFactory::get()->CreateMPEG4Writer(fd);
     } else if (format == OUTPUT_FORMAT_WEBM) {
-        //Fix me
-        //mWriter = new WebmWriter(fd);
+        mWriter = new WebmWriter(fd);
     }
 
     if (mWriter != NULL) {
