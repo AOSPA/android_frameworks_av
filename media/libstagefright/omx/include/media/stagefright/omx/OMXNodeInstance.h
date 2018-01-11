@@ -160,7 +160,7 @@ private:
         kSecureBufferTypeNativeHandle,
     };
     SecureBufferType mSecureBufferType[2];
-    bool mGraphicBufferEnabled[2];
+    bool mGraphicBufferEnabled[4];
 
     // Following are OMX parameters managed by us (instead of the component)
     // OMX_IndexParamMaxFrameDurationForBitrateControl
