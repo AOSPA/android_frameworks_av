@@ -66,6 +66,16 @@ cc_library_static {
         "-Wno-multichar",
         "-Werror",
     ],
+    sanitize: {
+        cfi: true,
+        misc_undefined: [
+            "unsigned-integer-overflow",
+            "signed-integer-overflow",
+        ],
+        diag: {
+            cfi: true,
+        },
+    },
 }
 
 cc_library_static {
