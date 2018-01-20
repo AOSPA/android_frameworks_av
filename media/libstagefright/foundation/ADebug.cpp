@@ -37,7 +37,7 @@ namespace android {
 uint64_t ADebug::getTraceOptionsFromProperty() {
     char value[PROPERTY_VALUE_MAX];
     if (!property_get("persist.sys.media.traces", value, NULL)) {
-        ALOGW("Failed to get property persist.sys.media.traces");
+        //ALOGW("Failed to get property persist.sys.media.traces");
         return 0;
     }
     uint64_t traceOptions = 0;
