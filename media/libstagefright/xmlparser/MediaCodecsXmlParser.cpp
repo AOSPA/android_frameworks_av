@@ -112,6 +112,7 @@ constexpr char const* MediaCodecsXmlParser::defaultSearchDirs[];
 constexpr char const* MediaCodecsXmlParser::defaultMainXmlName;
 constexpr char const* MediaCodecsXmlParser::defaultPerformanceXmlName;
 constexpr char const* MediaCodecsXmlParser::defaultProfilingResultsXmlPath;
+constexpr char const* MediaCodecsXmlParser::vendorMediaCodecsAudioXmlName;
 
 MediaCodecsXmlParser::MediaCodecsXmlParser(
         const char* const* searchDirs,
@@ -122,6 +123,10 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
     mUpdate(false),
     mCodecCounter(0) {
     std::string path;
+
+    if (findFileInDirs(searchDirs, vendorMediaCodecsAudioXmlName, &path)) {
+        parseTopLevelXMLFile(path.c_str(), true);
+    }
     if (findFileInDirs(searchDirs, mainXmlName, &path)) {
         if (!strncmp(path.c_str(), "/vendor/etc", strlen("/vendor/etc"))){
               AVUtils::get()->getCustomCodecsLocation(&path);
