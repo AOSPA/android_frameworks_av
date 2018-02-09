@@ -5336,8 +5336,9 @@ void ACodec::sendFormatChange() {
         CHECK(mOutputFormat->findInt32("channel-count", &channelCount));
         CHECK(mOutputFormat->findInt32("sample-rate", &sampleRate));
         if (mSampleRate != 0 && sampleRate != 0) {
-            mEncoderDelay = mEncoderDelay * sampleRate / mSampleRate;
-            mEncoderPadding = mEncoderPadding * sampleRate / mSampleRate;
+            // avoiding 32-bit overflows in intermediate values
+            mEncoderDelay = (int32_t)((((int64_t)mEncoderDelay) * sampleRate) / mSampleRate);
+            mEncoderPadding = (int32_t)((((int64_t)mEncoderPadding) * sampleRate) / mSampleRate);
             mSampleRate = sampleRate;
         }
         if (mSkipCutBuffer != NULL) {
@@ -6161,9 +6162,14 @@ void ACodec::BaseState::onOutputBufferDrained(const sp<AMessage> &msg) {
         mCodec->signalError(OMX_ErrorUndefined, FAILED_TRANSACTION);
         return;
     }
+
+    int64_t timeUs = -1;
+    buffer->meta()->findInt64("timeUs", &timeUs);
+    bool skip = mCodec->getDSModeHint(msg, timeUs);
+
     info->mData = buffer;
     int32_t render;
-    if (mCodec->mNativeWindow != NULL
+    if (!skip && mCodec->mNativeWindow != NULL
             && msg->findInt32("render", &render) && render != 0
             && !discarded && buffer->size() != 0) {
         ATRACE_NAME("render");
