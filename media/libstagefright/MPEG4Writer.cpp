@@ -295,7 +295,7 @@ private:
     int32_t mTimeScale;
 
     pthread_t mThread;
-
+    mutable Mutex mTrackLock;
 
     List<MediaBuffer *> mChunkSamples;
 
@@ -2755,6 +2755,7 @@ status_t MPEG4Writer::Track::threadEntry() {
         }
 ////////////////////////////////////////////////////////////////////////////////
         if (mStszTableEntries->count() == 0) {
+            Mutex::Autolock _l(mTrackLock);
             mFirstSampleTimeRealUs = systemTime() / 1000;
             mStartTimestampUs = timestampUs;
             mOwner->setStartTimestampUs(mStartTimestampUs);
@@ -3704,6 +3705,7 @@ void MPEG4Writer::Track::writePaspBox() {
 }
 
 int64_t MPEG4Writer::Track::getStartTimeOffsetTimeUs() const {
+    Mutex::Autolock _l(mTrackLock);
     int64_t trackStartTimeOffsetUs = 0;
     int64_t moovStartTimeUs = mOwner->getStartTimestampUs();
     if (mStartTimestampUs != -1 && mStartTimestampUs != moovStartTimeUs) {
