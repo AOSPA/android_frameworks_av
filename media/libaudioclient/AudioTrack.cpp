@@ -405,8 +405,10 @@ status_t AudioTrack::set(
 
     // validate parameters
     if (!audio_is_valid_format(format)) {
-        ALOGE("Invalid format %#x", format);
-        return BAD_VALUE;
+        if (!(format == AUDIO_FORMAT_AAC_LATM_LC || format == AUDIO_FORMAT_APTX)) {
+            ALOGE("Invalid format %#x", format);
+            return BAD_VALUE;
+        }
     }
     mFormat = format;
 
