@@ -48,6 +48,7 @@
 
 #include "avc_utils.h"
 #include "ATSParser.h"
+#include <common/LogOverride.h>
 
 namespace android {
 
