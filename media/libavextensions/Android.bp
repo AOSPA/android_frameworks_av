@@ -16,7 +16,7 @@ cc_library_static {
         "frameworks/native/include/media/hardware",
         "frameworks/native/include/media/openmax",
         "external/flac/include",
-        "hardware/qcom/media/mm-core/inc",
+        "hardware/qcom/media/msm8998/mm-core/inc",
         "system/core/base/include/",
     ],
     cflags: [
@@ -58,7 +58,7 @@ cc_library_static {
         "frameworks/native/include/media/openmax",
         "external/flac/include",
         "system/core/base/include",
-        "hardware/qcom/media/mm-core/inc",
+        "hardware/qcom/media/msm8998/mm-core/inc",
         "frameworks/av/media/libstagefright/include",
         "frameworks/av/media/libstagefright/omx/include/media/stagefright",
     ],
@@ -108,7 +108,7 @@ cc_library_static {
         "frameworks/native/include/media/openmax",
         "external/flac/include",
         "system/core/base/include",
-        "hardware/qcom/media/mm-core/inc",
+        "hardware/qcom/media/msm8998/mm-core/inc",
     ],
     cflags: [
         "-Wno-multichar",
