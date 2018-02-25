@@ -6,6 +6,8 @@ LOCAL_PATH:= $(call my-dir)
 
 include $(CLEAR_VARS)
 
+LOCAL_SDCLANG:= false
+
 LOCAL_SRC_FILES:=               \
     ActivityManager.cpp         \
     HDCP.cpp                    \

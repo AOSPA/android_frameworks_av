@@ -1,6 +1,8 @@
 cc_library_shared {
     name: "libstagefright_http_support",
 
+ sdclang: false,
+
     srcs: ["HTTPHelper.cpp"],
 
     include_dirs: [
