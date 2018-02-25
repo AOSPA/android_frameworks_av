@@ -1,6 +1,7 @@
 cc_library_static {
     name: "libstagefright_aacenc",
     vendor_available: true,
+ sdclang: false,
 
     srcs: [
         "basic_op/basicop2.c",
@@ -112,6 +113,7 @@ cc_library_static {
 
 cc_library_shared {
     name: "libstagefright_soft_aacenc",
+ sdclang: false,
     vendor_available: true,
     vndk: {
         enabled: true,

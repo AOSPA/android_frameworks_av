@@ -7,6 +7,7 @@ cc_library_headers {
 cc_library_shared {
     name: "libstagefright_foundation",
     vendor_available: true,
+    sdclang: false,
     vndk: {
         enabled: true,
     },

@@ -1,6 +1,7 @@
 cc_library_shared {
     name: "libstagefright_omx",
     vendor_available: true,
+ sdclang: false,
     vndk: {
         enabled: true,
     },
@@ -93,6 +94,7 @@ cc_library_shared {
 
 cc_library_shared {
     name: "libstagefright_omx_utils",
+ sdclang: false,
     vendor_available: true,
     vndk: {
         enabled: true,

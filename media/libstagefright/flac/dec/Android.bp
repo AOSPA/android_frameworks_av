@@ -1,5 +1,6 @@
 cc_library_shared {
     name: "libstagefright_flacdec",
+ sdclang: false,
     vendor_available: true,
     vndk: {
         enabled: true,

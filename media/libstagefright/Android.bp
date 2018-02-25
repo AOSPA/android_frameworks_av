@@ -2,11 +2,12 @@ cc_library_headers {
     name: "libstagefright_headers",
     export_include_dirs: ["include"],
     vendor_available: true,
+ sdclang: false,
 }
 
 cc_library_shared {
     name: "libstagefright",
-
+ sdclang: false,
     srcs: [
         "ACodec.cpp",
         "ACodecBufferChannel.cpp",

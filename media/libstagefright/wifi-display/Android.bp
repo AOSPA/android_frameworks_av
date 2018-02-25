@@ -1,6 +1,8 @@
 cc_library_shared {
     name: "libstagefright_wfd",
 
+ sdclang: false,
+
     srcs: [
         "MediaSender.cpp",
         "Parameters.cpp",
