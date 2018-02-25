@@ -1,6 +1,8 @@
 cc_library_shared {
     name: "libstagefright_httplive",
 
+ sdclang: false,
+
     srcs: [
         "HTTPDownloader.cpp",
         "LiveDataSource.cpp",

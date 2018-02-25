@@ -38,6 +38,8 @@ cc_library {
 cc_defaults {
     name: "libmedia_omx_defaults",
 
+ sdclang: false,
+
     srcs: [
         "aidl/android/IGraphicBufferSource.aidl",
         "aidl/android/IOMXBufferSource.aidl",

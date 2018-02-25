@@ -1,6 +1,7 @@
 cc_library_shared {
     name: "libstagefright_xmlparser",
     vendor_available: true,
+ sdclang: false,
     vndk: {
         enabled: true,
     },
