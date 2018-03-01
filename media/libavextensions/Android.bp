@@ -1,6 +1,9 @@
 // AV  media utils extention
 // ########################################################
 
+    product_variables: {
+        Target_Enable_QC_AV_Enhancements: {
+
 cc_library_static {
     name: "libavmediaextentions",
     srcs: ["media/AVMediaUtils.cpp"],
@@ -113,5 +116,7 @@ cc_library_static {
     cflags: [
         "-Wno-multichar",
         "-Werror",
-    ],
+      ],
+    },
+  },
 }
