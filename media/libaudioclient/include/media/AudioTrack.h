@@ -24,6 +24,7 @@
 #include <media/AudioResamplerPublic.h>
 #include <media/Modulo.h>
 #include <utils/threads.h>
+#include <media/TypeConverter.h>
 
 namespace android {
 
