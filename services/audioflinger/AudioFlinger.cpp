@@ -696,7 +696,7 @@ sp<IAudioTrack> AudioFlinger::createTrack(
     }
 
     // further format checks are performed by createTrack_l() depending on the thread type
-    if (!audio_is_valid_format(format)) {
+    if (!(audio_is_valid_format(format) || (format == AUDIO_FORMAT_AAC_LATM_LC || format == AUDIO_FORMAT_APTX)))  {
         ALOGE("createTrack() invalid format %#x", format);
         lStatus = BAD_VALUE;
         goto Exit;
