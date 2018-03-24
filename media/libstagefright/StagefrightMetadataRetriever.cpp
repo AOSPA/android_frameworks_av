@@ -400,6 +400,7 @@ static VideoFrame *extractVideoFrame(
             || !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_HEVC);
 
     bool firstSample = true;
+    int32_t sampleCount = 0;
     int64_t targetTimeUs = -1ll;
 
     VideoFrame *frame = NULL;
@@ -439,6 +440,7 @@ static VideoFrame *extractVideoFrame(
                 ALOGV("Seeking closest: targetTimeUs=%lld", (long long)targetTimeUs);
             }
             firstSample = false;
+            sampleCount++;
 
             if (mediaBuffer->range_length() > codecBuffer->capacity()) {
                 ALOGE("buffer size (%zu) too large for codec input size (%zu)",
@@ -459,9 +461,10 @@ static VideoFrame *extractVideoFrame(
         }
 
         if (haveMoreInputs && inputIndex < inputBuffers.size()) {
-            if (isAvcOrHevc && IsIDR(codecBuffer) && decodeSingleFrame) {
+            if (isAvcOrHevc && IsIDR(codecBuffer) && decodeSingleFrame && sampleCount > 1) {
                 // Only need to decode one IDR frame, unless we're seeking with CLOSEST
                 // option, in which case we need to actually decode to targetTimeUs.
+                // To handle interlaced clip, we need to decode 2 samples for 2 fields.
                 haveMoreInputs = false;
                 flags |= MediaCodec::BUFFER_FLAG_EOS;
             }
