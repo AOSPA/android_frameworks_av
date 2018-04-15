@@ -247,7 +247,7 @@ static VideoFrame *extractVideoFrame(
 
     MediaSource::ReadOptions options;
     sp<MetaData> overrideMeta;
-    int64_t thumbNailTime;
+    int64_t thumbNailTime = -1ll;
     if (frameTimeUs < 0) {
         uint32_t type;
         const void *data;
