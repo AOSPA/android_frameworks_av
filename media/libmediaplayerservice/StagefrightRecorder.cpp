@@ -1752,7 +1752,8 @@ status_t StagefrightRecorder::setupVideoEncoder(
         }
     }
 
-    if (tsLayers > 1) {
+    // mIFramesIntervalSec == 0 means all Intra frame, can't support P/B layers
+    if (tsLayers > 1 && mIFramesIntervalSec != 0) {
         uint32_t bLayers = std::min(2u, tsLayers - 1); // use up-to 2 B-layers
         uint32_t pLayers = tsLayers - bLayers;
         format->setString(
@@ -1765,6 +1766,11 @@ status_t StagefrightRecorder::setupVideoEncoder(
 
     if (mMetaDataStoredInVideoBuffers != kMetadataBufferTypeInvalid) {
         format->setInt32("android._input-metadata-buffer-type", mMetaDataStoredInVideoBuffers);
+    }
+
+    if (mOutputFormat == OUTPUT_FORMAT_MPEG_4) {
+        format->setInt32("mpeg4-writer", 1);
+        format->setInt32("nal-length", 4);
     }
 
     uint32_t flags = 0;

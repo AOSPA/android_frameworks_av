@@ -32,9 +32,11 @@
 #include <media/AudioPolicyHelper.h>
 #include <media/AudioResamplerPublic.h>
 #include "media/AVMediaExtensions.h"
+#include <binder/MemoryDealer.h>
 
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
+#define DUMMY_TRACK_SMP_BUF_SIZE        12000
 static const int kMaxLoopCountNotifications = 32;
 
 namespace android {
@@ -190,6 +192,7 @@ AudioTrack::AudioTrack()
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
       mRoutedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mPauseTimeRealUs(0),
       mPortId(AUDIO_PORT_HANDLE_NONE)
 {
     mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
@@ -222,6 +225,7 @@ AudioTrack::AudioTrack(
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mPauseTimeRealUs(0),
       mPortId(AUDIO_PORT_HANDLE_NONE)
 {
     mStatus = set(streamType, sampleRate, format, channelMask,
@@ -254,6 +258,7 @@ AudioTrack::AudioTrack(
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mPauseTimeRealUs(0),
       mPortId(AUDIO_PORT_HANDLE_NONE),
       mTrackOffloaded(false)
 {
@@ -265,6 +270,15 @@ AudioTrack::AudioTrack(
 
 AudioTrack::~AudioTrack()
 {
+    // To avoid A2DP session stop on remote device during Next/Prev of playback
+    // for split a2dp solution via offload path, create dummy Low latency session
+    // which will ensure session is active
+    if(isOffloadedOrDirect_l() &&
+       (AudioSystem::getDeviceConnectionState((audio_devices_t)
+        AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE)) {
+        ALOGD("Creating Dummy track for A2DP offload session");
+        createDummyAudioSessionForA2DP();
+    }
     if (mStatus == NO_ERROR) {
         // Make sure that callback function exits in the case where
         // it is looping on buffer full condition in obtainBuffer().
@@ -291,6 +305,46 @@ AudioTrack::~AudioTrack()
     }
 }
 
+void AudioTrack::createDummyAudioSessionForA2DP() {
+   sp<AudioTrack> dummyTrack;
+
+   // Do not create dummy session if session is paused more than 3 secs
+   if(mPauseTimeRealUs &&
+      ((systemTime(SYSTEM_TIME_MONOTONIC) / 1000ll) - mPauseTimeRealUs) >= 3000000ll)
+      return;
+
+   sp<MemoryDealer> heap;
+   sp<IMemory> iMem;
+   uint8_t* p;
+
+   heap = new MemoryDealer(1024*1024, "AudioTrack Heap Base");
+   iMem = heap->allocate(DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
+   p = static_cast<uint8_t*>(iMem->pointer());
+   memset(p, '\0', DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
+
+   dummyTrack = new AudioTrack(AUDIO_STREAM_MUSIC,// stream type
+                               48000, AUDIO_FORMAT_PCM_16_BIT,
+                               AUDIO_CHANNEL_OUT_STEREO, iMem,
+                               AUDIO_OUTPUT_FLAG_FAST);
+   status_t status = dummyTrack->initCheck();
+   if(status != NO_ERROR) {
+       dummyTrack.clear();
+       ALOGD("Dummry Track Failed for initCheck()");
+       iMem.clear();
+       heap.clear();
+       return;
+   }
+
+   // start play
+   ALOGD("split_a2dp dummy track start success");
+   dummyTrack->start();
+   usleep(10000);
+   dummyTrack->stop();
+   dummyTrack.clear();
+   iMem.clear();
+   heap.clear();
+   ALOGD("split_a2dp dummy track stop completed");
+}
 status_t AudioTrack::set(
         audio_stream_type_t streamType,
         uint32_t sampleRate,
@@ -581,6 +635,7 @@ status_t AudioTrack::start()
     }
 
     mInUnderrun = true;
+    mPauseTimeRealUs = 0;
 
     State previousState = mState;
     if (previousState == STATE_PAUSED_STOPPING) {
@@ -771,6 +826,7 @@ void AudioTrack::pause()
     }
     mProxy->interrupt();
     mAudioTrack->pause();
+    mPauseTimeRealUs = systemTime(SYSTEM_TIME_MONOTONIC) / 1000ll;
 
     if (isOffloaded_l()) {
         if (mOutput != AUDIO_IO_HANDLE_NONE) {
