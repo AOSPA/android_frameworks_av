@@ -386,7 +386,7 @@ static VideoFrame *extractVideoFrame(
     sp<AMessage> outputFormat = NULL;
     bool haveMoreInputs = true;
     size_t index, offset, size;
-    int64_t timeUs;
+    int64_t timeUs = -1ll;
     size_t retriesLeft = kRetryCount;
     bool done = false;
     const char *mime;
