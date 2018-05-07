@@ -62,6 +62,7 @@
 
 #include <stagefright/AVExtensions.h>
 
+#define QTI_FLAC_DECODER
 namespace android {
 
 using binder::Status;
@@ -6836,9 +6837,14 @@ void ACodec::LoadedState::onSetInputSurface(const sp<AMessage> &msg) {
 
     sp<RefBase> obj;
     CHECK(msg->findObject("input-surface", &obj));
+    if (obj == NULL) {
+        ALOGE("[%s] NULL input surface", mCodec->mComponentName.c_str());
+        mCodec->mCallback->onInputSurfaceDeclined(BAD_VALUE);
+        return;
+    }
+
     sp<PersistentSurface> surface = static_cast<PersistentSurface *>(obj.get());
     mCodec->mGraphicBufferSource = surface->getBufferSource();
-
     status_t err = setupInputSurface();
 
     if (err == OK) {
@@ -7680,8 +7686,10 @@ status_t ACodec::setVendorParameters(const sp<AMessage> &params) {
                 config->param[paramIndex].bSet =
                     (OMX_BOOL)params->findString(existingKey->second.c_str(), &value);
                 if (config->param[paramIndex].bSet) {
-                    strncpy((char *)config->param[paramIndex].cString, value.c_str(),
-                            sizeof(OMX_CONFIG_ANDROID_VENDOR_PARAMTYPE::cString));
+                    size_t dstSize = sizeof(config->param[paramIndex].cString);
+                    strncpy((char *)config->param[paramIndex].cString, value.c_str(), dstSize - 1);
+                    // null terminate value
+                    config->param[paramIndex].cString[dstSize - 1] = '\0';
                 }
                 break;
             }

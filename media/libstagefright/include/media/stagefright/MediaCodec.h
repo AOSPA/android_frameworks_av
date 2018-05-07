@@ -371,6 +371,7 @@ private:
 
     bool mHaveInputSurface;
     bool mHavePendingInputBuffers;
+    bool mCpuBoostRequested;
 
     std::shared_ptr<BufferChannelBase> mBufferChannel;
 
@@ -383,7 +384,7 @@ private:
 
     void PostReplyWithError(const sp<AReplyToken> &replyID, int32_t err);
 
-    status_t init(const AString &name);
+    status_t init(const AString &name, bool nameIsType = false);
 
     void setState(State newState);
     void returnBuffersToCodec(bool isReclaim = false);
@@ -427,6 +428,7 @@ private:
 
     uint64_t getGraphicBufferSize();
     void addResource(MediaResource::Type type, MediaResource::SubType subtype, uint64_t value);
+    void requestCpuBoostIfNeeded();
 
     bool hasPendingBuffer(int portIndex);
     bool hasPendingBuffer();

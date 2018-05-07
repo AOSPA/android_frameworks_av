@@ -24,6 +24,7 @@
 
 #include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
+#include <cutils/multiuser.h>
 #include <media/TimeCheck.h>
 #include <private/android_filesystem_config.h>
 
@@ -870,7 +871,6 @@ status_t BnAudioFlinger::onTransact(
     switch (code) {
         case SET_STREAM_VOLUME:
         case SET_STREAM_MUTE:
-        case SET_MODE:
         case OPEN_OUTPUT:
         case OPEN_DUPLICATE_OUTPUT:
         case CLOSE_OUTPUT:
@@ -891,7 +891,15 @@ status_t BnAudioFlinger::onTransact(
         case SET_RECORD_SILENCED:
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, code, IPCThreadState::self()->getCallingPid());
-            return INVALID_OPERATION;
+            // return status only for non void methods
+            switch (code) {
+                case SET_RECORD_SILENCED:
+                    break;
+                default:
+                    reply->writeInt32(static_cast<int32_t> (INVALID_OPERATION));
+                    break;
+            }
+            return OK;
         default:
             break;
     }
@@ -904,12 +912,19 @@ status_t BnAudioFlinger::onTransact(
         case SET_MIC_MUTE:
         case SET_LOW_RAM_DEVICE:
         case SYSTEM_READY: {
-            uid_t multiUserClientUid = IPCThreadState::self()->getCallingUid() % AID_USER_OFFSET;
-            if (multiUserClientUid >= AID_APP_START) {
+            if (multiuser_get_app_id(IPCThreadState::self()->getCallingUid()) >= AID_APP_START) {
                 ALOGW("%s: transaction %d received from PID %d unauthorized UID %d",
                       __func__, code, IPCThreadState::self()->getCallingPid(),
                       IPCThreadState::self()->getCallingUid());
-                return INVALID_OPERATION;
+                // return status only for non void methods
+                switch (code) {
+                    case SYSTEM_READY:
+                        break;
+                    default:
+                        reply->writeInt32(static_cast<int32_t> (INVALID_OPERATION));
+                        break;
+                }
+                return OK;
             }
         } break;
         default:

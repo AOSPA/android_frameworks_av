@@ -156,7 +156,7 @@ aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder) {
     setInputPreset(configurationOutput.getInputPreset());
 
     // Save device format so we can do format conversion and volume scaling together.
-    mDeviceFormat = configurationOutput.getFormat();
+    setDeviceFormat(configurationOutput.getFormat());
 
     result = mServiceInterface.getStreamDescription(mServiceStreamHandle, mEndPointParcelable);
     if (result != AAUDIO_OK) {
@@ -392,19 +392,25 @@ aaudio_result_t AudioStreamInternal::unregisterThread() {
 }
 
 aaudio_result_t AudioStreamInternal::startClient(const android::AudioClient& client,
-                                                 audio_port_handle_t *clientHandle) {
+                                                 audio_port_handle_t *portHandle) {
+    ALOGV("%s() called", __func__);
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
         return AAUDIO_ERROR_INVALID_STATE;
     }
-
-    return mServiceInterface.startClient(mServiceStreamHandle, client, clientHandle);
+    aaudio_result_t result =  mServiceInterface.startClient(mServiceStreamHandle,
+                                                            client, portHandle);
+    ALOGV("%s(%d) returning %d", __func__, *portHandle, result);
+    return result;
 }
 
-aaudio_result_t AudioStreamInternal::stopClient(audio_port_handle_t clientHandle) {
+aaudio_result_t AudioStreamInternal::stopClient(audio_port_handle_t portHandle) {
+    ALOGV("%s(%d) called", __func__, portHandle);
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
         return AAUDIO_ERROR_INVALID_STATE;
     }
-    return mServiceInterface.stopClient(mServiceStreamHandle, clientHandle);
+    aaudio_result_t result = mServiceInterface.stopClient(mServiceStreamHandle, portHandle);
+    ALOGV("%s(%d) returning %d", __func__, portHandle, result);
+    return result;
 }
 
 aaudio_result_t AudioStreamInternal::getTimestamp(clockid_t clockId,
@@ -501,9 +507,9 @@ aaudio_result_t AudioStreamInternal::onEventFromServer(AAudioServiceMessage *mes
             ALOGW("%s - AAUDIO_SERVICE_EVENT_DISCONNECTED - FIFO cleared", __func__);
             break;
         case AAUDIO_SERVICE_EVENT_VOLUME:
+            ALOGD("%s - AAUDIO_SERVICE_EVENT_VOLUME %lf", __func__, message->event.dataDouble);
             mStreamVolume = (float)message->event.dataDouble;
             doSetVolume();
-            ALOGD("%s - AAUDIO_SERVICE_EVENT_VOLUME %lf", __func__, message->event.dataDouble);
             break;
         case AAUDIO_SERVICE_EVENT_XRUN:
             mXRunCount = static_cast<int32_t>(message->event.dataLong);

@@ -498,7 +498,6 @@ void MPEG4Writer::initInternal(int fd, bool isFirstSession) {
     mStreamableFile = false;
     mTimeScale = -1;
     mHasFileLevelMeta = false;
-    mHasMoovBox = false;
     mPrimaryItemId = 0;
     mAssociationEntryCount = 0;
     mNumGrids = 0;
@@ -507,6 +506,7 @@ void MPEG4Writer::initInternal(int fd, bool isFirstSession) {
     // And they will stay the same for all the recording sessions.
     if (isFirstSession) {
         mMoovExtraSize = 0;
+        mHasMoovBox = false;
         mMetaKeys = new AMessage();
         addDeviceMeta();
         mLatitudex10000 = 0;
@@ -3324,7 +3324,7 @@ status_t MPEG4Writer::Track::threadEntry() {
     // if err is ERROR_IO (ex: during SSR), return OK to save the
     // recorded file successfully. Session tear down will happen as part of
     // client callback
-    if ((mIsAudio && (err == ERROR_IO)) || (err == ERROR_END_OF_STREAM)) {
+    if ((err == ERROR_IO) || (err == ERROR_END_OF_STREAM)) {
         return OK;
     }
     return err;
