@@ -144,6 +144,9 @@ enum {
     // The language code for this media
     kKeyMediaLanguage     = 'lang',  // cstring
 
+    // The manufacture code for this media
+    kKeyMediaManufacture  = 'manu',  // cstring
+
     // To store the timed text format data
     kKeyTextFormatData    = 'text',  // raw data
 
@@ -220,6 +223,7 @@ enum {
     kKeyFrameCount       = 'nfrm', // int32_t, total number of frame in video track
     kKeyExifOffset       = 'exof', // int64_t, Exif data offset
     kKeyExifSize         = 'exsz', // int64_t, Exif data size
+    kKeySkipStartCodeSearch = 'sscs', // int32_t key to check to avoid start code search in writer
 };
 
 enum {

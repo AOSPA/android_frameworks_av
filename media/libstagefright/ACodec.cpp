@@ -140,6 +140,10 @@ static OMX_VIDEO_CONTROLRATETYPE getVideoBitrateMode(const sp<AMessage> &msg) {
             case 1: return OMX_Video_ControlRateVariable;
             //BITRATE_MODE_CBR
             case 2: return OMX_Video_ControlRateConstant;
+            //BITRATE_MODE_VBR_VFR
+            case 3: return OMX_Video_ControlRateVariableSkipFrames;
+            //BITRATE_MODE_CBR_VFR
+            case 4: return OMX_Video_ControlRateConstantSkipFrames;
             default: break;
         }
     }
@@ -1319,7 +1323,7 @@ status_t ACodec::allocateOutputMetadataBuffers() {
     OMX_U32 bufferCount, bufferSize, minUndequeuedBuffers;
     status_t err = configureOutputBuffersFromNativeWindow(
             &bufferCount, &bufferSize, &minUndequeuedBuffers,
-            false /* preregister */);
+            mFlags & kFlagIsSecure /* preregister */);
     if (err != OK)
         return err;
     mNumUndequeuedBuffers = minUndequeuedBuffers;
@@ -7993,6 +7997,11 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
                     err = mCodec->mOMXNode->sendCommand(
                             OMX_CommandPortEnable, kPortIndexOutput);
                 }
+
+                /* Clear the RenderQueue in which queued GraphicBuffers hold the
+                 * actual buffer references in order to free them early.
+                 */
+                mCodec->mRenderTracker.clear(systemTime(CLOCK_MONOTONIC));
 
                 if (err == OK) {
                     err = mCodec->allocateBuffersOnPort(kPortIndexOutput);

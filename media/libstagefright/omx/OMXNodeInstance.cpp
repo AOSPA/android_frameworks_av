@@ -139,7 +139,7 @@ struct BufferMeta {
         }
 
         // check component returns proper range
-        sp<ABuffer> codec = getBuffer(header, true /* limit */);
+        sp<ABuffer> codec = getBuffer(header,!(header->nFlags & OMX_BUFFERFLAG_EXTRADATA));
 
         memcpy(getPointer() + header->nOffset, codec->data(), codec->size());
     }
@@ -149,9 +149,11 @@ struct BufferMeta {
             return;
         }
 
+        size_t bytesToCopy = header->nFlags & OMX_BUFFERFLAG_EXTRADATA ?
+            header->nAllocLen - header->nOffset : header->nFilledLen;
         memcpy(header->pBuffer + header->nOffset,
                 getPointer() + header->nOffset,
-                header->nFilledLen);
+                bytesToCopy);
     }
 
     // return the codec buffer
@@ -384,6 +386,9 @@ OMXNodeInstance::OMXNodeInstance(
     mGraphicBufferEnabled[3] = false;
     mIsSecure = AString(name).endsWith(".secure");
     mLegacyAdaptiveExperiment = ADebug::isExperimentEnabled("legacy-adaptive");
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        mQuirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnOutputPorts;
+    }
 }
 
 OMXNodeInstance::~OMXNodeInstance() {
@@ -508,6 +513,9 @@ status_t OMXNodeInstance::freeNode() {
 
     Mutex::Autolock _l(mLock);
 
+    if (mActiveBuffers.size() > 0) {
+        freeActiveBuffers();
+    }
     status_t err = mOwner->freeNode(this);
 
     mDispatcher.clear();
@@ -1961,6 +1969,9 @@ status_t OMXNodeInstance::setQuirks(OMX_U32 quirks) {
         return BAD_VALUE;
     }
 
+    if (!strcmp(mName, "qcom.encoder.tme")) {
+        quirks = kRequiresAllocateBufferOnInputPorts | kRequiresAllocateBufferOnOutputPorts;
+    }
     mQuirks = quirks;
 
     return OK;
