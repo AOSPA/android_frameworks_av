@@ -42,7 +42,8 @@ namespace android {
 
 StagefrightMetadataRetriever::StagefrightMetadataRetriever()
     : mParsedMetaData(false),
-      mAlbumArt(NULL) {
+      mAlbumArt(NULL),
+      mLastImageIndex(-1) {
     ALOGV("StagefrightMetadataRetriever()");
 }
 
@@ -129,9 +130,29 @@ status_t StagefrightMetadataRetriever::setDataSource(
 
 sp<IMemory> StagefrightMetadataRetriever::getImageAtIndex(
         int index, int colorFormat, bool metaOnly, bool thumbnail) {
-
     ALOGV("getImageAtIndex: index(%d) colorFormat(%d) metaOnly(%d) thumbnail(%d)",
             index, colorFormat, metaOnly, thumbnail);
+
+    return getImageInternal(index, colorFormat, metaOnly, thumbnail, NULL);
+}
+
+sp<IMemory> StagefrightMetadataRetriever::getImageRectAtIndex(
+        int index, int colorFormat, int left, int top, int right, int bottom) {
+    ALOGV("getImageRectAtIndex: index(%d) colorFormat(%d) rect {%d, %d, %d, %d}",
+            index, colorFormat, left, top, right, bottom);
+
+    FrameRect rect = {left, top, right, bottom};
+
+    if (mImageDecoder != NULL && index == mLastImageIndex) {
+        return mImageDecoder->extractFrame(&rect);
+    }
+
+    return getImageInternal(
+            index, colorFormat, false /*metaOnly*/, false /*thumbnail*/, &rect);
+}
+
+sp<IMemory> StagefrightMetadataRetriever::getImageInternal(
+        int index, int colorFormat, bool metaOnly, bool thumbnail, FrameRect* rect) {
 
     if (mExtractor.get() == NULL) {
         ALOGE("no extractor.");
@@ -195,12 +216,19 @@ sp<IMemory> StagefrightMetadataRetriever::getImageAtIndex(
 
     for (size_t i = 0; i < matchingCodecs.size(); ++i) {
         const AString &componentName = matchingCodecs[i];
-        ImageDecoder decoder(componentName, trackMeta, source);
-        sp<IMemory> frame = decoder.extractFrame(
-                thumbnail ? -1 : 0 /*frameTimeUs*/, 0 /*seekMode*/, colorFormat);
+        sp<ImageDecoder> decoder = new ImageDecoder(componentName, trackMeta, source);
+        int64_t frameTimeUs = thumbnail ? -1 : 0;
+        if (decoder->init(frameTimeUs, 1 /*numFrames*/, 0 /*option*/, colorFormat) == OK) {
+            sp<IMemory> frame = decoder->extractFrame(rect);
 
-        if (frame != NULL) {
-            return frame;
+            if (frame != NULL) {
+                if (rect != NULL) {
+                    // keep the decoder if slice decoding
+                    mImageDecoder = decoder;
+                    mLastImageIndex = index;
+                }
+                return frame;
+            }
         }
         ALOGV("%s failed to extract thumbnail, trying next decoder.", componentName.c_str());
     }
@@ -256,6 +284,10 @@ status_t StagefrightMetadataRetriever::getFrameInternal(
     for (i = 0; i < n; ++i) {
         sp<MetaData> meta = mExtractor->getTrackMetaData(i);
 
+        if (meta == NULL) {
+            continue;
+        }
+
         const char *mime;
         CHECK(meta->findCString(kKeyMIMEType, &mime));
 
@@ -310,16 +342,17 @@ status_t StagefrightMetadataRetriever::getFrameInternal(
     for (size_t i = 0; i < matchingCodecs.size(); ++i) {
         const AString &componentName = matchingCodecs[i];
         VideoFrameDecoder decoder(componentName, trackMeta, source);
-        if (outFrame != NULL) {
-            *outFrame = decoder.extractFrame(timeUs, option, colorFormat);
-            if (*outFrame != NULL) {
-                return OK;
-            }
-        } else if (outFrames != NULL) {
-            status_t err = decoder.extractFrames(
-                    timeUs, numFrames, option, colorFormat, outFrames);
-            if (err == OK) {
-                return OK;
+        if (decoder.init(timeUs, numFrames, option, colorFormat) == OK) {
+            if (outFrame != NULL) {
+                *outFrame = decoder.extractFrame();
+                if (*outFrame != NULL) {
+                    return OK;
+                }
+            } else if (outFrames != NULL) {
+                status_t err = decoder.extractFrames(outFrames);
+                if (err == OK) {
+                    return OK;
+                }
             }
         }
         ALOGV("%s failed to extract frame, trying next decoder.", componentName.c_str());
@@ -482,6 +515,10 @@ void StagefrightMetadataRetriever::parseMetaData() {
     for (size_t i = 0; i < numTracks; ++i) {
         sp<MetaData> trackMeta = mExtractor->getTrackMetaData(i);
 
+        if (trackMeta == NULL) {
+            continue;
+        }
+
         int64_t durationUs;
         if (trackMeta->findInt64(kKeyDuration, &durationUs)) {
             if (durationUs > maxDurationUs) {
@@ -604,7 +641,8 @@ void StagefrightMetadataRetriever::parseMetaData() {
                 !strcasecmp(fileMIME, "video/x-matroska")) {
             sp<MetaData> trackMeta = mExtractor->getTrackMetaData(0);
             const char *trackMIME;
-            CHECK(trackMeta->findCString(kKeyMIMEType, &trackMIME));
+            CHECK(trackMeta != NULL
+                  && trackMeta->findCString(kKeyMIMEType, &trackMIME));
 
             if (!strncasecmp("audio/", trackMIME, 6)) {
                 // The matroska file only contains a single audio track,
