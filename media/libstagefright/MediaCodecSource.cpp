@@ -653,10 +653,10 @@ void MediaCodecSource::signalEOS(status_t err) {
             output->mErrorCode = err;
             if (err != ERROR_END_OF_STREAM) {
                 output->mErrorCode = ERROR_IO;
-                if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
-                    mStopping = true;
-                    mPuller->stop();
-                }
+            }
+            if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
+                mStopping = true;
+                mPuller->stop();
             }
             output->mCond.signal();
 
@@ -780,8 +780,8 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
 }
 
 status_t MediaCodecSource::onStart(MetaData *params) {
-    if (mStopping) {
-        ALOGE("Failed to start while we're stopping");
+    if (mStopping | mOutput.lock()->mEncoderReachedEOS) {
+        ALOGE("Failed to start while we're stopping or encoder already stopped due to EOS error");
         return INVALID_OPERATION;
     }
     int64_t startTimeUs;
