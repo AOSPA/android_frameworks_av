@@ -169,9 +169,7 @@ status_t MediaCodecSource::Puller::postSynchronouslyAndReturnError(
 }
 
 status_t MediaCodecSource::Puller::setStopTimeUs(int64_t stopTimeUs) {
-    sp<AMessage> msg = new AMessage(kWhatSetStopTimeUs, this);
-    msg->setInt64("stop-time-us", stopTimeUs);
-    return postSynchronouslyAndReturnError(msg);
+    return mSource->setStopTimeUs(stopTimeUs);
 }
 
 status_t MediaCodecSource::Puller::start(const sp<MetaData> &meta, const sp<AMessage> &notify) {
@@ -1165,4 +1163,11 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
     }
 }
 
+void MediaCodecSource::notifyPerformanceMode() {
+    if (mIsVideo && mEncoder != NULL) {
+        sp<AMessage> params = new AMessage;
+        params->setInt32("qti.request.perf", true);
+        mEncoder->setParameters(params);
+    }
+}
 } // namespace android

@@ -574,7 +574,7 @@ ACodec::ACodec()
       mMetadataBuffersToSubmit(0),
       mNumUndequeuedBuffers(0),
       mRepeatFrameDelayUs(-1ll),
-      mMaxPtsGapUs(-1ll),
+      mMaxPtsGapUs(0ll),
       mMaxFps(-1),
       mFps(-1.0),
       mCaptureFps(-1.0),
@@ -1844,13 +1844,18 @@ status_t ACodec::configureCodec(
 
         // only allow 32-bit value, since we pass it as U32 to OMX.
         if (!msg->findInt64("max-pts-gap-to-encoder", &mMaxPtsGapUs)) {
-            mMaxPtsGapUs = -1ll;
-        } else if (mMaxPtsGapUs > INT32_MAX || mMaxPtsGapUs < 0) {
+            mMaxPtsGapUs = 0ll;
+        } else if (mMaxPtsGapUs > INT32_MAX || mMaxPtsGapUs < INT32_MIN) {
             ALOGW("Unsupported value for max pts gap %lld", (long long) mMaxPtsGapUs);
-            mMaxPtsGapUs = -1ll;
+            mMaxPtsGapUs = 0ll;
         }
 
         if (!msg->findFloat("max-fps-to-encoder", &mMaxFps)) {
+            mMaxFps = -1;
+        }
+
+        // notify GraphicBufferSource to allow backward frames
+        if (mMaxPtsGapUs < 0ll) {
             mMaxFps = -1;
         }
 
@@ -3073,6 +3078,10 @@ status_t ACodec::setupRawAudioFormat(
         case kAudioEncodingPcm24bitPacked:
             pcmParams.eNumData = OMX_NumericalDataSigned;
             pcmParams.nBitPerSample = 24;
+            break;
+        case kAudioEncodingPcm32bit:
+            pcmParams.eNumData = OMX_NumericalDataSigned;
+            pcmParams.nBitPerSample = 32;
             break;
         default:
             return BAD_VALUE;
@@ -5128,6 +5137,9 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                     } else if (params.eNumData == OMX_NumericalDataSigned
                             && params.nBitPerSample == 24u) {
                         encoding = kAudioEncodingPcm24bitPacked;
+                    } else if (params.eNumData == OMX_NumericalDataSigned
+                            && params.nBitPerSample == 32u) {
+                        encoding = kAudioEncodingPcm32bit;
                     } else if (params.nBitPerSample != 16u
                             || params.eNumData != OMX_NumericalDataSigned) {
                         ALOGE("unsupported PCM port: %s(%d), %s(%d) mode ",
@@ -5362,13 +5374,13 @@ void ACodec::onDataSpaceChanged(android_dataspace dataSpace, const ColorAspects 
     convertCodecColorAspectsToPlatformAspects(aspects, &range, &standard, &transfer);
 
     // if some aspects are unspecified, use dataspace fields
-    if (range != 0) {
+    if (range == 0) {
         range = (dataSpace & HAL_DATASPACE_RANGE_MASK) >> HAL_DATASPACE_RANGE_SHIFT;
     }
-    if (standard != 0) {
+    if (standard == 0) {
         standard = (dataSpace & HAL_DATASPACE_STANDARD_MASK) >> HAL_DATASPACE_STANDARD_SHIFT;
     }
-    if (transfer != 0) {
+    if (transfer == 0) {
         transfer = (dataSpace & HAL_DATASPACE_TRANSFER_MASK) >> HAL_DATASPACE_TRANSFER_SHIFT;
     }
 
@@ -6751,11 +6763,11 @@ status_t ACodec::LoadedState::setupInputSurface() {
         }
     }
 
-    if (mCodec->mMaxPtsGapUs > 0ll) {
+    if (mCodec->mMaxPtsGapUs != 0ll) {
         OMX_PARAM_U32TYPE maxPtsGapParams;
         InitOMXParams(&maxPtsGapParams);
         maxPtsGapParams.nPortIndex = kPortIndexInput;
-        maxPtsGapParams.nU32 = (uint32_t) mCodec->mMaxPtsGapUs;
+        maxPtsGapParams.nU32 = (uint32_t)mCodec->mMaxPtsGapUs;
 
         err = mCodec->mOMXNode->setParameter(
                 (OMX_INDEXTYPE)OMX_IndexParamMaxFrameDurationForBitrateControl,
@@ -6768,7 +6780,7 @@ status_t ACodec::LoadedState::setupInputSurface() {
         }
     }
 
-    if (mCodec->mMaxFps > 0) {
+    if (mCodec->mMaxFps > 0 || mCodec->mMaxPtsGapUs < 0) {
         err = statusFromBinderStatus(
                 mCodec->mGraphicBufferSource->setMaxFps(mCodec->mMaxFps));
 

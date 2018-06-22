@@ -50,7 +50,7 @@ MediaMuxer::MediaMuxer(int fd, OutputFormat format)
     : mFormat(format),
       mState(UNINITIALIZED) {
     if (isMp4Format(format)) {
-        mWriter = AVFactory::get()->CreateMPEG4Writer(fd);
+        mWriter = new MPEG4Writer(fd);
     } else if (format == OUTPUT_FORMAT_WEBM) {
         mWriter = new WebmWriter(fd);
     }
@@ -189,6 +189,10 @@ status_t MediaMuxer::writeSampleData(const sp<ABuffer> &buffer, size_t trackInde
 
     if (flags & MediaCodec::BUFFER_FLAG_SYNCFRAME) {
         sampleMetaData.setInt32(kKeyIsSyncFrame, true);
+    }
+
+    if (flags & MediaCodec::BUFFER_FLAG_MUXER_DATA) {
+        sampleMetaData.setInt32(kKeyIsMuxerData, 1);
     }
 
     sp<MediaAdapter> currentTrack = mTrackList[trackIndex];

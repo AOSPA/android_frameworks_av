@@ -77,7 +77,8 @@ Camera3Device::Camera3Device(const String8 &id):
         mNextShutterFrameNumber(0),
         mNextReprocessShutterFrameNumber(0),
         mListener(NULL),
-        mVendorTagId(CAMERA_METADATA_INVALID_VENDOR_ID)
+        mVendorTagId(CAMERA_METADATA_INVALID_VENDOR_ID),
+        mLastTemplateId(-1)
 {
     ATRACE_CALL();
     camera3_callback_ops::notify = &sNotify;
@@ -245,6 +246,14 @@ status_t Camera3Device::initializeCommonLocked() {
                 ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_INPUT) {
             mSupportedOpaqueInputSizes.add(Size(configs.data.i32[i + 1],
                     configs.data.i32[i + 2]));
+        }
+    }
+
+    if (DistortionMapper::isDistortionSupported(mDeviceInfo)) {
+        res = mDistortionMapper.setupStaticInfo(mDeviceInfo);
+        if (res != OK) {
+            SET_ERR_L("Unable to read necessary calibration fields for distortion correction");
+            return res;
         }
     }
 
@@ -1594,6 +1603,18 @@ status_t Camera3Device::configureStreams(const CameraMetadata& sessionParams, in
     Mutex::Autolock il(mInterfaceLock);
     Mutex::Autolock l(mLock);
 
+    // In case the client doesn't include any session parameter, try a
+    // speculative configuration using the values from the last cached
+    // default request.
+    if (sessionParams.isEmpty() &&
+            ((mLastTemplateId > 0) && (mLastTemplateId < CAMERA3_TEMPLATE_COUNT)) &&
+            (!mRequestTemplateCache[mLastTemplateId].isEmpty())) {
+        ALOGV("%s: Speculative session param configuration with template id: %d", __func__,
+                mLastTemplateId);
+        return filterParamsAndConfigureLocked(mRequestTemplateCache[mLastTemplateId],
+                operatingMode);
+    }
+
     return filterParamsAndConfigureLocked(sessionParams, operatingMode);
 }
 
@@ -1670,6 +1691,7 @@ status_t Camera3Device::createDefaultRequest(int templateId,
 
         if (!mRequestTemplateCache[templateId].isEmpty()) {
             *request = mRequestTemplateCache[templateId];
+            mLastTemplateId = templateId;
             return OK;
         }
     }
@@ -1694,6 +1716,7 @@ status_t Camera3Device::createDefaultRequest(int templateId,
         mRequestTemplateCache[templateId].acquire(rawRequest);
 
         *request = mRequestTemplateCache[templateId];
+        mLastTemplateId = templateId;
     }
     return OK;
 }
@@ -2965,6 +2988,14 @@ void Camera3Device::sendCaptureResult(CameraMetadata &pendingMetadata,
         }
     }
 
+    // Fix up some result metadata to account for HAL-level distortion correction
+    status_t res = mDistortionMapper.correctCaptureResult(&captureResult.mMetadata);
+    if (res != OK) {
+        SET_ERR("Unable to correct capture result metadata for frame %d: %s (%d)",
+                frameNumber, strerror(res), res);
+        return;
+    }
+
     mTagMonitor.monitorMetadata(TagMonitor::RESULT,
             frameNumber, timestamp.data.i64[0], captureResult.mMetadata);
 
@@ -4042,6 +4073,7 @@ Camera3Device::RequestThread::RequestThread(wp<Camera3Device> parent,
         mRepeatingLastFrameNumber(
             hardware::camera2::ICameraDeviceUser::NO_IN_FLIGHT_REPEATING_FRAMES),
         mPrepareVideoStream(false),
+        mConstrainedMode(false),
         mRequestLatency(kRequestLatencyBinSize),
         mSessionParamKeys(sessionParamKeys),
         mLatestSessionParams(sessionParamKeys.size()) {
@@ -4065,6 +4097,7 @@ void Camera3Device::RequestThread::configurationComplete(bool isConstrainedHighS
     mLatestSessionParams = sessionParams;
     // Prepare video stream for high speed recording.
     mPrepareVideoStream = isConstrainedHighSpeed;
+    mConstrainedMode = isConstrainedHighSpeed;
 }
 
 status_t Camera3Device::RequestThread::queueRequestList(
@@ -4479,6 +4512,17 @@ nsecs_t Camera3Device::RequestThread::calculateMaxExpectedDuration(const camera_
     return maxExpectedDuration;
 }
 
+bool Camera3Device::RequestThread::skipHFRTargetFPSUpdate(int32_t tag,
+        const camera_metadata_ro_entry_t& newEntry, const camera_metadata_entry_t& currentEntry) {
+    if (mConstrainedMode && (ANDROID_CONTROL_AE_TARGET_FPS_RANGE == tag) &&
+            (newEntry.count == currentEntry.count) && (currentEntry.count == 2) &&
+            (currentEntry.data.i32[1] == newEntry.data.i32[1])) {
+        return true;
+    }
+
+    return false;
+}
+
 bool Camera3Device::RequestThread::updateSessionParameters(const CameraMetadata& settings) {
     ATRACE_CALL();
     bool updatesDetected = false;
@@ -4511,8 +4555,10 @@ bool Camera3Device::RequestThread::updateSessionParameters(const CameraMetadata&
 
             if (isDifferent) {
                 ALOGV("%s: Session parameter tag id %d changed", __FUNCTION__, tag);
+                if (!skipHFRTargetFPSUpdate(tag, entry, lastEntry)) {
+                    updatesDetected = true;
+                }
                 mLatestSessionParams.update(entry);
-                updatesDetected = true;
             }
         } else if (lastEntry.count > 0) {
             // Value has been removed
@@ -4672,13 +4718,13 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
 
         // Insert any queued triggers (before metadata is locked)
         status_t res = insertTriggers(captureRequest);
-
         if (res < 0) {
             SET_ERR("RequestThread: Unable to insert triggers "
                     "(capture request %d, HAL device: %s (%d)",
                     halRequest->frame_number, strerror(-res), res);
             return INVALID_OPERATION;
         }
+
         int triggerCount = res;
         bool triggersMixedIn = (triggerCount > 0 || mPrevTriggers > 0);
         mPrevTriggers = triggerCount;
@@ -4696,6 +4742,21 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                         "(capture request %d, HAL device: %s (%d)",
                         halRequest->frame_number, strerror(-res), res);
                 return INVALID_OPERATION;
+            }
+
+            {
+                // Correct metadata regions for distortion correction if enabled
+                sp<Camera3Device> parent = mParent.promote();
+                if (parent != nullptr) {
+                    res = parent->mDistortionMapper.correctCaptureRequest(
+                        &(captureRequest->mSettingsList.begin()->metadata));
+                    if (res != OK) {
+                        SET_ERR("RequestThread: Unable to correct capture requests "
+                                "for lens distortion for request %d: %s (%d)",
+                                halRequest->frame_number, strerror(-res), res);
+                        return INVALID_OPERATION;
+                    }
+                }
             }
 
             /**

@@ -43,6 +43,7 @@
 #include "common/CameraDeviceBase.h"
 #include "device3/StatusTracker.h"
 #include "device3/Camera3BufferManager.h"
+#include "device3/DistortionMapper.h"
 #include "utils/TagMonitor.h"
 #include "utils/LatencyHistogram.h"
 #include <camera_metadata_hidden.h>
@@ -861,6 +862,11 @@ class Camera3Device :
         // Check and update latest session parameters based on the current request settings.
         bool updateSessionParameters(const CameraMetadata& settings);
 
+        // Check whether FPS range session parameter re-configuration is needed in constrained
+        // high speed recording camera sessions.
+        bool skipHFRTargetFPSUpdate(int32_t tag, const camera_metadata_ro_entry_t& newEntry,
+                const camera_metadata_entry_t& currentEntry);
+
         // Re-configure camera using the latest session parameters.
         bool reconfigureCamera();
 
@@ -918,6 +924,8 @@ class Camera3Device :
 
         // Flag indicating if we should prepare video stream for video requests.
         bool               mPrepareVideoStream;
+
+        bool               mConstrainedMode;
 
         static const int32_t kRequestLatencyBinSize = 40; // in ms
         CameraLatencyHistogram mRequestLatency;
@@ -1172,6 +1180,12 @@ class Camera3Device :
 
     /**** End scope for mInFlightLock ****/
 
+    /**
+     * Distortion correction support
+     */
+
+    camera3::DistortionMapper mDistortionMapper;
+
     // Debug tracker for metadata tag value changes
     // - Enabled with the -m <taglist> option to dumpsys, such as
     //   dumpsys -m android.control.aeState,android.control.aeMode
@@ -1183,6 +1197,9 @@ class Camera3Device :
             nsecs_t timestamp, const CameraMetadata& metadata);
 
     metadata_vendor_id_t mVendorTagId;
+
+    // Cached last requested template id
+    int mLastTemplateId;
 
     /**
      * Static callback forwarding methods from HAL to instance

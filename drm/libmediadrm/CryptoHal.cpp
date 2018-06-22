@@ -262,7 +262,22 @@ int32_t CryptoHal::setHeapBase(const sp<IMemoryHeap>& heap) {
 void CryptoHal::clearHeapBase(int32_t seqNum) {
     Mutex::Autolock autoLock(mLock);
 
-    mHeapBases.removeItem(seqNum);
+    /*
+     * Clear the remote shared memory mapping by setting the shared
+     * buffer base to a null hidl_memory.
+     *
+     * TODO: Add a releaseSharedBuffer method in a future DRM HAL
+     * API version to make this explicit.
+     */
+    ssize_t index = mHeapBases.indexOfKey(seqNum);
+    if (index >= 0) {
+        if (mPlugin != NULL) {
+            uint32_t bufferId = mHeapBases[index].getBufferId();
+            Return<void> hResult = mPlugin->setSharedBufferBase(hidl_memory(), bufferId);
+            ALOGE_IF(!hResult.isOk(), "setSharedBufferBase(): remote call failed");
+        }
+        mHeapBases.removeItem(seqNum);
+    }
 }
 
 status_t CryptoHal::toSharedBuffer(const sp<IMemory>& memory, int32_t seqNum, ::SharedBuffer* buffer) {

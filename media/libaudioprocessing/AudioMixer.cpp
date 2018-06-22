@@ -82,6 +82,9 @@ using TYPE_AUX = int32_t; // q4.27
 // Set to default copy buffer size in frames for input processing.
 static const size_t kCopyBufferFrameCount = 256;
 
+#ifdef QTI_RESAMPLER
+#define QTI_RESAMPLER_MAX_SAMPLERATE 192000
+#endif
 namespace android {
 
 // ----------------------------------------------------------------------------
@@ -192,7 +195,6 @@ bool AudioMixer::setChannelMasks(int name,
     // always recompute for both channel masks even if only one has changed.
     const uint32_t trackChannelCount = audio_channel_count_from_out_mask(trackChannelMask);
     const uint32_t mixerChannelCount = audio_channel_count_from_out_mask(mixerChannelMask);
-    const bool mixerChannelCountChanged = track->mMixerChannelCount != mixerChannelCount;
 
     ALOG_ASSERT((trackChannelCount <= MAX_NUM_CHANNELS_TO_DOWNMIX)
             && trackChannelCount
@@ -213,7 +215,7 @@ bool AudioMixer::setChannelMasks(int name,
     // do it after downmix since track format may change!
     track->prepareForReformat();
 
-    if (track->mResampler.get() != nullptr && mixerChannelCountChanged) {
+    if (track->mResampler.get() != nullptr) {
         // resampler channels may have changed.
         const uint32_t resetToSampleRate = track->sampleRate;
         track->mResampler.reset(nullptr);
@@ -694,6 +696,14 @@ bool AudioMixer::Track::setResampler(uint32_t trackSampleRate, uint32_t devSampl
                 // but if none exists, it is the channel count (1 for mono).
                 const int resamplerChannelCount = mDownmixerBufferProvider.get() != nullptr
                         ? mMixerChannelCount : channelCount;
+#ifdef QTI_RESAMPLER
+                if ((trackSampleRate <= QTI_RESAMPLER_MAX_SAMPLERATE) &&
+                       (trackSampleRate > devSampleRate * 2) &&
+                       ((devSampleRate == 48000)||(devSampleRate == 44100)) &&
+                       (resamplerChannelCount <= 2)) {
+                    quality = AudioResampler::QTI_QUALITY;
+                }
+#endif
                 ALOGVV("Creating resampler:"
                         " format(%#x) channels(%d) devSampleRate(%u) quality(%d)\n",
                         mMixerInFormat, resamplerChannelCount, devSampleRate, quality);
@@ -1468,6 +1478,9 @@ void AudioMixer::process__oneTrack16BitsStereoNoResampling()
                 // Note: In case of later int16_t sink output,
                 // conversion and clamping is done by memcpy_to_i16_from_float().
             } while (--outFrames);
+            //assign fout to out, when no more frames are available, so that 0s
+            //can be filled at the right place
+            out = (int32_t *)fout;
             break;
         case AUDIO_FORMAT_PCM_16_BIT:
             if (CC_UNLIKELY(uint32_t(vl) > UNITY_GAIN_INT || uint32_t(vr) > UNITY_GAIN_INT)) {

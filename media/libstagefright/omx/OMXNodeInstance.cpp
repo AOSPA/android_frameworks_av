@@ -358,7 +358,7 @@ OMXNodeInstance::OMXNodeInstance(
       mQuirks(0),
       mBufferIDCount(0),
       mRestorePtsFailed(false),
-      mMaxTimestampGapUs(-1ll),
+      mMaxTimestampGapUs(0ll),
       mPrevOriginalTimeUs(-1ll),
       mPrevModifiedTimeUs(-1ll)
 {
@@ -378,6 +378,9 @@ OMXNodeInstance::OMXNodeInstance(
     mMetadataType[3] = kMetadataBufferTypeInvalid;
     mPortMode[0] = IOMX::kPortModePresetByteBuffer;
     mPortMode[1] = IOMX::kPortModePresetByteBuffer;
+    mPortMode[2] = IOMX::kPortModePresetByteBuffer;
+    mPortMode[3] = IOMX::kPortModePresetByteBuffer;
+
     mSecureBufferType[0] = kSecureBufferTypeUnknown;
     mSecureBufferType[1] = kSecureBufferTypeUnknown;
     mGraphicBufferEnabled[0] = false;
@@ -1093,7 +1096,8 @@ status_t OMXNodeInstance::useBuffer(
         }
 
         case OMXBuffer::kBufferTypeSharedMem: {
-            if (mPortMode[portIndex] != IOMX::kPortModePresetByteBuffer) {
+            if (mPortMode[portIndex] != IOMX::kPortModePresetByteBuffer
+                    && mPortMode[portIndex] != IOMX::kPortModeDynamicANWBuffer) {
                 break;
             }
             return useBuffer_l(portIndex, omxBuffer.mMem, NULL, buffer);
@@ -1108,7 +1112,8 @@ status_t OMXNodeInstance::useBuffer(
 
         case OMXBuffer::kBufferTypeHidlMemory: {
                 if (mPortMode[portIndex] != IOMX::kPortModePresetByteBuffer
-                        && mPortMode[portIndex] != IOMX::kPortModeDynamicANWBuffer) {
+                        && mPortMode[portIndex] != IOMX::kPortModeDynamicANWBuffer
+                        && mPortMode[portIndex] != IOMX::kPortModeDynamicNativeHandle) {
                     break;
                 }
                 sp<IHidlMemory> hidlMemory = mapMemory(omxBuffer.mHidlMemory);
@@ -1123,7 +1128,8 @@ status_t OMXNodeInstance::useBuffer(
             break;
     }
 
-    ALOGE("b/77486542");
+    ALOGE("b/77486542 : bufferType = %d vs. portMode = %d",
+          omxBuffer.mBufferType, mPortMode[portIndex]);
     android_errorWriteLog(0x534e4554, "77486542");
     return INVALID_OPERATION;
 }
@@ -1900,7 +1906,9 @@ status_t OMXNodeInstance::setMaxPtsGapUs(const void *params, size_t size) {
         return BAD_VALUE;
     }
 
-    mMaxTimestampGapUs = (int64_t)((OMX_PARAM_U32TYPE*)params)->nU32;
+    // The incoming number is an int32_t contained in OMX_U32.
+    // Cast to int32_t first then int64_t.
+    mMaxTimestampGapUs = (int32_t)((OMX_PARAM_U32TYPE*)params)->nU32;
 
     return OK;
 }
@@ -1924,12 +1932,26 @@ int64_t OMXNodeInstance::getCodecTimestamp(OMX_TICKS timestamp) {
         ALOGV("IN  timestamp: %lld -> %lld",
             static_cast<long long>(originalTimeUs),
             static_cast<long long>(timestamp));
+    } else if (mMaxTimestampGapUs < 0ll) {
+        /*
+         * Apply a fixed timestamp gap between adjacent frames.
+         *
+         * This is used by scenarios like still image capture where timestamps
+         * on frames could go forward or backward. Some encoders may silently
+         * drop frames when it goes backward (or even stay unchanged).
+         */
+        if (mPrevOriginalTimeUs >= 0ll) {
+            timestamp = mPrevModifiedTimeUs - mMaxTimestampGapUs;
+        }
+        ALOGV("IN  timestamp: %lld -> %lld",
+            static_cast<long long>(originalTimeUs),
+            static_cast<long long>(timestamp));
     }
 
     mPrevOriginalTimeUs = originalTimeUs;
     mPrevModifiedTimeUs = timestamp;
 
-    if (mMaxTimestampGapUs > 0ll && !mRestorePtsFailed) {
+    if (mMaxTimestampGapUs != 0ll && !mRestorePtsFailed) {
         mOriginalTimeUs.add(timestamp, originalTimeUs);
     }
 
@@ -1962,7 +1984,7 @@ status_t OMXNodeInstance::emptyNativeHandleBuffer_l(
 void OMXNodeInstance::codecBufferFilled(omx_message &msg) {
     Mutex::Autolock autoLock(mLock);
 
-    if (mMaxTimestampGapUs <= 0ll || mRestorePtsFailed) {
+    if (mMaxTimestampGapUs == 0ll || mRestorePtsFailed) {
         return;
     }
 

@@ -368,6 +368,9 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
                                                       const char *device_name)
 {
     status_t status;
+    String8 reply;
+    AudioParameter param;
+    int isReconfigA2dpSupported = 0;
 
     ALOGV("handleDeviceConfigChange(() device: 0x%X, address %s name %s",
           device, device_address, device_name);
@@ -382,6 +385,26 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
     if (index < 0) {
         // Nothing to do: device is not connected
         return NO_ERROR;
+    }
+
+    // For offloaded A2DP, Hw modules may have the capability to
+    // configure codecs. Check if any of the loaded hw modules
+    // supports this.
+    // If supported, send a set parameter to configure A2DP codecs
+    // and return. No need to toggle device state.
+    if (device & AUDIO_DEVICE_OUT_ALL_A2DP) {
+        reply = mpClientInterface->getParameters(
+                    AUDIO_IO_HANDLE_NONE,
+                    String8(AudioParameter::keyReconfigA2dpSupported));
+        AudioParameter repliedParameters(reply);
+        repliedParameters.getInt(
+                String8(AudioParameter::keyReconfigA2dpSupported), isReconfigA2dpSupported);
+        if (isReconfigA2dpSupported) {
+            const String8 key(AudioParameter::keyReconfigA2dp);
+            param.add(key, String8("true"));
+            mpClientInterface->setParameters(AUDIO_IO_HANDLE_NONE, param.toString());
+            return NO_ERROR;
+        }
     }
 
     // Toggle the device state: UNAVAILABLE -> AVAILABLE
@@ -1136,7 +1159,9 @@ status_t AudioPolicyManager::startOutput(audio_io_handle_t output,
         }
     } else if (mOutputRoutes.getAndClearRouteChanged(session)) {
         newDevice = getNewOutputDevice(outputDesc, false /*fromCache*/);
-        checkStrategyRoute(getStrategy(stream), output);
+        if (newDevice != outputDesc->device()) {
+            checkStrategyRoute(getStrategy(stream), output);
+        }
     } else {
         newDevice = AUDIO_DEVICE_NONE;
     }
@@ -1387,6 +1412,7 @@ status_t AudioPolicyManager::stopSource(const sp<AudioOutputDescriptor>& outputD
                         (newDevice != desc->device())) {
                     audio_devices_t newDevice2 = getNewOutputDevice(desc, false /*fromCache*/);
                     bool force = desc->device() != newDevice2;
+
                     setOutputDevice(desc,
                                     newDevice2,
                                     force,
@@ -2797,9 +2823,32 @@ status_t AudioPolicyManager::listAudioPorts(audio_port_role_t role,
     return NO_ERROR;
 }
 
-status_t AudioPolicyManager::getAudioPort(struct audio_port *port __unused)
+status_t AudioPolicyManager::getAudioPort(struct audio_port *port)
 {
-    return NO_ERROR;
+    if (port == nullptr || port->id == AUDIO_PORT_HANDLE_NONE) {
+        return BAD_VALUE;
+    }
+    sp<DeviceDescriptor> dev = mAvailableOutputDevices.getDeviceFromId(port->id);
+    if (dev != 0) {
+        dev->toAudioPort(port);
+        return NO_ERROR;
+    }
+    dev = mAvailableInputDevices.getDeviceFromId(port->id);
+    if (dev != 0) {
+        dev->toAudioPort(port);
+        return NO_ERROR;
+    }
+    sp<SwAudioOutputDescriptor> out = mOutputs.getOutputFromId(port->id);
+    if (out != 0) {
+        out->toAudioPort(port);
+        return NO_ERROR;
+    }
+    sp<AudioInputDescriptor> in = mInputs.getInputFromId(port->id);
+    if (in != 0) {
+        in->toAudioPort(port);
+        return NO_ERROR;
+    }
+    return BAD_VALUE;
 }
 
 status_t AudioPolicyManager::createAudioPatch(const struct audio_patch *patch,
@@ -4738,9 +4787,8 @@ void AudioPolicyManager::checkOutputForAllStrategies()
 void AudioPolicyManager::checkA2dpSuspend()
 {
     audio_io_handle_t a2dpOutput = mOutputs.getA2dpOutput();
-    bool a2dpOnPrimary = mOutputs.isA2dpOnPrimary();
 
-    if ((a2dpOutput == 0 || mOutputs.isA2dpOffloadedOnPrimary()) && !a2dpOnPrimary) {
+    if (a2dpOutput == 0 || mOutputs.isA2dpOffloadedOnPrimary()) {
         mA2dpSuspended = false;
         return;
     }
@@ -4770,10 +4818,7 @@ void AudioPolicyManager::checkA2dpSuspend()
                       AUDIO_POLICY_FORCE_BT_SCO) &&
               (mEngine->getPhoneState() != AUDIO_MODE_IN_CALL) &&
               (mEngine->getPhoneState() != AUDIO_MODE_RINGTONE))) {
-
-            if ((a2dpOutput != 0) && !a2dpOnPrimary) {
                 mpClientInterface->restoreOutput(a2dpOutput);
-            }
             mA2dpSuspended = false;
         }
     } else {
@@ -4784,10 +4829,7 @@ void AudioPolicyManager::checkA2dpSuspend()
                       AUDIO_POLICY_FORCE_BT_SCO) ||
               (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL) ||
               (mEngine->getPhoneState() == AUDIO_MODE_RINGTONE))) {
-
-            if ((a2dpOutput != 0) && !a2dpOnPrimary) {
                 mpClientInterface->suspendOutput(a2dpOutput);
-            }
             mA2dpSuspended = true;
         }
     }
@@ -4805,6 +4847,20 @@ audio_devices_t AudioPolicyManager::getNewOutputDevice(const sp<AudioOutputDescr
             ALOGV("getNewOutputDevice() device %08x forced by patch %d",
                   outputDesc->device(), outputDesc->getPatchHandle());
             return outputDesc->device();
+        }
+    }
+
+    // Check if an explicit routing request exists for an active stream on this output and
+    // use it in priority before any other rule
+    for (int stream = 0; stream < AUDIO_STREAM_FOR_POLICY_CNT; stream++) {
+        if (outputDesc->isStreamActive((audio_stream_type_t)stream)) {
+            audio_devices_t forcedDevice =
+                    mOutputRoutes.getActiveDeviceForStream(
+                            (audio_stream_type_t)stream, mAvailableOutputDevices);
+
+            if (forcedDevice != AUDIO_DEVICE_NONE) {
+                return forcedDevice;
+            }
         }
     }
 
@@ -5019,19 +5075,16 @@ uint32_t AudioPolicyManager::setBeaconMute(bool mute) {
 audio_devices_t AudioPolicyManager::getDeviceForStrategy(routing_strategy strategy,
                                                          bool fromCache)
 {
-    // Routing
-    // see if we have an explicit route
-    // scan the whole RouteMap, for each entry, convert the stream type to a strategy
-    // (getStrategy(stream)).
-    // if the strategy from the stream type in the RouteMap is the same as the argument above,
-    // and activity count is non-zero and the device in the route descriptor is available
-    // then select this device.
-    for (size_t routeIndex = 0; routeIndex < mOutputRoutes.size(); routeIndex++) {
-        sp<SessionRoute> route = mOutputRoutes.valueAt(routeIndex);
-        routing_strategy routeStrategy = getStrategy(route->mStreamType);
-        if ((routeStrategy == strategy) && route->isActiveOrChanged() &&
-                (mAvailableOutputDevices.indexOf(route->mDeviceDescriptor) >= 0)) {
-            return route->mDeviceDescriptor->type();
+    // Check if an explicit routing request exists for a stream type corresponding to the
+    // specified strategy and use it in priority over default routing rules.
+    for (int stream = 0; stream < AUDIO_STREAM_FOR_POLICY_CNT; stream++) {
+        if (getStrategy((audio_stream_type_t)stream) == strategy) {
+            audio_devices_t forcedDevice =
+                    mOutputRoutes.getActiveDeviceForStream(
+                            (audio_stream_type_t)stream, mAvailableOutputDevices);
+            if (forcedDevice != AUDIO_DEVICE_NONE) {
+                return forcedDevice;
+            }
         }
     }
 
@@ -5606,7 +5659,10 @@ status_t AudioPolicyManager::checkAndSetVolume(audio_stream_type_t stream,
     }
 
     float volumeDb = computeVolume(stream, index, device);
-    if (outputDesc->isFixedVolume(device)) {
+    if (outputDesc->isFixedVolume(device) ||
+            // Force VoIP volume to max for bluetooth SCO
+            ((stream == AUDIO_STREAM_VOICE_CALL || stream == AUDIO_STREAM_BLUETOOTH_SCO) &&
+             (device & AUDIO_DEVICE_OUT_ALL_SCO) != 0)) {
         volumeDb = 0.0f;
     }
 
