@@ -805,13 +805,20 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
     sp<SwAudioOutputDescriptor> desc;
     if (mPolicyMixes.getOutputForAttr(attributes, uid, desc) == NO_ERROR) {
         ALOG_ASSERT(desc != 0, "Invalid desc returned by getOutputForAttr");
-        if (!audio_has_proportional_frames(config->format)) {
-            return BAD_VALUE;
+        if ((((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) != 0) ||
+                  ((flags & AUDIO_OUTPUT_FLAG_DIRECT) != 0)) &&
+                  (attributes.usage == AUDIO_USAGE_MEDIA)) {
+            ALOGW("getOutputForAttr() select legacy media compress offload or direct output");
+        } else {
+            if (!audio_has_proportional_frames(config->format)) {
+                return BAD_VALUE;
+            }
+
+            *stream = streamTypefromAttributesInt(&attributes);
+            *output = desc->mIoHandle;
+            ALOGV("getOutputForAttr() returns output %d", *output);
+            return NO_ERROR;
         }
-        *stream = streamTypefromAttributesInt(&attributes);
-        *output = desc->mIoHandle;
-        ALOGV("getOutputForAttr() returns output %d", *output);
-        return NO_ERROR;
     }
     if (attributes.usage == AUDIO_USAGE_VIRTUAL_SOURCE) {
         ALOGW("getOutputForAttr() no policy mix found for usage AUDIO_USAGE_VIRTUAL_SOURCE");
@@ -4558,6 +4565,7 @@ void AudioPolicyManager::closeInput(audio_io_handle_t input)
 
     nextAudioPortGeneration();
 
+    audio_devices_t device = inputDesc->mDevice;
     ssize_t index = mAudioPatches.indexOfKey(inputDesc->getPatchHandle());
     if (index >= 0) {
         sp<AudioPatch> patchDesc = mAudioPatches.valueAt(index);
@@ -4568,6 +4576,12 @@ void AudioPolicyManager::closeInput(audio_io_handle_t input)
 
     mpClientInterface->closeInput(input);
     mInputs.removeItem(input);
+
+    audio_devices_t primaryInputDevices = availablePrimaryInputDevices();
+    if (((device & primaryInputDevices & ~AUDIO_DEVICE_BIT_IN) != 0) &&
+            mInputs.activeInputsCountOnDevices(primaryInputDevices) == 0) {
+        SoundTrigger::setCaptureState(false);
+    }
 }
 
 SortedVector<audio_io_handle_t> AudioPolicyManager::getOutputsForDevice(
