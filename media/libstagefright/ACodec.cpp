@@ -1263,6 +1263,7 @@ status_t ACodec::allocateOutputBuffersFromNativeWindow() {
         info.mRenderInfo = NULL;
         info.mGraphicBuffer = graphicBuffer;
         info.mNewGraphicBuffer = false;
+        info.mDequeuedAt = mDequeueCounter;
 
         // TODO: We shouln't need to create MediaCodecBuffer. In metadata mode
         //       OMX doesn't use the shared memory buffer, but some code still
@@ -2579,6 +2580,8 @@ status_t ACodec::configureTemporalLayers(
         layerParams.nPLayerCountActual = numLayers - numBLayers;
         layerParams.nBLayerCountActual = numBLayers;
         layerParams.bBitrateRatiosSpecified = OMX_FALSE;
+        layerParams.nLayerCountMax = numLayers - numBLayers;
+        layerParams.nBLayerCountMax = numBLayers;
 
         err = mOMXNode->setParameter(
                 (OMX_INDEXTYPE)OMX_IndexParamAndroidVideoTemporalLayering,
