@@ -141,7 +141,7 @@ static const uint32_t kMaxNormalSinkBufferSizeMs = 24;
 static const uint32_t kMinNormalCaptureBufferSizeMs = 12;
 
 // Offloaded output thread standby delay: allows track transition without going to standby
-static const nsecs_t kOffloadStandbyDelayNs = seconds(1);
+static const nsecs_t kOffloadStandbyDelayNs = seconds(3);
 
 // Direct output thread minimum sleep time in idle or active(underrun) state
 static const nsecs_t kDirectMinSleepTimeUs = 10000;
@@ -6097,6 +6097,12 @@ void AudioFlinger::MixerThread::onIdleMixer()
         state->mColdFutexAddr = &mFastMixerFutex;
         state->mColdGen++;
         mFastMixerFutex = 0;
+
+        // cold idle fastmixer only after draining a whole pipe sink
+        uint32_t delayMs =
+            (uint32_t)((mNormalFrameCount + mFrameCount) * 1000 / mSampleRate);
+        usleep(delayMs * 1000);
+
         sq->end();
         sq->push(FastMixerStateQueue::BLOCK_UNTIL_ACKED);
     } else {
