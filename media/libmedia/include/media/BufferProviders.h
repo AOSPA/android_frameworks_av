@@ -78,11 +78,6 @@ public:
 
     // Overrides PassthruBufferProvider
     virtual void reset();
-    void setBufferProvider(AudioBufferProvider *p) override {
-        if (mTrackBufferProvider == p) return;
-        mBuffer.frameCount = 0;
-        PassthruBufferProvider::setBufferProvider(p);
-    }
 
     // this function should be supplied by the derived class.  It converts
     // #frames in the *src pointer to the *dst pointer.  It is public because
@@ -191,11 +186,6 @@ public:
 
     // Overrides PassthruBufferProvider
     virtual void reset();
-    void setBufferProvider(AudioBufferProvider *p) override {
-        if (mTrackBufferProvider == p) return;
-        mBuffer.frameCount = 0;
-        PassthruBufferProvider::setBufferProvider(p);
-    }
 
     virtual status_t setPlaybackRate(const AudioPlaybackRate &playbackRate);
 
