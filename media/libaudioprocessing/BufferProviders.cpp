@@ -63,8 +63,7 @@ CopyBufferProvider::CopyBufferProvider(size_t inputFrameSize,
 
 CopyBufferProvider::~CopyBufferProvider()
 {
-    ALOGD("%s(%p) %zu %p %p",
-            __func__, this, mBuffer.frameCount, mTrackBufferProvider, mLocalBufferData);
+    ALOGV("~CopyBufferProvider(%p)", this);
     if (mBuffer.frameCount != 0) {
         mTrackBufferProvider->releaseBuffer(&mBuffer);
     }
@@ -132,14 +131,6 @@ void CopyBufferProvider::reset()
         mTrackBufferProvider->releaseBuffer(&mBuffer);
     }
     mConsumed = 0;
-}
-
-void CopyBufferProvider::setBufferProvider(AudioBufferProvider *p) {
-    ALOGD("%s(%p): mTrackBufferProvider:%p  mBuffer.frameCount:%zu",
-            __func__, p, mTrackBufferProvider, mBuffer.frameCount);
-    if (mTrackBufferProvider == p) return;
-    mBuffer.frameCount = 0;
-    PassthruBufferProvider::setBufferProvider(p);
 }
 
 DownmixerBufferProvider::DownmixerBufferProvider(
@@ -535,14 +526,6 @@ void TimestretchBufferProvider::releaseBuffer(AudioBufferProvider::Buffer *pBuff
 void TimestretchBufferProvider::reset()
 {
     mRemaining = 0;
-}
-
-void TimestretchBufferProvider::setBufferProvider(AudioBufferProvider *p) {
-    ALOGD("%s(%p): mTrackBufferProvider:%p  mBuffer.frameCount:%zu",
-            __func__, p, mTrackBufferProvider, mBuffer.frameCount);
-    if (mTrackBufferProvider == p) return;
-    mBuffer.frameCount = 0;
-    PassthruBufferProvider::setBufferProvider(p);
 }
 
 status_t TimestretchBufferProvider::setPlaybackRate(const AudioPlaybackRate &playbackRate)
