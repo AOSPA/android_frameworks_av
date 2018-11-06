@@ -128,9 +128,8 @@ protected:
 
     sp<AMessage> mMetaKeys;
 
-    void setStartTimestampUs(int64_t timeUs, int64_t *trackStartTime);
+    void setStartTimestampUs(int64_t timeUs);
     int64_t getStartTimestampUs();  // Not const
-    int64_t getStartTimeOffsetTimeUs(int64_t *startTime);
     status_t startTracks(MetaData *params);
     size_t numTracks();
     int64_t estimateMoovBoxSize(int32_t bitRate);
