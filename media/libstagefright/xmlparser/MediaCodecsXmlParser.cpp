@@ -139,7 +139,11 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
         if (!strncmp(path.c_str(), "/vendor/etc", strlen("/vendor/etc"))){
             strlcpy(file_path, path.c_str(), PROP_VALUE_MAX);
             property_get("ro.board.platform", platform, NULL);
-            if (!strcmp(platform, "sdm710") ||
+            if (!strcmp(platform, "qcs605")) {
+                strlcpy(file_path, "/vendor/etc/media_codecs_qcs605_v0.xml",
+                            PROP_VALUE_MAX);
+                parseTopLevelXMLFile(file_path, false);
+           } else if (!strcmp(platform, "sdm710") ||
                    !strcmp(platform, "msmpeafowl")) {   //platform is SDM710
                 if (property_get("vendor.media.sdm710.version", value, "0") &&
                     (atoi(value) == 0)) {               // version is 0
@@ -149,7 +153,8 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
                 } else {
                     parseTopLevelXMLFile(path.c_str(), false);
                 }
-            } else if (!strcmp(platform, "talos")) {
+            } else if (!strcmp(platform, "talos") ||
+                    !strcmp(platform, "sm6150")) {
                 if (property_get("vendor.media.sm6150.version", value, "0") &&
                     (atoi(value) == 1)) {
                     strlcpy(file_path, "/vendor/etc/media_codecs_vendor.xml",
@@ -187,6 +192,17 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
                 ALOGE("SDM429 prop_value = %s, file_path = %s", value, file_path);
                 path = file_path;
                 parseTopLevelXMLFile(path.c_str(), false);
+            } else if (!strcmp(platform, "sdm660")) {
+                if (property_get("vendor.media.sdm660.version", value, "0") &&
+                    (atoi(value) == 1)){
+                    strlcpy(file_path, "/vendor/etc/media_codecs_sdm660_v1.xml",
+                            PROP_VALUE_MAX);
+                } else {
+                    strlcpy(file_path, "/vendor/etc/media_codecs_vendor.xml",
+                            PROP_VALUE_MAX);
+                }
+                path = file_path;
+                parseTopLevelXMLFile(path.c_str(), false);
             } else {
                 parseTopLevelXMLFile(path.c_str(), false);
             }
@@ -198,7 +214,10 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
     if (findFileInDirs(searchDirs, performanceXmlName, &path)) {
         if (!strncmp(path.c_str(), "/vendor/etc", strlen("/vendor/etc"))){
             property_get("ro.board.platform", platform, NULL);
-            if (!strcmp(platform, "sdm710") ||
+            if (!strcmp(platform, "qcs605")) {
+                strlcpy(file_path, "/vendor/etc/media_codecs_performance_qcs605_v0.xml",
+                            PROP_VALUE_MAX);
+            } else if (!strcmp(platform, "sdm710") ||
                    !strcmp(platform, "msmpeafowl")) {
                 if (property_get("vendor.media.sdm710.version", value, "0") &&
                     (atoi(value) == 0)) {
@@ -208,7 +227,8 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
                     strlcpy(file_path, "/vendor/etc/media_codecs_performance.xml",
                             PROP_VALUE_MAX);
                 }
-            } else if (!strcmp(platform, "talos")) {
+            } else if (!strcmp(platform, "talos") ||
+                    !strcmp(platform, "sm6150")) {
                 if (property_get("vendor.media.sm6150.version", value, "0") &&
                     (atoi(value) == 1)) {
                     strlcpy(file_path, "/vendor/etc/media_codecs_performance.xml",
@@ -228,6 +248,15 @@ MediaCodecsXmlParser::MediaCodecsXmlParser(
                             PROP_VALUE_MAX);
                 } else {
                     strlcpy(file_path, "/vendor/etc/media_codecs_performance_8953.xml",
+                            PROP_VALUE_MAX);
+                }
+            } else if (!strcmp(platform, "sdm660")) {
+                if (property_get("vendor.media.sdm660.version", value, "0") &&
+                    (atoi(value) == 1)){
+                    strlcpy(file_path, "/vendor/etc/media_codecs_performance_sdm660_v1.xml",
+                            PROP_VALUE_MAX);
+                } else {
+                    strlcpy(file_path, "/vendor/etc/media_codecs_performance.xml",
                             PROP_VALUE_MAX);
                 }
             } else {
