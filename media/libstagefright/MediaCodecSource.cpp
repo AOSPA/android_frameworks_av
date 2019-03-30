@@ -197,9 +197,6 @@ void MediaCodecSource::Puller::stop() {
         queue->flush(); // flush any unprocessed pulled buffers
     }
 
-    if (interrupt) {
-        interruptSource();
-    }
 }
 
 void MediaCodecSource::Puller::interruptSource() {
@@ -724,7 +721,7 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
             if (mIsVideo) {
                 mDecodingTimeQueue.push_back(timeUs);
                 if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
-                    AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue);
+                    AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue, mInputBufferTimeOffsetUs);
                 }
             } else {
 #if DEBUG_DRIFT_TIME
@@ -1081,6 +1078,8 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         if (generation != mGeneration) {
              break;
         }
+
+        releaseEncoder();
 
         if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
             ALOGV("source (%s) stopping", mIsVideo ? "video" : "audio");
