@@ -21,6 +21,7 @@
 #include "HwModule.h"
 #include "AudioGain.h"
 #include "TypeConverter.h"
+#include <cutils/properties.h>
 
 namespace android {
 
@@ -38,7 +39,8 @@ bool IOProfile::isCompatibleProfile(audio_devices_t device,
                                     // FIXME type punning here
                                     uint32_t flags,
                                     bool exactMatchRequiredForInputFlags,
-                                    bool checkExactFormat) const
+                                    bool checkExactFormat,
+                                    bool checkExactChannelMask) const
 {
     const bool isPlaybackThread =
             getType() == AUDIO_PORT_TYPE_MIX && getRole() == AUDIO_PORT_ROLE_SOURCE;
@@ -58,10 +60,13 @@ bool IOProfile::isCompatibleProfile(audio_devices_t device,
         }
     }
 
-    if (!audio_is_valid_format(format) ||
-            (isPlaybackThread && (samplingRate == 0 || !audio_is_output_channel(channelMask))) ||
-            (isRecordThread && (!audio_is_input_channel(channelMask)))) {
-         return false;
+    if ((!(audio_is_valid_format(format))||
+         (isPlaybackThread && (samplingRate == 0 || !audio_is_output_channel(channelMask))) ||
+         (isRecordThread && (!audio_is_input_channel(channelMask)))) &&
+         ((property_get_bool("audio.aptx.aac_latm.decoder.enabled", false)) &&
+         (!(format == AUDIO_FORMAT_AAC_LATM_LC || format == AUDIO_FORMAT_APTX)))) {
+             ALOGE("Invalid audio format");
+             return false;
     }
 
     audio_format_t myUpdatedFormat = format;
@@ -70,7 +75,7 @@ bool IOProfile::isCompatibleProfile(audio_devices_t device,
     if (isRecordThread)
     {
         if (checkCompatibleAudioProfile(
-                myUpdatedSamplingRate, myUpdatedChannelMask, myUpdatedFormat, checkExactFormat) != NO_ERROR) {
+                myUpdatedSamplingRate, myUpdatedChannelMask, myUpdatedFormat, checkExactFormat, checkExactChannelMask) != NO_ERROR) {
             return false;
         }
     } else {
