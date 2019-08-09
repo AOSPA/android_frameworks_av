@@ -61,10 +61,10 @@ void ExtensionsLoader<T>::loadLib() {
         if (!mLibHandle) {
             mLibHandle = ::dlopen(CUSTOMIZATION_LIB_NAME, RTLD_LAZY);
             if (!mLibHandle) {
-                ALOGV("%s", dlerror());
+                ALOGE("%s: %s", CUSTOMIZATION_LIB_NAME, dlerror());
                 return;
             }
-            ALOGV("Opened %s", CUSTOMIZATION_LIB_NAME);
+            ALOGI("Opened %s", CUSTOMIZATION_LIB_NAME);
         }
 }
 
