@@ -721,7 +721,7 @@ status_t MediaCodecSource::feedEncoderInputBuffers() {
             if (mIsVideo) {
                 mDecodingTimeQueue.push_back(timeUs);
                 if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
-                    AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue, mInputBufferTimeOffsetUs);
+                    AVUtils::get()->addDecodingTimesFromBatch(mbuf, mDecodingTimeQueue);
                 }
             } else {
 #if DEBUG_DRIFT_TIME
