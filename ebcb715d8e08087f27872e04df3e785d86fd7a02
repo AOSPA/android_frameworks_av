@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "0ac180c6_b913844b",
+        "filename": "media/libmediaplayerservice/nuplayer/NuPlayerDecoder.cpp",
+        "patchSetId": 1
+      },
+      "lineNbr": 462,
+      "author": {
+        "id": 1000178
+      },
+      "writtenOn": "2020-01-04T08:40:02Z",
+      "side": 0,
+      "message": "This is the only thing I can guess breaking audio, the rest is practically the same",
+      "revId": "ebcb715d8e08087f27872e04df3e785d86fd7a02",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad",
+      "unresolved": true
+    }
+  ]
+}
