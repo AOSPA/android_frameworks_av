@@ -76,8 +76,6 @@
 #include "utils/TagMonitor.h"
 #include "utils/CameraThreadState.h"
 
-#include <vendor/pa/camera/motor/1.0/ICameraMotor.h>
-
 namespace {
     const char* kPermissionServiceName = "permission";
 }; // namespace anonymous
@@ -93,7 +91,6 @@ using hardware::ICameraServiceProxy;
 using hardware::ICameraServiceListener;
 using hardware::camera::common::V1_0::CameraDeviceStatus;
 using hardware::camera::common::V1_0::TorchModeStatus;
-using vendor::pa::camera::motor::V1_0::ICameraMotor;
 
 // ----------------------------------------------------------------------------
 // Logging support -- this is for debugging only
@@ -1526,11 +1523,6 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
         } else {
             // Otherwise, add client to active clients list
             finishConnectLocked(client, partial);
-
-            sp<ICameraMotor> cameraMotor = ICameraMotor::getService();
-            if (cameraMotor != nullptr) {
-                cameraMotor->onConnect(cameraId.string());
-            }
         }
     } // lock is destroyed, allow further connect calls
 
@@ -2397,11 +2389,6 @@ binder::Status CameraService::BasicClient::disconnect() {
         return res;
     }
     mDisconnected = true;
-
-    sp<ICameraMotor> cameraMotor = ICameraMotor::getService();
-    if (cameraMotor != nullptr) {
-        cameraMotor->onDisconnect(mCameraIdStr.string());
-    }
 
     sCameraService->removeByClient(this);
     sCameraService->logDisconnected(mCameraIdStr, mClientPid, String8(mClientPackageName));
