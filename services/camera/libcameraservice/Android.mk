@@ -16,6 +16,12 @@ LOCAL_PATH:= $(call my-dir)
 
 include $(CLEAR_VARS)
 
+# Camera service source
+
+ifneq ($(TARGET_FACE_UNLOCK_CAMERA_ID),)
+    LOCAL_CFLAGS += -DFACE_UNLOCK_CAMERA_ID=$(TARGET_FACE_UNLOCK_CAMERA_ID)
+endif
+
 # Build tests
 
 include $(LOCAL_PATH)/tests/Android.mk
