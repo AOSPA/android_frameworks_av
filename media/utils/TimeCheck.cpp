@@ -38,7 +38,6 @@ TimeCheck::TimeCheck(const char *tag, bool systemReady)
         timeOutMs = kDefaultTimeOutMs;
         ALOGI("System is ready use default timeout: %d msec", timeOutMs);
     }
-    ALOGI("command is %s and timeout: %d", tag, timeOutMs);
     mEndTimeNs = getTimeCheckThread()->startMonitoring(tag, timeOutMs);
 }
 
@@ -91,10 +90,10 @@ bool TimeCheck::TimeCheckThread::threadLoop()
         if (waitTimeNs > 0) {
             status = mCond.waitRelative(mMutex, waitTimeNs);
         }
-    }
-    if (status != NO_ERROR) {
-        LOG_EVENT_STRING(LOGTAG_AUDIO_BINDER_TIMEOUT, tag);
-        LOG_ALWAYS_FATAL("TimeCheck timeout for %s", tag);
+        if (status != NO_ERROR) {
+            LOG_EVENT_STRING(LOGTAG_AUDIO_BINDER_TIMEOUT, tag);
+            LOG_ALWAYS_FATAL("TimeCheck timeout for %s", tag);
+        }
     }
     return true;
 }
