@@ -2,14 +2,23 @@
 cc_library_shared {
     name: "libmediatranscodingservice",
 
-    srcs: ["MediaTranscodingService.cpp"],
+    srcs: [
+        "MediaTranscodingService.cpp",
+        "SimulatedTranscoder.cpp",
+    ],
 
     shared_libs: [
         "libbase",
+        "libbinder",
         "libbinder_ndk",
+        "libcutils",
         "liblog",
         "libmediatranscoding",
         "libutils",
+    ],
+
+    export_shared_lib_headers: [
+        "libmediatranscoding",
     ],
 
     static_libs: [
@@ -43,18 +52,6 @@ cc_binary {
     static_libs: [
         "mediatranscoding_aidl_interface-ndk_platform",
     ],
-
-    target: {
-        android: {
-            product_variables: {
-                malloc_not_svelte: {
-                    // Scudo increases memory footprint, so only enable on
-                    // non-svelte devices.
-                    shared_libs: ["libc_scudo"],
-                },
-            },
-        },
-    },
 
     init_rc: ["mediatranscoding.rc"],
 

@@ -8,6 +8,12 @@ cc_library_headers {
         "com.android.media.swcodec",
     ],
     min_sdk_version: "29",
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 cc_library_static {
@@ -34,6 +40,12 @@ cc_library_static {
         "libstagefright_foundation",
         "libutils"
     ],
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 cc_library_static {
@@ -58,9 +70,18 @@ cc_library_static {
     },
 
     header_libs: [
+        "libaudioclient_headers",
         "libstagefright_foundation_headers",
+        "media_ndk_headers",
     ],
-    shared_libs: ["libmediandk"],
+
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
+
     export_include_dirs: ["include"],
 }
 
@@ -132,8 +153,10 @@ cc_library_static {
 
     header_libs: [
         "libaudioclient_headers",
-        "libmedia_headers",
+        "libbase_headers",
+        "libmedia_datasource_headers",
         "media_ndk_headers",
+        "media_plugin_headers",
     ],
 
     cflags: [
@@ -150,6 +173,18 @@ cc_library_static {
             "unsigned-integer-overflow",
             "signed-integer-overflow",
         ],
+    },
+
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+        linux: {
+            cflags: [
+                "-DDISABLE_AUDIO_SYSTEM_OFFLOAD",
+            ],
+        }
     },
 }
 

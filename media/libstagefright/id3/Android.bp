@@ -5,7 +5,9 @@ cc_library_static {
     srcs: ["ID3.cpp"],
 
     header_libs: [
-        "libmedia_headers",
+        "libmedia_datasource_headers",
+        "libstagefright_foundation_headers",
+        "libstagefright_headers",
         "media_ndk_headers",
     ],
 
@@ -18,6 +20,12 @@ cc_library_static {
             "signed-integer-overflow",
         ],
         cfi: true,
+    },
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
     },
 }
 

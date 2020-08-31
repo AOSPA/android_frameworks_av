@@ -1055,6 +1055,11 @@ struct MyHandler : public AHandler {
                     break;
                 }
 
+                int32_t rtcpEvent;
+                if (msg->findInt32("rtcp-event", &rtcpEvent)) {
+                    break;
+                }
+
                 ++mNumAccessUnitsReceived;
                 postAccessUnitTimeoutCheck();
 

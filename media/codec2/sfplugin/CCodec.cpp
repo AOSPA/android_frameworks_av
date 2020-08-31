@@ -1816,15 +1816,18 @@ void CCodec::onMessageReceived(const sp<AMessage> &msg) {
                         // move all info into output-stream #0 domain
                         updates.emplace_back(C2Param::CopyAsStream(*info, true /* output */, stream));
                     }
-                    for (const C2ConstGraphicBlock &block : buf->data().graphicBlocks()) {
+
+                    const std::vector<C2ConstGraphicBlock> blocks = buf->data().graphicBlocks();
+                    // for now only do the first block
+                    if (!blocks.empty()) {
                         // ALOGV("got output buffer with crop %u,%u+%u,%u and size %u,%u",
                         //      block.crop().left, block.crop().top,
                         //      block.crop().width, block.crop().height,
                         //      block.width(), block.height());
+                        const C2ConstGraphicBlock &block = blocks[0];
                         updates.emplace_back(new C2StreamCropRectInfo::output(stream, block.crop()));
                         updates.emplace_back(new C2StreamPictureSizeInfo::output(
                                 stream, block.crop().width, block.crop().height));
-                        break; // for now only do the first block
                     }
                     ++stream;
                 }
@@ -1836,7 +1839,7 @@ void CCodec::onMessageReceived(const sp<AMessage> &msg) {
                 // copy standard infos to graphic buffers if not already present (otherwise, we
                 // may overwrite the actual intermediate value with a final value)
                 stream = 0;
-                const static std::vector<C2Param::Index> stdGfxInfos = {
+                const static C2Param::Index stdGfxInfos[] = {
                     C2StreamRotationInfo::output::PARAM_TYPE,
                     C2StreamColorAspectsInfo::output::PARAM_TYPE,
                     C2StreamDataSpaceInfo::output::PARAM_TYPE,

@@ -8,6 +8,7 @@ cc_library_headers {
 
 cc_defaults {
     name: "libstagefright_foundation_defaults",
+    host_supported: true,
     double_loadable: true,
     include_dirs: [
         "frameworks/av/include",
@@ -21,7 +22,6 @@ cc_defaults {
     ],
 
     header_libs: [
-        "libhardware_headers",
         "libstagefright_foundation_headers",
         "media_ndk_headers",
         "media_plugin_headers",
@@ -74,6 +74,9 @@ cc_defaults {
             cflags: [
                 "-DNO_IMEMORY",
             ],
+        },
+        darwin: {
+            enabled: false,
         },
     },
 

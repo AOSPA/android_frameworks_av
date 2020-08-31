@@ -595,7 +595,10 @@ AudioFlinger::PlaybackThread::Track::Track(
             + "_" + std::to_string(mId) + "_T");
 #endif
 
-    if (channelMask & AUDIO_CHANNEL_HAPTIC_ALL) {
+    if (thread->supportsHapticPlayback()) {
+        // If the track is attached to haptic playback thread, it is potentially to have
+        // HapticGenerator effect, which will generate haptic data, on the track. In that case,
+        // external vibration is always created for all tracks attached to haptic playback thread.
         mAudioVibrationController = new AudioVibrationController(this);
         mExternalVibration = new os::ExternalVibration(
                 mUid, "" /* pkg */, mAttr, mAudioVibrationController);
@@ -1915,6 +1918,25 @@ void AudioFlinger::PlaybackThread::PatchTrack::releaseBuffer(Proxy::Buffer* buff
 {
     mProxy->releaseBuffer(buffer);
     restartIfDisabled();
+
+    // Check if the PatchTrack has enough data to write once in releaseBuffer().
+    // If not, prevent an underrun from occurring by moving the track into FS_FILLING;
+    // this logic avoids glitches when suspending A2DP with AudioPlaybackCapture.
+    // TODO: perhaps underrun avoidance could be a track property checked in isReady() instead.
+    if (mFillingUpStatus == FS_ACTIVE
+            && audio_is_linear_pcm(mFormat)
+            && !isOffloadedOrDirect()) {
+        if (sp<ThreadBase> thread = mThread.promote();
+            thread != 0) {
+            PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
+            const size_t frameCount = playbackThread->frameCount() * sampleRate()
+                    / playbackThread->sampleRate();
+            if (framesReady() < frameCount) {
+                ALOGD("%s(%d) Not enough data, wait for buffer to fill", __func__, mId);
+                mFillingUpStatus = FS_FILLING;
+            }
+        }
+    }
 }
 
 void AudioFlinger::PlaybackThread::PatchTrack::restartIfDisabled()

@@ -31,8 +31,8 @@
 #include <mediautils/TimeCheck.h>
 #include <utils/Log.h>
 
-// from LOCAL_C_INCLUDES
-#include "aaudio/AAudioTesting.h"
+// from include_dirs
+#include "aaudio/AAudioTesting.h" // aaudio_policy_t, AAUDIO_PROP_MMAP_POLICY, AAUDIO_POLICY_*
 #include "AudioFlinger.h"
 #include "AudioPolicyService.h"
 #include "AAudioService.h"

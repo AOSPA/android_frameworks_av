@@ -3,6 +3,7 @@ cc_library_static {
     vendor_available: true,
     min_sdk_version: "29",
 
+    host_supported:true,
     srcs: [
         "src/pvmp3_normalize.cpp",
         "src/pvmp3_alias_reduction.cpp",
@@ -73,6 +74,12 @@ cc_library_static {
         "-DOSCL_UNUSED_ARG(x)=(void)(x)",
         "-Werror",
     ],
+
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 //###############################################################################

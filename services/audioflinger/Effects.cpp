@@ -25,6 +25,7 @@
 #include <utils/Log.h>
 #include <system/audio_effects/effect_aec.h>
 #include <system/audio_effects/effect_dynamicsprocessing.h>
+#include <system/audio_effects/effect_hapticgenerator.h>
 #include <system/audio_effects/effect_ns.h>
 #include <system/audio_effects/effect_visualizer.h>
 #include <audio_utils/channels.h>
@@ -868,6 +869,11 @@ status_t AudioFlinger::EffectModule::configure()
         }
 #endif
     }
+    if (isHapticGenerator()) {
+        audio_channel_mask_t hapticChannelMask = mCallback->hapticChannelMask();
+        mConfig.inputCfg.channels |= hapticChannelMask;
+        mConfig.outputCfg.channels |= hapticChannelMask;
+    }
     mInChannelCountRequested =
             audio_channel_count_from_out_mask(mConfig.inputCfg.channels);
     mOutChannelCountRequested =
@@ -1509,6 +1515,42 @@ bool AudioFlinger::EffectModule::isOffloaded() const
 {
     Mutex::Autolock _l(mLock);
     return mOffloaded;
+}
+
+/*static*/
+bool AudioFlinger::EffectModule::isHapticGenerator(const effect_uuid_t *type) {
+    return memcmp(type, FX_IID_HAPTICGENERATOR, sizeof(effect_uuid_t)) == 0;
+}
+
+bool AudioFlinger::EffectModule::isHapticGenerator() const {
+    return isHapticGenerator(&mDescriptor.type);
+}
+
+status_t AudioFlinger::EffectModule::setHapticIntensity(int id, int intensity)
+{
+    if (mStatus != NO_ERROR) {
+        return mStatus;
+    }
+    if (!isHapticGenerator()) {
+        ALOGW("Should not set haptic intensity for effects that are not HapticGenerator");
+        return INVALID_OPERATION;
+    }
+
+    uint32_t buf32[sizeof(effect_param_t) / sizeof(uint32_t) + 3];
+    effect_param_t *param = (effect_param_t*) buf32;
+    param->psize = sizeof(int32_t);
+    param->vsize = sizeof(int32_t) * 2;
+    *(int32_t*)param->data = HG_PARAM_HAPTIC_INTENSITY;
+    *((int32_t*)param->data + 1) = id;
+    *((int32_t*)param->data + 2) = intensity;
+    uint32_t size = sizeof(int32_t);
+    status_t status = command(
+            EFFECT_CMD_SET_PARAM, sizeof(effect_param_t) + param->psize + param->vsize,
+            param, &size, &param->status);
+    if (status == NO_ERROR) {
+        status = param->status;
+    }
+    return status;
 }
 
 static std::string dumpInOutBuffer(bool isInput, const sp<EffectBufferHalInterface> &buffer) {
@@ -2374,6 +2416,25 @@ void AudioFlinger::EffectChain::resetVolume_l()
     }
 }
 
+// containsHapticGeneratingEffect_l must be called with ThreadBase::mLock or EffectChain::mLock held
+bool AudioFlinger::EffectChain::containsHapticGeneratingEffect_l()
+{
+    for (size_t i = 0; i < mEffects.size(); ++i) {
+        if (mEffects[i]->isHapticGenerator()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void AudioFlinger::EffectChain::setHapticIntensity_l(int id, int intensity)
+{
+    Mutex::Autolock _l(mLock);
+    for (size_t i = 0; i < mEffects.size(); ++i) {
+        mEffects[i]->setHapticIntensity(id, intensity);
+    }
+}
+
 void AudioFlinger::EffectChain::syncHalEffectsState()
 {
     Mutex::Autolock _l(mLock);
@@ -2826,6 +2887,14 @@ uint32_t AudioFlinger::EffectChain::EffectCallback::channelCount() const {
         return 0;
     }
     return t->channelCount();
+}
+
+audio_channel_mask_t AudioFlinger::EffectChain::EffectCallback::hapticChannelMask() const {
+    sp<ThreadBase> t = mThread.promote();
+    if (t == nullptr) {
+        return AUDIO_CHANNEL_NONE;
+    }
+    return t->hapticChannelMask();
 }
 
 size_t AudioFlinger::EffectChain::EffectCallback::frameCount() const {

@@ -29,6 +29,7 @@
 #include <linux/futex.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <cutils/bitops.h>
 #include <cutils/properties.h>
 #include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
@@ -988,15 +989,16 @@ void AudioFlinger::ThreadBase::acquireWakeLock_l()
     if (mPowerManager != 0) {
         sp<IBinder> binder = new BBinder();
         // Uses AID_AUDIOSERVER for wakelock.  updateWakeLockUids_l() updates with client uids.
-        status_t status = mPowerManager->acquireWakeLock(POWERMANAGER_PARTIAL_WAKE_LOCK,
-                    binder,
+        binder::Status status = mPowerManager->acquireWakeLockAsync(binder,
+                    POWERMANAGER_PARTIAL_WAKE_LOCK,
                     getWakeLockTag(),
                     String16("audioserver"),
-                    true /* FIXME force oneway contrary to .aidl */);
-        if (status == NO_ERROR) {
+                    {} /* workSource */,
+                    {} /* historyTag */);
+        if (status.isOk()) {
             mWakeLockToken = binder;
         }
-        ALOGV("acquireWakeLock_l() %s status %d", mThreadName, status);
+        ALOGV("acquireWakeLock_l() %s status %d", mThreadName, status.exceptionCode());
     }
 
     gBoottime.acquire(mWakeLockToken);
@@ -1016,8 +1018,7 @@ void AudioFlinger::ThreadBase::releaseWakeLock_l()
     if (mWakeLockToken != 0) {
         ALOGV("releaseWakeLock_l() %s", mThreadName);
         if (mPowerManager != 0) {
-            mPowerManager->releaseWakeLock(mWakeLockToken, 0,
-                    true /* FIXME force oneway contrary to .aidl */);
+            mPowerManager->releaseWakeLockAsync(mWakeLockToken, 0);
         }
         mWakeLockToken.clear();
     }
@@ -1031,7 +1032,7 @@ void AudioFlinger::ThreadBase::getPowerManager_l() {
         if (binder == 0) {
             ALOGW("Thread %s cannot connect to the power manager service", mThreadName);
         } else {
-            mPowerManager = interface_cast<IPowerManager>(binder);
+            mPowerManager = interface_cast<os::IPowerManager>(binder);
             binder->linkToDeath(mDeathRecipient);
         }
     }
@@ -1058,10 +1059,9 @@ void AudioFlinger::ThreadBase::updateWakeLockUids_l(const SortedVector<uid_t> &u
     }
     if (mPowerManager != 0) {
         std::vector<int> uidsAsInt(uids.begin(), uids.end()); // powermanager expects uids as ints
-        status_t status = mPowerManager->updateWakeLockUids(
-                mWakeLockToken, uidsAsInt.size(), uidsAsInt.data(),
-                true /* FIXME force oneway contrary to .aidl */);
-        ALOGV("updateWakeLockUids_l() %s status %d", mThreadName, status);
+        binder::Status status = mPowerManager->updateWakeLockUidsAsync(
+                mWakeLockToken, uidsAsInt);
+        ALOGV("updateWakeLockUids_l() %s status %d", mThreadName, status.exceptionCode());
     }
 }
 
@@ -1246,6 +1246,11 @@ status_t AudioFlinger::RecordThread::checkEffectCompatibility_l(
             return BAD_VALUE;
         }
     }
+
+    if (EffectModule::isHapticGenerator(&desc->type)) {
+        ALOGE("%s(): HapticGenerator is not supported in RecordThread", __func__);
+        return BAD_VALUE;
+    }
     return NO_ERROR;
 }
 
@@ -1263,6 +1268,12 @@ status_t AudioFlinger::PlaybackThread::checkEffectCompatibility_l(
     // always allow effects without processing load or latency
     if ((desc->flags & EFFECT_FLAG_NO_PROCESS_MASK) == EFFECT_FLAG_NO_PROCESS) {
         return NO_ERROR;
+    }
+
+    if (EffectModule::isHapticGenerator(&desc->type) && mHapticChannelCount == 0) {
+        ALOGW("%s: thread doesn't support haptic playback while the effect is HapticGenerator",
+                __func__);
+        return BAD_VALUE;
     }
 
     switch (mType) {
@@ -2533,15 +2544,17 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
                     track->sharedBuffer() != 0 ? Track::FS_FILLED : Track::FS_FILLING;
         }
 
-        if ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
-                && mHapticChannelMask != AUDIO_CHANNEL_NONE) {
+        sp<EffectChain> chain = getEffectChain_l(track->sessionId());
+        if (mHapticChannelMask != AUDIO_CHANNEL_NONE
+                && ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
+                        || (chain != nullptr && chain->containsHapticGeneratingEffect_l()))) {
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.
             mLock.unlock();
             const int intensity = AudioFlinger::onExternalVibrationStart(
                     track->getExternalVibration());
             mLock.lock();
-            track->setHapticIntensity(static_cast<AudioMixer::haptic_intensity_t>(intensity));
+            track->setHapticIntensity(static_cast<os::HapticScale>(intensity));
             // Haptic playback should be enabled by vibrator service.
             if (track->getHapticPlaybackEnabled()) {
                 // Disable haptic playback of all active track to ensure only
@@ -2550,12 +2563,16 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
                     t->setHapticPlaybackEnabled(false);
                 }
             }
+
+            // Set haptic intensity for effect
+            if (chain != nullptr) {
+                chain->setHapticIntensity_l(track->id(), intensity);
+            }
         }
 
         track->mResetDone = false;
         track->mPresentationCompleteFrames = 0;
         mActiveTracks.add(track);
-        sp<EffectChain> chain = getEffectChain_l(track->sessionId());
         if (chain != 0) {
             ALOGV("addTrack_l() starting track on chain %p for session %d", chain.get(),
                     track->sessionId());
@@ -3501,7 +3518,7 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                     // latency of 5 seconds).
                     const double minLatency = 0., maxLatency = 5000.;
                     if (latencyMs >= minLatency && latencyMs <= maxLatency) {
-                        ALOGV("new downstream latency %lf ms", latencyMs);
+                        ALOGVV("new downstream latency %lf ms", latencyMs);
                     } else {
                         ALOGD("out of range downstream latency %lf ms", latencyMs);
                         if (latencyMs < minLatency) latencyMs = minLatency;
@@ -3550,7 +3567,7 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                         mSampleRate);
 
                 if (isTimestampCorrectionEnabled()) {
-                    ALOGV("TS_BEFORE: %d %lld %lld", id(),
+                    ALOGVV("TS_BEFORE: %d %lld %lld", id(),
                             (long long)timestamp.mTimeNs[ExtendedTimestamp::LOCATION_KERNEL],
                             (long long)timestamp.mPosition[ExtendedTimestamp::LOCATION_KERNEL]);
                     auto correctedTimestamp = mTimestampVerifier.getLastCorrectedTimestamp();
@@ -3558,7 +3575,7 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                             = correctedTimestamp.mFrames;
                     timestamp.mTimeNs[ExtendedTimestamp::LOCATION_KERNEL]
                             = correctedTimestamp.mTimeNs;
-                    ALOGV("TS_AFTER: %d %lld %lld", id(),
+                    ALOGVV("TS_AFTER: %d %lld %lld", id(),
                             (long long)timestamp.mTimeNs[ExtendedTimestamp::LOCATION_KERNEL],
                             (long long)timestamp.mPosition[ExtendedTimestamp::LOCATION_KERNEL]);
 
@@ -3755,9 +3772,15 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
             // Determine which session to pick up haptic data.
             // This must be done under the same lock as prepareTracks_l().
+            // The haptic data from the effect is at a higher priority than the one from track.
             // TODO: Write haptic data directly to sink buffer when mixing.
             if (mHapticChannelCount > 0 && effectChains.size() > 0) {
                 for (const auto& track : mActiveTracks) {
+                    sp<EffectChain> effectChain = getEffectChain_l(track->sessionId());
+                    if (effectChain != nullptr && effectChain->containsHapticGeneratingEffect_l()) {
+                        activeHapticSessionId = track->sessionId();
+                        break;
+                    }
                     if (track->getHapticPlaybackEnabled()) {
                         activeHapticSessionId = track->sessionId();
                         break;
@@ -4136,13 +4159,20 @@ void AudioFlinger::PlaybackThread::removeTracks_l(const Vector< sp<Track> >& tra
             // remove from our tracks vector
             removeTrack_l(track);
         }
-        if ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
-                && mHapticChannelCount > 0) {
+        if (mHapticChannelCount > 0 &&
+                ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
+                        || (chain != nullptr && chain->containsHapticGeneratingEffect_l()))) {
             mLock.unlock();
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.
             AudioFlinger::onExternalVibrationStop(track->getExternalVibration());
             mLock.lock();
+
+            // When the track is stop, set the haptic intensity as MUTE
+            // for the HapticGenerator effect.
+            if (chain != nullptr) {
+                chain->setHapticIntensity_l(track->id(), static_cast<int>(os::HapticScale::MUTE));
+            }
         }
     }
 }
@@ -4485,7 +4515,7 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
                                                                      // audio to FastMixer
         fastTrack->mFormat = mFormat; // mPipeSink format for audio to FastMixer
         fastTrack->mHapticPlaybackEnabled = mHapticChannelMask != AUDIO_CHANNEL_NONE;
-        fastTrack->mHapticIntensity = AudioMixer::HAPTIC_SCALE_NONE;
+        fastTrack->mHapticIntensity = os::HapticScale::NONE;
         fastTrack->mGeneration++;
         state->mFastTracksGen++;
         state->mTrackMask = 1;
@@ -7002,7 +7032,7 @@ AudioFlinger::RecordThread::RecordThread(const sp<AudioFlinger>& audioFlinger,
     snprintf(mThreadName, kThreadNameLength, "AudioIn_%X", id);
     mNBLogWriter = audioFlinger->newWriter_l(kLogSize, mThreadName);
 
-    if (mInput != nullptr && mInput->audioHwDev != nullptr) {
+    if (mInput->audioHwDev != nullptr) {
         mIsMsdDevice = strcmp(
                 mInput->audioHwDev->moduleName(), AUDIO_HARDWARE_MODULE_ID_MSD) == 0;
     }
@@ -7494,12 +7524,12 @@ reacquire_wakelock:
 
                 // Correct timestamps
                 if (isTimestampCorrectionEnabled()) {
-                    ALOGV("TS_BEFORE: %d %lld %lld",
+                    ALOGVV("TS_BEFORE: %d %lld %lld",
                             id(), (long long)time, (long long)position);
                     auto correctedTimestamp = mTimestampVerifier.getLastCorrectedTimestamp();
                     position = correctedTimestamp.mFrames;
                     time = correctedTimestamp.mTimeNs;
-                    ALOGV("TS_AFTER: %d %lld %lld",
+                    ALOGVV("TS_AFTER: %d %lld %lld",
                             id(), (long long)time, (long long)position);
                 }
 
@@ -9511,6 +9541,11 @@ status_t AudioFlinger::MmapThread::checkEffectCompatibility_l(
 
     // Only allow effects without processing load or latency
     if ((desc->flags & EFFECT_FLAG_NO_PROCESS_MASK) != EFFECT_FLAG_NO_PROCESS) {
+        return BAD_VALUE;
+    }
+
+    if (EffectModule::isHapticGenerator(&desc->type)) {
+        ALOGE("%s(): HapticGenerator is not supported for MmapThread", __func__);
         return BAD_VALUE;
     }
 

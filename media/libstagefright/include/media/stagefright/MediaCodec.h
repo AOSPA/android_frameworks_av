@@ -83,6 +83,13 @@ struct MediaCodec : public AHandler {
         BUFFER_FLAG_DATACORRUPT = 0x2000,
     };
 
+    enum CVODegree {
+        CVO_DEGREE_0   = 0,
+        CVO_DEGREE_90  = 90,
+        CVO_DEGREE_180 = 180,
+        CVO_DEGREE_270 = 270,
+    };
+
     enum {
         CB_INPUT_AVAILABLE = 1,
         CB_OUTPUT_AVAILABLE = 2,

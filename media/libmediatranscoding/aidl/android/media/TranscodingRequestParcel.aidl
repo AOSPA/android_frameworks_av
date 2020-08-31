@@ -17,7 +17,9 @@
 package android.media;
 
 import android.media.TranscodingJobPriority;
+import android.media.TranscodingTestConfig;
 import android.media.TranscodingType;
+import android.media.TranscodingVideoTrackFormat;
 
 /**
  * TranscodingRequest contains the desired configuration for the transcoding.
@@ -27,9 +29,14 @@ import android.media.TranscodingType;
 //TODO(hkuang): Implement the parcelable.
 parcelable TranscodingRequestParcel {
     /**
-     * Name of file to be transcoded.
+     * The absolute file path of the source file.
      */
-    @utf8InCpp String fileName;
+    @utf8InCpp String sourceFilePath;
+
+    /**
+     * The absolute file path of the destination file.
+     */
+    @utf8InCpp String destinationFilePath;
 
     /**
      * Type of the transcoding.
@@ -37,14 +44,12 @@ parcelable TranscodingRequestParcel {
     TranscodingType transcodingType;
 
     /**
-     * Input source file descriptor.
+     * Requested video track format for the transcoding.
+     * Note that the transcoding service will try to fulfill the requested format as much as
+     * possbile, while subject to hardware and software limitation. The final video track format
+     * will be available in the TranscodingJobParcel when the job is finished.
      */
-    ParcelFileDescriptor inFd;
-
-    /**
-     * Output transcoded file descriptor.
-     */
-    ParcelFileDescriptor outFd;
+    @nullable TranscodingVideoTrackFormat requestedVideoTrackFormat;
 
     /**
      * Priority of this transcoding. Service will schedule the transcoding based on the priority.
@@ -53,6 +58,30 @@ parcelable TranscodingRequestParcel {
 
     /**
      * Whether to receive update on progress and change of awaitNumJobs.
+     * Default to false.
      */
-    boolean requestUpdate;
+    boolean requestProgressUpdate = false;
+
+    /**
+     * Whether to receive update on job's start/stop/pause/resume.
+     * Default to false.
+     */
+    boolean requestJobEventUpdate = false;
+
+    /**
+     * Whether this request is for testing.
+     */
+    boolean isForTesting = false;
+
+    /**
+     * Test configuration. This will be available only when isForTesting is set to true.
+     */
+    @nullable TranscodingTestConfig testConfig;
+
+     /**
+      * Whether to get the stats of the transcoding.
+      * If this is enabled, the TranscodingJobStats will be returned in TranscodingResultParcel
+      * upon transcoding finishes.
+      */
+    boolean enableStats = false;
 }
