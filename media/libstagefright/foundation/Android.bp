@@ -120,6 +120,7 @@ cc_library {
         extends: "libstagefright_foundation",
     },
     defaults: ["libstagefright_foundation_defaults"],
+    host_supported: false,
     min_sdk_version: "29",
     cflags: [
         "-Wno-multichar",

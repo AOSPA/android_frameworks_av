@@ -54,6 +54,7 @@ cc_library {
         extends: "libmedia_helper",
     },
     defaults: ["libmedia_helper_defaults"],
+    host_supported: false,
     cflags: [
         "-D__AUDIO_VNDK_EXT__",
     ],
