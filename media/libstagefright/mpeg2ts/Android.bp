@@ -33,10 +33,6 @@ cc_defaults {
         "android.hidl.allocator@1.0",
     ],
 
-    export_shared_lib_headers: [
-        "libcrypto",
-    ],
-
     header_libs: [
         "libmedia_datasource_headers",
         "libaudioclient_headers",
