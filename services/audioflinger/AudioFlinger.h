@@ -106,6 +106,7 @@ namespace android {
 class AudioMixer;
 class AudioBuffer;
 class AudioResampler;
+class AppTrackData;
 class DeviceHalInterface;
 class DevicesFactoryHalCallback;
 class DevicesFactoryHalInterface;
@@ -328,6 +329,14 @@ private:
     // for as long as possible.  The memory is only freed when it is needed for another log writer.
     Vector< sp<NBLog::Writer> > mUnregisteredWriters;
     Mutex               mUnregisteredWritersLock;
+
+public:
+    status_t    setAppVolume(const String8& packageName, const float value);
+    status_t    setAppMute(const String8& packageName, const bool value);
+    status_t    listAppTrackDatas(unsigned int *num, AppTrackData *vols);
+
+private:
+    std::map<String8, AppTrackData>  mAppTrackDataConfigs;
 
 public:
 

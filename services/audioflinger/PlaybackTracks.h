@@ -136,9 +136,16 @@ public:
     sp<media::VolumeShaper::State> getVolumeShaperState(int id);
     sp<media::VolumeHandler>   getVolumeHandler() { return mVolumeHandler; }
     /** Set the computed normalized final volume of the track.
-     * !masterMute * masterVolume * streamVolume * averageLRVolume */
+     * !masterMute * !appMuted * masterVolume * streamVolume * averageLRVolume * appVolume */
     void                setFinalVolume(float volume);
     float               getFinalVolume() const { return mFinalVolume; }
+
+    void                setAppVolume(float volume);
+    float               getAppVolume() const { return mAppVolume; }
+    void                setAppMute(bool val);
+    bool                isAppMuted() { return mAppMuted; }
+
+    String8             getPackageName() const { return mPackageName; }
 
     /** @return true if the track has changed (metadata or volume) since
      *          the last time this function was called,
@@ -288,6 +295,8 @@ private:
         for (auto& tp : mTeePatches) { f(tp.patchTrack); }
     };
 
+    String8             mPackageName;
+
     // The following fields are only for fast tracks, and should be in a subclass
     int                 mFastIndex; // index within FastMixerState::mFastTracks[];
                                     // either mFastIndex == -1 if not isFastTrack()
@@ -300,7 +309,9 @@ private:
     volatile float      mCachedVolume;  // combined master volume and stream type volume;
                                         // 'volatile' means accessed without lock or
                                         // barrier, but is read/written atomically
-    float               mFinalVolume; // combine master volume, stream type volume and track volume
+    float               mFinalVolume; // combine master volume, stream type volume and track volume and relative volume
+    float               mAppVolume;  // for separate process volume control
+    bool                mAppMuted;
     sp<AudioTrackServerProxy>  mAudioTrackServerProxy;
     bool                mResumeToStopping; // track was paused in stopping state.
     bool                mFlushHwPending; // track requests for thread flush

@@ -91,7 +91,10 @@ enum {
     SET_MASTER_BALANCE,
     GET_MASTER_BALANCE,
     SET_EFFECT_SUSPENDED,
-    SET_AUDIO_HAL_PIDS
+    SET_AUDIO_HAL_PIDS,
+    SET_APP_VOLUME,
+    SET_APP_MUTE,
+    LIST_ACTIVE_APP_VOLUMES
 };
 
 #define MAX_ITEMS_PER_LIST 1024
@@ -274,6 +277,48 @@ public:
         }
         *balance = reply.readFloat();
         return NO_ERROR;
+    }
+
+    virtual status_t setAppVolume(const String8& packageName, const float value) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IAudioFlinger::getInterfaceDescriptor());
+        data.writeString8(packageName);
+        data.writeFloat(value);
+        remote()->transact(SET_APP_VOLUME, data, &reply);
+        return reply.readInt32();
+    }
+
+    virtual status_t setAppMute(const String8& packageName, const bool mute) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IAudioFlinger::getInterfaceDescriptor());
+        data.writeString8(packageName);
+        data.writeInt32(mute);
+        remote()->transact(SET_APP_MUTE, data, &reply);
+        return reply.readInt32();
+    }
+
+    virtual status_t listAppTrackDatas(unsigned int *num_volumes, AppTrackData *volumes)
+    {
+        if (num_volumes == NULL || (*num_volumes != 0 && volumes == NULL)) {
+            return BAD_VALUE;
+        }
+        Parcel data, reply;
+        data.writeInterfaceToken(IAudioFlinger::getInterfaceDescriptor());
+        unsigned int numVolsReq = (volumes == NULL) ? 0 : *num_volumes;
+        data.writeInt32(numVolsReq);
+        status_t status = remote()->transact(LIST_ACTIVE_APP_VOLUMES, data, &reply);
+        if (status != NO_ERROR ||
+                (status = (status_t)reply.readInt32()) != NO_ERROR) {
+            return status;
+        }
+        *num_volumes = (unsigned int)reply.readInt32();
+        if (numVolsReq > *num_volumes) {
+            numVolsReq = *num_volumes;
+        }
+        if (numVolsReq > 0) {
+            reply.read(volumes, numVolsReq * sizeof(AppTrackData));
+        }
+        return status;
     }
 
     virtual status_t setStreamVolume(audio_stream_type_t stream, float value,
@@ -1622,6 +1667,45 @@ status_t BnAudioFlinger::onTransact(
             reply->writeInt32(setAudioHalPids(pids));
             return NO_ERROR;
         }
+        case SET_APP_VOLUME: {
+            CHECK_INTERFACE(IAudioFlinger, data, reply);
+            String8 packageName = data.readString8();
+            float volume = data.readFloat();
+            reply->writeInt32( setAppVolume(packageName, volume) );
+            return NO_ERROR;
+        }
+        case SET_APP_MUTE: {
+            CHECK_INTERFACE(IAudioFlinger, data, reply);
+            String8 packageName = data.readString8();
+            bool muted = data.readInt32();
+            reply->writeInt32( setAppMute(packageName, muted) );
+            return NO_ERROR;
+        }
+        case LIST_ACTIVE_APP_VOLUMES: {
+            CHECK_INTERFACE(IAudioFlinger, data, reply);
+            unsigned int numReq = data.readInt32();
+            if (numReq > MAX_ITEMS_PER_LIST) {
+                numReq = MAX_ITEMS_PER_LIST;
+            }
+            unsigned int numVol = numReq;
+            AppTrackData *vols = new (std::nothrow) AppTrackData[numVol];
+            if (vols == NULL) {
+                reply->writeInt32(NO_MEMORY);
+                reply->writeInt32(0);
+                return NO_ERROR;
+            }
+            status_t status = listAppTrackDatas(&numVol, vols);
+            reply->writeInt32(status);
+            reply->writeInt32(numVol);
+            if (status == NO_ERROR) {
+                if (numReq > numVol) {
+                    numReq = numVol;
+                }
+                reply->write(vols, numReq * sizeof(AppTrackData));
+            }
+            delete[] vols;
+            return NO_ERROR;
+        } break;
         default:
             return BBinder::onTransact(code, data, reply, flags);
     }

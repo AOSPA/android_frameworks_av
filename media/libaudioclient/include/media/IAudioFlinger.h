@@ -30,6 +30,7 @@
 #include <media/DeviceDescriptorBase.h>
 #include <media/IAudioTrack.h>
 #include <media/IAudioFlingerClient.h>
+#include <media/AppTrackData.h>
 #include <system/audio.h>
 #include <system/audio_effect.h>
 #include <system/audio_policy.h>
@@ -540,6 +541,10 @@ public:
     virtual status_t getMicrophones(std::vector<media::MicrophoneInfo> *microphones) = 0;
 
     virtual status_t setAudioHalPids(const std::vector<pid_t>& pids) = 0;
+
+    virtual status_t setAppVolume(const String8& packageName, const float value) = 0;
+    virtual status_t setAppMute(const String8& packageName, const bool value) = 0;
+    virtual status_t listAppTrackDatas(unsigned int *num, AppTrackData *vols) = 0;
 };
 
 

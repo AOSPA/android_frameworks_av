@@ -1686,6 +1686,27 @@ status_t AudioSystem::registerSoundTriggerCaptureStateListener(
     return NO_ERROR;
 }
 
+status_t AudioSystem::setAppVolume(const String8& packageName, const float volume)
+{
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == 0) return PERMISSION_DENIED;
+    return af->setAppVolume(packageName, volume);
+}
+
+status_t AudioSystem::setAppMute(const String8& packageName, const bool mute)
+{
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == 0) return PERMISSION_DENIED;
+    return af->setAppMute(packageName, mute);
+}
+
+status_t AudioSystem::listAppTrackDatas(unsigned int *num, AppTrackData *vols)
+{
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == 0) return PERMISSION_DENIED;
+    return af->listAppTrackDatas(num, vols);
+}
+
 // ---------------------------------------------------------------------------
 
 int AudioSystem::AudioPolicyServiceClient::addAudioPortCallback(

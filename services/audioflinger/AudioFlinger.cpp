@@ -25,6 +25,7 @@
 #include "Configuration.h"
 #include <dirent.h>
 #include <math.h>
+#include <stdio.h>
 #include <signal.h>
 #include <string>
 #include <sys/time.h>
@@ -863,6 +864,15 @@ sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
         output.portId = portId;
 
         if (lStatus == NO_ERROR) {
+
+            // set volume
+            String8 trackCreatorPackage = track->getPackageName();
+            if (!trackCreatorPackage.isEmpty() && mAppTrackDataConfigs.find(trackCreatorPackage) != mAppTrackDataConfigs.end()) {
+                AppTrackData config = mAppTrackDataConfigs[trackCreatorPackage];
+                track->setAppMute(config.muted);
+                track->setAppVolume(config.volume);
+            }
+
             // Connect secondary outputs. Failure on a secondary output must not imped the primary
             // Any secondary output setup failure will lead to a desync between the AP and AF until
             // the track is destroyed.
@@ -1723,6 +1733,77 @@ uint32_t AudioFlinger::getInputFramesLost(audio_io_handle_t ioHandle) const
         return recordThread->getInputFramesLost();
     }
     return 0;
+}
+
+status_t AudioFlinger::listAppTrackDatas(unsigned int *num, AppTrackData *vols)
+{
+    if (num == NULL || (*num != 0 && vols == NULL)) {
+        return BAD_VALUE;
+    }
+    std::set<AppTrackData> volSet;
+    Mutex::Autolock _l(mLock);
+    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+        sp<PlaybackThread> thread = mPlaybackThreads.valueAt(i);
+        thread->listAppTrackDatas(volSet);
+    }
+
+    if (vols == NULL || *num == 0) {
+        *num = volSet.size();
+    } else {
+        if (*num > volSet.size()) {
+            *num = volSet.size();
+        }
+        size_t written = 0;
+        for (AppTrackData vol : volSet) {
+            if (written >= *num) break;
+            strcpy(vols[written].packageName, vol.packageName);
+            vols[written].muted = vol.muted;
+            vols[written].active = vol.active;
+            vols[written++].volume = vol.volume;
+        }
+    }
+
+    return NO_ERROR;
+}
+
+status_t AudioFlinger::setAppVolume(const String8& packageName, const float value)
+{
+    Mutex::Autolock _l(mLock);
+    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+        sp<PlaybackThread> t = mPlaybackThreads.valueAt(i);
+        t->setAppVolume(packageName, value);
+    }
+
+    if (mAppTrackDataConfigs.find(packageName) == mAppTrackDataConfigs.end()) {
+        AppTrackData vol;
+        strcpy(vol.packageName, packageName.c_str());
+        vol.volume = value;
+        vol.muted = false;
+        mAppTrackDataConfigs[packageName] = vol;
+    } else {
+        mAppTrackDataConfigs[packageName].volume = value;
+    }
+    return NO_ERROR;
+}
+
+status_t AudioFlinger::setAppMute(const String8& packageName, const bool value)
+{
+    Mutex::Autolock _l(mLock);
+    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+        sp<PlaybackThread> t = mPlaybackThreads.valueAt(i);
+        t->setAppMute(packageName, value);
+    }
+    
+    if (mAppTrackDataConfigs.find(packageName) == mAppTrackDataConfigs.end()) {
+        AppTrackData vol;
+        strcpy(vol.packageName, packageName.c_str());
+        vol.volume = 1.0f;
+        vol.muted = value;
+        mAppTrackDataConfigs[packageName] = vol;
+    } else {
+        mAppTrackDataConfigs[packageName].muted = value;
+    }
+    return NO_ERROR;
 }
 
 status_t AudioFlinger::setVoiceVolume(float value)
