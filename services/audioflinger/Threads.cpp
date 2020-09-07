@@ -2416,13 +2416,13 @@ ssize_t AudioFlinger::PlaybackThread::Tracks<T>::remove(const sp<T> &track)
 void AudioFlinger::PlaybackThread::listAppTrackDatas(std::set<AppTrackData> &cup)
 {
     Mutex::Autolock _l(mLock);
-    for (sp<Track> track : mTracks) {
+    for (sp<Track> track : mActiveTracks) {
         if (!track->getPackageName().isEmpty()) {
             AppTrackData av;
             strcpy(av.packageName, track->getPackageName().c_str());
             av.muted = track->isAppMuted();
             av.volume = track->getAppVolume();
-            av.active = mActiveTracks.indexOf(track) >= 0;
+            av.active = true;
             cup.insert(av);
         }
     }
