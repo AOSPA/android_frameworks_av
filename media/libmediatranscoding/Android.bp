@@ -21,22 +21,35 @@ aidl_interface {
     local_include_dir: "aidl",
     srcs: [
         "aidl/android/media/IMediaTranscodingService.aidl",
-        "aidl/android/media/ITranscodingServiceClient.aidl",
+        "aidl/android/media/ITranscodingClient.aidl",
+        "aidl/android/media/ITranscodingClientCallback.aidl",
         "aidl/android/media/TranscodingErrorCode.aidl",
         "aidl/android/media/TranscodingJobPriority.aidl",
+        "aidl/android/media/TranscodingJobStats.aidl",
         "aidl/android/media/TranscodingType.aidl",
         "aidl/android/media/TranscodingVideoCodecType.aidl",
+        "aidl/android/media/TranscodingVideoTrackFormat.aidl",
         "aidl/android/media/TranscodingJobParcel.aidl",
         "aidl/android/media/TranscodingRequestParcel.aidl",
         "aidl/android/media/TranscodingResultParcel.aidl",
+        "aidl/android/media/TranscodingTestConfig.aidl",
     ],
+    backend:
+    {
+        java: {
+            enabled: true,
+        },
+    },
 }
 
 cc_library_shared {
     name: "libmediatranscoding",
 
     srcs: [
-        "TranscodingClientManager.cpp"
+        "TranscodingClientManager.cpp",
+        "TranscodingJobScheduler.cpp",
+        "TranscodingUidPolicy.cpp",
+        "TranscoderWrapper.cpp",
     ],
 
     shared_libs: [
@@ -44,6 +57,9 @@ cc_library_shared {
         "libcutils",
         "liblog",
         "libutils",
+        "libmediatranscoder",
+        "libbinder",
+        "libmediandk",
     ],
 
     export_include_dirs: ["include"],
@@ -53,9 +69,13 @@ cc_library_shared {
     ],
 
     cflags: [
-        "-Werror",
-        "-Wno-error=deprecated-declarations",
         "-Wall",
+        "-Werror",
+        "-Wformat",
+        "-Wno-error=deprecated-declarations",
+        "-Wthread-safety",
+        "-Wunused",
+        "-Wunreachable-code",
     ],
 
     sanitize: {

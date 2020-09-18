@@ -16,6 +16,8 @@
 
 package android.media;
 
+import android.media.TranscodingJobStats;
+
 /**
  * Result of the transcoding.
  *
@@ -34,5 +36,9 @@ parcelable TranscodingResultParcel {
      */
     int actualBitrateBps;
 
-    // TODO(hkuang): Add more fields.
+    /**
+     * Stats of the transcoding job. This will only be available when client requests to get the
+     * stats in TranscodingRequestParcel.
+     */
+    @nullable TranscodingJobStats jobStats;
 }

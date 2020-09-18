@@ -272,6 +272,7 @@ public:
                 // Called by AudioFlinger::frameCount(audio_io_handle_t output) and effects,
                 // and returns the [normal mix] buffer's frame count.
     virtual     size_t      frameCount() const = 0;
+    virtual     audio_channel_mask_t hapticChannelMask() const { return AUDIO_CHANNEL_NONE; }
     virtual     uint32_t    latency_l() const { return 0; }
     virtual     void        setVolumeForOutput_l(float left __unused, float right __unused) const {}
 
@@ -478,6 +479,25 @@ public:
                 void onEffectEnable(const sp<EffectModule>& effect);
                 void onEffectDisable();
 
+                // invalidateTracksForAudioSession_l must be called with holding mLock.
+    virtual     void invalidateTracksForAudioSession_l(audio_session_t sessionId __unused) const { }
+                // Invalidate all the tracks with the given audio session.
+                void invalidateTracksForAudioSession(audio_session_t sessionId) const {
+                    Mutex::Autolock _l(mLock);
+                    invalidateTracksForAudioSession_l(sessionId);
+                }
+
+                template <typename T>
+                void invalidateTracksForAudioSession_l(audio_session_t sessionId,
+                                                       const T& tracks) const {
+                    for (size_t i = 0; i < tracks.size(); ++i) {
+                        const sp<TrackBase>& track = tracks[i];
+                        if (sessionId == track->sessionId()) {
+                            track->invalidate();
+                        }
+                    }
+                }
+
 protected:
 
                 // entry describing an effect being suspended in mSuspendedSessions keyed vector
@@ -575,7 +595,7 @@ protected:
 
                 static const int        kThreadNameLength = 16; // prctl(PR_SET_NAME) limit
                 char                    mThreadName[kThreadNameLength]; // guaranteed NUL-terminated
-                sp<IPowerManager>       mPowerManager;
+                sp<os::IPowerManager>   mPowerManager;
                 sp<IBinder>             mWakeLockToken;
                 const sp<PMDeathRecipient> mDeathRecipient;
                 // list of suspended effects per session and per type. The first (outer) vector is
@@ -940,6 +960,13 @@ public:
                                         && outDeviceTypes().count(mTimestampCorrectedDevice) != 0;
                             }
 
+                audio_channel_mask_t hapticChannelMask() const override {
+                                         return mHapticChannelMask;
+                                     }
+                bool supportsHapticPlayback() const {
+                    return (mHapticChannelMask & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE;
+                }
+
 protected:
     // updated by readOutputParameters_l()
     size_t                          mNormalFrameCount;  // normal mixer and effects
@@ -1061,6 +1088,11 @@ protected:
                                     && (mOutput->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC); }
 
                 uint32_t    trackCountForUid_l(uid_t uid) const;
+
+                void        invalidateTracksForAudioSession_l(
+                                    audio_session_t sessionId) const override {
+                                ThreadBase::invalidateTracksForAudioSession_l(sessionId, mTracks);
+                            }
 
 private:
 

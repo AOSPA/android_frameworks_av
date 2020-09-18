@@ -51,7 +51,66 @@ ARTPAssembler::AssemblyStatus AAVCAssembler::addNALUnit(
         return NOT_ENOUGH_DATA;
     }
 
+    sp<ABuffer> buffer = *queue->begin();
+    int32_t rtpTime;
+    CHECK(buffer->meta()->findInt32("rtp-time", &rtpTime));
+    int64_t startTime = source->mFirstSysTime / 1000;
+    int64_t nowTime = ALooper::GetNowUs() / 1000;
+    int64_t playedTime = nowTime - startTime;
+    int32_t playedTimeRtp = source->mFirstRtpTime +
+        (((uint32_t)playedTime) * (source->mClockRate / 1000));
+    const int32_t jitterTime = source->mClockRate / 5;  // 200ms
+    int32_t expiredTimeInJb = rtpTime + jitterTime;
+    bool isExpired = expiredTimeInJb <= (playedTimeRtp);
+    bool isTooLate200 = expiredTimeInJb < (playedTimeRtp - jitterTime);
+    bool isTooLate300 = expiredTimeInJb < (playedTimeRtp - (jitterTime * 3 / 2));
+
+    if (mShowQueue && mShowQueueCnt < 20) {
+        showCurrentQueue(queue);
+        ALOGD("start=%lld, now=%lld, played=%lld", (long long)startTime,
+                (long long)nowTime, (long long)playedTime);
+        ALOGD("rtp-time(JB)=%d, played-rtp-time(JB)=%d, expired-rtp-time(JB)=%d isExpired=%d",
+                rtpTime, playedTimeRtp, expiredTimeInJb, isExpired);
+        mShowQueueCnt++;
+    }
+
+    ALOGV("start=%lld, now=%lld, played=%lld", (long long)startTime,
+            (long long)nowTime, (long long)playedTime);
+    ALOGV("rtp-time(JB)=%d, played-rtp-time(JB)=%d, expired-rtp-time(JB)=%d isExpired=%d",
+            rtpTime, playedTimeRtp, expiredTimeInJb, isExpired);
+
+    if (!isExpired) {
+        ALOGV("buffering in jitter buffer.");
+        return NOT_ENOUGH_DATA;
+    }
+
+    if (isTooLate200)
+        ALOGW("=== WARNING === buffer arrived 200ms late. === WARNING === ");
+
+    if (isTooLate300) {
+        ALOGW("buffer arrived too late. 300ms..");
+        ALOGW("start=%lld, now=%lld, played=%lld", (long long)startTime,
+                (long long)nowTime, (long long)playedTime);
+        ALOGW("rtp-time(JB)=%d, plyed-rtp-time(JB)=%d, exp-rtp-time(JB)=%d diff=%lld isExpired=%d",
+                rtpTime, playedTimeRtp, expiredTimeInJb,
+                ((long long)playedTimeRtp) - expiredTimeInJb, isExpired);
+        ALOGW("expected Seq. NO =%d", buffer->int32Data());
+
+        List<sp<ABuffer> >::iterator it = queue->begin();
+        while (it != queue->end()) {
+            CHECK((*it)->meta()->findInt32("rtp-time", &rtpTime));
+            if (rtpTime + jitterTime >= playedTimeRtp) {
+                mNextExpectedSeqNo = (*it)->int32Data();
+                break;
+            }
+            it++;
+        }
+        source->noticeAbandonBuffer();
+    }
+
     if (mNextExpectedSeqNoValid) {
+        int32_t size = queue->size();
+        int32_t cnt = 0;
         List<sp<ABuffer> >::iterator it = queue->begin();
         while (it != queue->end()) {
             if ((uint32_t)(*it)->int32Data() >= mNextExpectedSeqNo) {
@@ -59,14 +118,19 @@ ARTPAssembler::AssemblyStatus AAVCAssembler::addNALUnit(
             }
 
             it = queue->erase(it);
+            cnt++;
         }
 
+        if (cnt > 0) {
+            source->noticeAbandonBuffer(cnt);
+            ALOGW("delete %d of %d buffers", cnt, size);
+        }
         if (queue->empty()) {
             return NOT_ENOUGH_DATA;
         }
     }
 
-    sp<ABuffer> buffer = *queue->begin();
+    buffer = *queue->begin();
 
     if (!mNextExpectedSeqNoValid) {
         mNextExpectedSeqNoValid = true;
@@ -290,6 +354,7 @@ ARTPAssembler::AssemblyStatus AAVCAssembler::addFragmentedNALUnit(
     unit->data()[0] = (nri << 5) | nalType;
 
     size_t offset = 1;
+    int32_t cvo = -1;
     List<sp<ABuffer> >::iterator it = queue->begin();
     for (size_t i = 0; i < totalCount; ++i) {
         const sp<ABuffer> &buffer = *it;
@@ -300,12 +365,18 @@ ARTPAssembler::AssemblyStatus AAVCAssembler::addFragmentedNALUnit(
 #endif
 
         memcpy(unit->data() + offset, buffer->data() + 2, buffer->size() - 2);
+
+        buffer->meta()->findInt32("cvo", &cvo);
         offset += buffer->size() - 2;
 
         it = queue->erase(it);
     }
 
     unit->setRange(0, totalSize);
+
+    if (cvo >= 0) {
+        unit->meta()->setInt32("cvo", cvo);
+    }
 
     addSingleNALUnit(unit);
 
@@ -327,6 +398,7 @@ void AAVCAssembler::submitAccessUnit() {
 
     sp<ABuffer> accessUnit = new ABuffer(totalSize);
     size_t offset = 0;
+    int32_t cvo = -1;
     for (List<sp<ABuffer> >::iterator it = mNALUnits.begin();
          it != mNALUnits.end(); ++it) {
         memcpy(accessUnit->data() + offset, "\x00\x00\x00\x01", 4);
@@ -335,6 +407,8 @@ void AAVCAssembler::submitAccessUnit() {
         sp<ABuffer> nal = *it;
         memcpy(accessUnit->data() + offset, nal->data(), nal->size());
         offset += nal->size();
+
+        nal->meta()->findInt32("cvo", &cvo);
     }
 
     CopyTimes(accessUnit, *mNALUnits.begin());
@@ -343,6 +417,9 @@ void AAVCAssembler::submitAccessUnit() {
     printf(mAccessUnitDamaged ? "X" : ".");
     fflush(stdout);
 #endif
+    if (cvo >= 0) {
+        accessUnit->meta()->setInt32("cvo", cvo);
+    }
 
     if (mAccessUnitDamaged) {
         accessUnit->meta()->setInt32("damaged", true);

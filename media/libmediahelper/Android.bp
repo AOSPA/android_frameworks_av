@@ -3,6 +3,12 @@ cc_library_headers {
     vendor_available: true,
     min_sdk_version: "29",
     export_include_dirs: ["include"],
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 cc_defaults {
@@ -23,6 +29,12 @@ cc_defaults {
         "libmedia_helper_headers",
     ],
     clang: true,
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 cc_library {
@@ -42,6 +54,7 @@ cc_library {
         extends: "libmedia_helper",
     },
     defaults: ["libmedia_helper_defaults"],
+    host_supported: false,
     cflags: [
         "-D__AUDIO_VNDK_EXT__",
     ],

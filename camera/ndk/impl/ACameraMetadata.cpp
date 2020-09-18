@@ -21,7 +21,7 @@
 #include <utils/Vector.h>
 #include <system/graphics.h>
 #include <media/NdkImage.h>
-#include <private/media/NdkImage.h>
+#include <NdkImagePriv.h>
 
 using namespace android;
 
@@ -533,6 +533,7 @@ ACameraMetadata::isCaptureRequestTag(const uint32_t tag) {
         case ACAMERA_LENS_OPTICAL_STABILIZATION_MODE:
         case ACAMERA_NOISE_REDUCTION_MODE:
         case ACAMERA_SCALER_CROP_REGION:
+        case ACAMERA_SCALER_ROTATE_AND_CROP:
         case ACAMERA_SENSOR_EXPOSURE_TIME:
         case ACAMERA_SENSOR_FRAME_DURATION:
         case ACAMERA_SENSOR_SENSITIVITY:

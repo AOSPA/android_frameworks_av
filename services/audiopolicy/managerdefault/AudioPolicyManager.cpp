@@ -42,12 +42,14 @@
 #include <set>
 #include <unordered_set>
 #include <vector>
+#include <cutils/bitops.h>
 #include <cutils/properties.h>
 #include <utils/Log.h>
 #include <media/AudioParameter.h>
 #include <private/android_filesystem_config.h>
 #include <system/audio.h>
 #include <system/audio_config.h>
+#include <system/audio_effects/effect_hapticgenerator.h>
 #include "AudioPolicyManager.h"
 #include <Serializer.h>
 #include "TypeConverter.h"
@@ -1328,7 +1330,8 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
 
         // at this stage we should ignore the DIRECT flag as no direct output could be found earlier
         *flags = (audio_output_flags_t)(*flags & ~AUDIO_OUTPUT_FLAG_DIRECT);
-        output = selectOutput(outputs, *flags, config->format, channelMask, config->sample_rate);
+        output = selectOutput(
+                outputs, *flags, config->format, channelMask, config->sample_rate, session);
     }
     ALOGW_IF((output == 0), "getOutputForDevices() could not find output for stream %d, "
             "sampling rate %d, format %#x, channels %#x, flags %#x",
@@ -1501,13 +1504,25 @@ status_t AudioPolicyManager::setMsdPatch(const sp<DeviceDescriptor> &outputDevic
 }
 
 audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_handle_t>& outputs,
-                                                       audio_output_flags_t flags,
-                                                       audio_format_t format,
-                                                       audio_channel_mask_t channelMask,
-                                                       uint32_t samplingRate)
+                                                   audio_output_flags_t flags,
+                                                   audio_format_t format,
+                                                   audio_channel_mask_t channelMask,
+                                                   uint32_t samplingRate,
+                                                   audio_session_t sessionId)
 {
     LOG_ALWAYS_FATAL_IF(!(format == AUDIO_FORMAT_INVALID || audio_is_linear_pcm(format)),
         "%s called with format %#x", __func__, format);
+
+    // Return the output that haptic-generating attached to when 1) session id is specified,
+    // 2) haptic-generating effect exists for given session id and 3) the output that
+    // haptic-generating effect attached to is in given outputs.
+    if (sessionId != AUDIO_SESSION_NONE) {
+        audio_io_handle_t hapticGeneratingOutput = mEffects.getIoForSession(
+                sessionId, FX_IID_HAPTICGENERATOR);
+        if (outputs.indexOf(hapticGeneratingOutput) >= 0) {
+            return hapticGeneratingOutput;
+        }
+    }
 
     // Flags disqualifying an output: the match must happen before calling selectOutput()
     static const audio_output_flags_t kExcludedFlags = (audio_output_flags_t)
@@ -5336,7 +5351,8 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
                                                                      client->flags(),
                                                                      client->config().format,
                                                                      client->config().channel_mask,
-                                                                     client->config().sample_rate);
+                                                                     client->config().sample_rate,
+                                                                     client->session());
                     if (newOutput != srcOut) {
                         invalidate = true;
                         break;
@@ -5493,6 +5509,12 @@ DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescr
                   outputDesc->devices().toString().c_str(), outputDesc->getPatchHandle());
             return  outputDesc->devices();
         }
+    }
+
+    // Do not retrieve engine device for outputs through MSD
+    // TODO: support explicit routing requests by resetting MSD patch to engine device.
+    if (outputDesc->devices() == getMsdAudioOutDevices()) {
+        return outputDesc->devices();
     }
 
     // Honor explicit routing requests only if no client using default routing is active on this
@@ -5703,7 +5725,7 @@ uint32_t AudioPolicyManager::setBeaconMute(bool mute) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
             setVolumeSourceMute(ttsVolumeSource, mute/*on*/, desc, 0 /*delay*/, DeviceTypeSet());
             const uint32_t latency = desc->latency() * 2;
-            if (latency > maxLatency) {
+            if (desc->isActive(latency * 2) && latency > maxLatency) {
                 maxLatency = latency;
             }
         }

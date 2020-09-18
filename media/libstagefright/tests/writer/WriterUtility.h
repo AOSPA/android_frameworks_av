@@ -27,11 +27,11 @@
 
 #include <media/stagefright/MediaAdapter.h>
 
-using namespace android;
-using namespace std;
+#include "WriterListener.h"
 
 #define CODEC_CONFIG_FLAG 32
 
+constexpr uint32_t kMaxTrackCount = 2;
 constexpr uint32_t kMaxCSDStrlen = 16;
 constexpr uint32_t kMaxCount = 20;
 
@@ -43,7 +43,8 @@ struct BufferInfo {
 
 int32_t sendBuffersToWriter(ifstream &inputStream, vector<BufferInfo> &bufferInfo,
                             int32_t &inputFrameId, sp<MediaAdapter> &currentTrack, int32_t offset,
-                            int32_t range, bool isPaused = false);
+                            int32_t range, bool isPaused = false,
+                            sp<WriterListener> listener = nullptr);
 
 int32_t writeHeaderBuffers(ifstream &inputStream, vector<BufferInfo> &bufferInfo,
                            int32_t &inputFrameId, sp<AMessage> &format, int32_t numCsds);

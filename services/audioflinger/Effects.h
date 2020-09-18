@@ -36,6 +36,7 @@ public:
     virtual uint32_t sampleRate() const = 0;
     virtual audio_channel_mask_t channelMask() const = 0;
     virtual uint32_t channelCount() const = 0;
+    virtual audio_channel_mask_t hapticChannelMask() const = 0;
     virtual size_t frameCount() const = 0;
 
     // Non trivial methods usually implemented with help from ThreadBase:
@@ -254,6 +255,11 @@ public:
     void             release_l();
 
     sp<EffectModule> asEffectModule() override { return this; }
+
+    static bool      isHapticGenerator(const effect_uuid_t* type);
+    bool             isHapticGenerator() const;
+
+    status_t         setHapticIntensity(int id, int intensity);
 
     void             dump(int fd, const Vector<String16>& args);
 
@@ -501,6 +507,10 @@ public:
     // isCompatibleWithThread_l() must be called with thread->mLock held
     bool isCompatibleWithThread_l(const sp<ThreadBase>& thread) const;
 
+    bool containsHapticGeneratingEffect_l();
+
+    void setHapticIntensity_l(int id, int intensity);
+
     sp<EffectCallbackInterface> effectCallback() const { return mEffectCallback; }
     wp<ThreadBase> thread() const { return mEffectCallback->thread(); }
 
@@ -532,6 +542,7 @@ private:
         uint32_t sampleRate() const override;
         audio_channel_mask_t channelMask() const override;
         uint32_t channelCount() const override;
+        audio_channel_mask_t hapticChannelMask() const override;
         size_t frameCount() const override;
         uint32_t latency() const override;
 
@@ -683,6 +694,7 @@ private:
         uint32_t sampleRate() const override;
         audio_channel_mask_t channelMask() const override;
         uint32_t channelCount() const override;
+        audio_channel_mask_t hapticChannelMask() const override { return AUDIO_CHANNEL_NONE; }
         size_t frameCount() const override  { return 0; }
         uint32_t latency() const override  { return 0; }
 

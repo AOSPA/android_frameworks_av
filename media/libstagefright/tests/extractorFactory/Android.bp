@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+/*
+// TODO (b/168131280) Re-enable this cc_test
 cc_test {
     name: "ExtractorFactoryTest",
     gtest: true,
+    test_suites: ["device-tests"],
 
     srcs: [
         "ExtractorFactoryTest.cpp",
@@ -59,3 +62,4 @@ cc_test {
         ],
     },
 }
+*/
