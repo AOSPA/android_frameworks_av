@@ -1,0 +1,83 @@
+// Unit tests for libmediatranscoder.
+
+filegroup {
+    name: "test_assets",
+    srcs: ["assets/*"],
+}
+
+cc_defaults {
+    name: "testdefaults",
+
+    header_libs: [
+        "libbase_headers",
+        "libmedia_headers",
+    ],
+
+    shared_libs: [
+        "libbase",
+        "libcutils",
+        "libmediandk",
+        "libmediatranscoder",
+        "libutils",
+    ],
+
+    cflags: [
+        "-Werror",
+        "-Wall",
+    ],
+
+    data: [":test_assets"],
+    test_config_template: "AndroidTestTemplate.xml",
+    test_suites: ["device-tests", "TranscoderTests"],
+}
+
+// MediaSampleReaderNDK unit test
+cc_test {
+    name: "MediaSampleReaderNDKTests",
+    defaults: ["testdefaults"],
+    srcs: ["MediaSampleReaderNDKTests.cpp"],
+}
+
+// MediaSampleQueue unit test
+cc_test {
+    name: "MediaSampleQueueTests",
+    defaults: ["testdefaults"],
+    srcs: ["MediaSampleQueueTests.cpp"],
+}
+
+// MediaTrackTranscoder unit test
+cc_test {
+    name: "MediaTrackTranscoderTests",
+    defaults: ["testdefaults"],
+    srcs: ["MediaTrackTranscoderTests.cpp"],
+    shared_libs: ["libbinder_ndk"],
+}
+
+// VideoTrackTranscoder unit test
+cc_test {
+    name: "VideoTrackTranscoderTests",
+    defaults: ["testdefaults"],
+    srcs: ["VideoTrackTranscoderTests.cpp"],
+}
+
+// PassthroughTrackTranscoder unit test
+cc_test {
+    name: "PassthroughTrackTranscoderTests",
+    defaults: ["testdefaults"],
+    srcs: ["PassthroughTrackTranscoderTests.cpp"],
+    shared_libs: ["libcrypto"],
+}
+
+// MediaSampleWriter unit test
+cc_test {
+    name: "MediaSampleWriterTests",
+    defaults: ["testdefaults"],
+    srcs: ["MediaSampleWriterTests.cpp"],
+}
+
+// MediaTranscoder unit test
+cc_test {
+    name: "MediaTranscoderTests",
+    defaults: ["testdefaults"],
+    srcs: ["MediaTranscoderTests.cpp"],
+}

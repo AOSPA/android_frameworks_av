@@ -43,7 +43,13 @@ cc_library_headers {
         "com.android.media.swcodec",
     ],
     min_sdk_version: "29",
-    export_include_dirs: ["include"]
+    export_include_dirs: ["include"],
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }
 
 cc_library_shared {
@@ -79,6 +85,7 @@ cc_library_shared {
     ],
 
     header_libs: [
+        "jni_headers",
         "libmediadrm_headers",
         "libmediametrics_headers",
     ],
@@ -105,6 +112,8 @@ cc_library_shared {
         "libmediandk_utils",
         "libnativehelper",
     ],
+
+    export_header_lib_headers: ["jni_headers"],
 
     export_include_dirs: ["include"],
 
@@ -172,6 +181,7 @@ cc_library {
 
 cc_test {
     name: "AImageReaderWindowHandleTest",
+    test_suites: ["device-tests"],
     srcs: ["tests/AImageReaderWindowHandleTest.cpp"],
     shared_libs: [
         "libbinder",
@@ -194,4 +204,42 @@ cc_test {
     include_dirs: [
         "frameworks/av/media/ndk/",
     ],
+}
+
+cc_library_static {
+    name: "libmediandk_format",
+
+    host_supported: true,
+
+    srcs: [
+        "NdkMediaFormat.cpp",
+    ],
+
+    header_libs: [
+        "libstagefright_foundation_headers",
+    ],
+
+    cflags: [
+        "-DEXPORT=__attribute__((visibility(\"default\")))",
+        "-Werror",
+        "-Wall",
+    ],
+
+    export_include_dirs: ["include"],
+
+    sanitize: {
+        misc_undefined: [
+            "unsigned-integer-overflow",
+            "signed-integer-overflow",
+        ],
+        cfi: true,
+    },
+
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
+
+    apex_available: ["com.android.media"],
 }

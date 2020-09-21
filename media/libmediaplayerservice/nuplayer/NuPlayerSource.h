@@ -58,6 +58,7 @@ struct NuPlayer::Source : public AHandler {
         kWhatInstantiateSecureDecoders,
         // Modular DRM
         kWhatDrmInfo,
+        kWhatIMSRxNotice,
         kWhatRTCPByeReceived,
     };
 
