@@ -263,17 +263,42 @@ public:
         virtual status_t registerPolicyMixes(const Vector<AudioMix>& mixes);
         virtual status_t unregisterPolicyMixes(Vector<AudioMix> mixes);
         virtual status_t setUidDeviceAffinities(uid_t uid,
-                const Vector<AudioDeviceTypeAddr>& devices);
+                const AudioDeviceTypeAddrVector& devices);
         virtual status_t removeUidDeviceAffinities(uid_t uid);
         virtual status_t setUserIdDeviceAffinities(int userId,
-                const Vector<AudioDeviceTypeAddr>& devices);
+                const AudioDeviceTypeAddrVector& devices);
         virtual status_t removeUserIdDeviceAffinities(int userId);
 
-        virtual status_t setPreferredDeviceForStrategy(product_strategy_t strategy,
-                                                   const AudioDeviceTypeAddr &device);
-        virtual status_t removePreferredDeviceForStrategy(product_strategy_t strategy);
-        virtual status_t getPreferredDeviceForStrategy(product_strategy_t strategy,
-                                                   AudioDeviceTypeAddr &device);
+        virtual status_t setDevicesRoleForStrategy(product_strategy_t strategy,
+                                                   device_role_t role,
+                                                   const AudioDeviceTypeAddrVector &devices);
+
+        virtual status_t removeDevicesRoleForStrategy(product_strategy_t strategy,
+                                                      device_role_t role);
+
+
+        virtual status_t getDevicesForRoleAndStrategy(product_strategy_t strategy,
+                                                      device_role_t role,
+                                                      AudioDeviceTypeAddrVector &devices);
+
+        virtual status_t setDevicesRoleForCapturePreset(audio_source_t audioSource,
+                                                        device_role_t role,
+                                                        const AudioDeviceTypeAddrVector &devices);
+
+        virtual status_t addDevicesRoleForCapturePreset(audio_source_t audioSource,
+                                                        device_role_t role,
+                                                        const AudioDeviceTypeAddrVector &devices);
+
+        virtual status_t removeDevicesRoleForCapturePreset(
+                audio_source_t audioSource, device_role_t role,
+                const AudioDeviceTypeAddrVector& devices);
+
+        virtual status_t clearDevicesRoleForCapturePreset(audio_source_t audioSource,
+                                                          device_role_t role);
+
+        virtual status_t getDevicesForRoleAndCapturePreset(audio_source_t audioSource,
+                                                           device_role_t role,
+                                                           AudioDeviceTypeAddrVector &devices);
 
         virtual status_t startAudioSource(const struct audio_port_config *source,
                                           const audio_attributes_t *attributes,
@@ -940,7 +965,7 @@ protected:
                 sp<AudioPatch> *patchDescPtr);
 
         bool areAllDevicesSupported(
-                const Vector<AudioDeviceTypeAddr>& devices,
+                const AudioDeviceTypeAddrVector& devices,
                 std::function<bool(audio_devices_t)> predicate,
                 const char* context);
 

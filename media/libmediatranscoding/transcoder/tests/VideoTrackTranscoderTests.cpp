@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <gtest/gtest.h>
 #include <media/MediaSampleReaderNDK.h>
+#include <media/NdkCommon.h>
 #include <media/VideoTrackTranscoder.h>
 #include <utils/Timers.h>
 
@@ -66,8 +67,7 @@ public:
             if (strncmp(mime, "video/", 6) == 0) {
                 mTrackIndex = trackIndex;
 
-                mSourceFormat = std::shared_ptr<AMediaFormat>(
-                        trackFormat, std::bind(AMediaFormat_delete, std::placeholders::_1));
+                mSourceFormat = std::shared_ptr<AMediaFormat>(trackFormat, &AMediaFormat_delete);
                 ASSERT_NE(mSourceFormat, nullptr);
 
                 mDestinationFormat =
@@ -92,11 +92,12 @@ public:
     std::shared_ptr<AMediaFormat> mDestinationFormat;
 };
 
-TEST_F(VideoTrackTranscoderTests, SampleSanity) {
-    LOG(DEBUG) << "Testing SampleSanity";
+TEST_F(VideoTrackTranscoderTests, SampleSoundness) {
+    LOG(DEBUG) << "Testing SampleSoundness";
     std::shared_ptr<TestCallback> callback = std::make_shared<TestCallback>();
     auto transcoder = VideoTrackTranscoder::create(callback);
 
+    EXPECT_EQ(mMediaSampleReader->selectTrack(mTrackIndex), AMEDIA_OK);
     EXPECT_EQ(transcoder->configure(mMediaSampleReader, mTrackIndex, mDestinationFormat),
               AMEDIA_OK);
     ASSERT_TRUE(transcoder->start());
@@ -143,6 +144,37 @@ TEST_F(VideoTrackTranscoderTests, SampleSanity) {
     sampleConsumerThread.join();
 }
 
+TEST_F(VideoTrackTranscoderTests, PreserveBitrate) {
+    LOG(DEBUG) << "Testing PreserveBitrate";
+    std::shared_ptr<TestCallback> callback = std::make_shared<TestCallback>();
+    std::shared_ptr<MediaTrackTranscoder> transcoder = VideoTrackTranscoder::create(callback);
+
+    auto destFormat = TrackTranscoderTestUtils::getDefaultVideoDestinationFormat(
+            mSourceFormat.get(), false /* includeBitrate*/);
+    EXPECT_NE(destFormat, nullptr);
+
+    EXPECT_EQ(mMediaSampleReader->selectTrack(mTrackIndex), AMEDIA_OK);
+
+    int32_t srcBitrate;
+    EXPECT_EQ(mMediaSampleReader->getEstimatedBitrateForTrack(mTrackIndex, &srcBitrate), AMEDIA_OK);
+
+    ASSERT_EQ(transcoder->configure(mMediaSampleReader, mTrackIndex, destFormat), AMEDIA_OK);
+    ASSERT_TRUE(transcoder->start());
+
+    callback->waitUntilTrackFormatAvailable();
+
+    auto outputFormat = transcoder->getOutputFormat();
+    ASSERT_NE(outputFormat, nullptr);
+
+    ASSERT_TRUE(transcoder->stop());
+    transcoder->getOutputQueue()->abort();
+
+    int32_t outBitrate;
+    EXPECT_TRUE(AMediaFormat_getInt32(outputFormat.get(), AMEDIAFORMAT_KEY_BIT_RATE, &outBitrate));
+
+    EXPECT_EQ(srcBitrate, outBitrate);
+}
+
 // VideoTrackTranscoder needs a valid destination format.
 TEST_F(VideoTrackTranscoderTests, NullDestinationFormat) {
     LOG(DEBUG) << "Testing NullDestinationFormat";
@@ -177,6 +209,7 @@ TEST_F(VideoTrackTranscoderTests, LingeringEncoder) {
     auto callback = std::make_shared<TestCallback>();
     auto transcoder = VideoTrackTranscoder::create(callback);
 
+    EXPECT_EQ(mMediaSampleReader->selectTrack(mTrackIndex), AMEDIA_OK);
     EXPECT_EQ(transcoder->configure(mMediaSampleReader, mTrackIndex, mDestinationFormat),
               AMEDIA_OK);
     ASSERT_TRUE(transcoder->start());
@@ -185,7 +218,7 @@ TEST_F(VideoTrackTranscoderTests, LingeringEncoder) {
     std::vector<std::shared_ptr<MediaSample>> samples;
     std::thread sampleConsumerThread([&outputQueue, &samples, &semaphore] {
         std::shared_ptr<MediaSample> sample;
-        while (samples.size() < 10 && !outputQueue->dequeue(&sample)) {
+        while (samples.size() < 4 && !outputQueue->dequeue(&sample)) {
             ASSERT_NE(sample, nullptr);
             samples.push_back(sample);
 

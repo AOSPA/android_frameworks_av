@@ -98,6 +98,8 @@
 
 namespace android {
 
+using media::IEffectClient;
+
 static const char kDeadlockedString[] = "AudioFlinger may be deadlocked\n";
 static const char kHardwareLockedString[] = "Hardware lock is taken\n";
 static const char kClientLockedString[] = "Client lock is taken\n";
@@ -685,8 +687,8 @@ sp<AudioFlinger::Client> AudioFlinger::registerPid(pid_t pid)
 
 sp<NBLog::Writer> AudioFlinger::newWriter_l(size_t size, const char *name)
 {
-    // If there is no memory allocated for logs, return a dummy writer that does nothing.
-    // Similarly if we can't contact the media.log service, also return a dummy writer.
+    // If there is no memory allocated for logs, return a no-op writer that does nothing.
+    // Similarly if we can't contact the media.log service, also return a no-op writer.
     if (mLogMemoryDealer == 0 || sMediaLogService == 0) {
         return new NBLog::Writer();
     }
@@ -712,7 +714,7 @@ sp<NBLog::Writer> AudioFlinger::newWriter_l(size_t size, const char *name)
             }
         }
         // Even after garbage-collecting all old writers, there is still not enough memory,
-        // so return a dummy writer
+        // so return a no-op writer
         return new NBLog::Writer();
     }
 success:
@@ -853,7 +855,8 @@ sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
                                       input.notificationsPerBuffer, input.speed,
                                       input.sharedBuffer, sessionId, &output.flags,
                                       callingPid, input.clientInfo.clientTid, clientUid,
-                                      &lStatus, portId, input.audioTrackCallback);
+                                      &lStatus, portId, input.audioTrackCallback,
+                                      input.opPackageName);
         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (track == 0));
         // we don't abort yet if lStatus != NO_ERROR; there is still work to be done regardless
 
@@ -1284,9 +1287,9 @@ status_t AudioFlinger::setMasterMute(bool muted)
     }
 
     // Now set the master mute in each playback thread.  Playback threads
-    // assigned to HALs which do not have master mute support will apply master
-    // mute during the mix operation.  Threads with HALs which do support master
-    // mute will simply ignore the setting.
+    // assigned to HALs which do not have master mute support will apply master mute
+    // during the mix operation.  Threads with HALs which do support master mute
+    // will simply ignore the setting.
     Vector<VolumeInterface *> volumeInterfaces = getAllVolumeInterfaces_l();
     for (size_t i = 0; i < volumeInterfaces.size(); i++) {
         volumeInterfaces[i]->setMasterMute(muted);
@@ -2069,8 +2072,8 @@ sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& inpu
         Mutex::Autolock _l(mLock);
         RecordThread *thread = checkRecordThread_l(output.inputId);
         if (thread == NULL) {
-            ALOGE("createRecord() checkRecordThread_l failed, input handle %d", output.inputId);
-            lStatus = BAD_VALUE;
+            ALOGW("createRecord() checkRecordThread_l failed, input handle %d", output.inputId);
+            lStatus = FAILED_TRANSACTION;
             goto Exit;
         }
 
@@ -3439,7 +3442,7 @@ status_t AudioFlinger::getEffectDescriptor(const effect_uuid_t *pUuid,
     return status;
 }
 
-sp<IEffect> AudioFlinger::createEffect(
+sp<media::IEffect> AudioFlinger::createEffect(
         effect_descriptor_t *pDesc,
         const sp<IEffectClient>& effectClient,
         int32_t priority,

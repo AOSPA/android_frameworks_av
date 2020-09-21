@@ -484,22 +484,26 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
         devices = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_TELEPHONY_TX);
         break;
 
+    case STRATEGY_NONE:
+        // Happens when internal strategies are processed ("rerouting", "patch"...)
+        break;
+
     default:
-        ALOGW("getDevicesForStrategy() unknown strategy: %d", strategy);
+        ALOGW("%s unknown strategy: %d", __func__, strategy);
         break;
     }
 
     if (devices.isEmpty()) {
-        ALOGV("getDevicesForStrategy() no device found for strategy %d", strategy);
+        ALOGV("%s no device found for strategy %d", __func__, strategy);
         sp<DeviceDescriptor> defaultOutputDevice = getApmObserver()->getDefaultOutputDevice();
         if (defaultOutputDevice != nullptr) {
             devices.add(defaultOutputDevice);
         }
         ALOGE_IF(devices.isEmpty(),
-                 "getDevicesForStrategy() no default device defined");
+                 "%s no default device defined", __func__);
     }
 
-    ALOGVV("getDevices ForStrategy() strategy %d, device %s",
+    ALOGVV("%s strategy %d, device %s", __func__,
            strategy, dumpDeviceTypes(devices.types()).c_str());
     return devices;
 }
@@ -673,19 +677,17 @@ DeviceVector Engine::getDevicesForProductStrategy(product_strategy_t strategy) c
 
     // check if this strategy has a preferred device that is available,
     // if yes, give priority to it
-    AudioDeviceTypeAddr preferredStrategyDevice;
-    const status_t status = getPreferredDeviceForStrategy(strategy, preferredStrategyDevice);
+    AudioDeviceTypeAddrVector preferredStrategyDevices;
+    const status_t status = getDevicesForRoleAndStrategy(
+            strategy, DEVICE_ROLE_PREFERRED, preferredStrategyDevices);
     if (status == NO_ERROR) {
         // there is a preferred device, is it available?
-        sp<DeviceDescriptor> preferredAvailableDevDescr = availableOutputDevices.getDevice(
-                preferredStrategyDevice.mType,
-                String8(preferredStrategyDevice.mAddress.c_str()),
-                AUDIO_FORMAT_DEFAULT);
-        if (preferredAvailableDevDescr != nullptr) {
-            ALOGVV("%s using pref device 0x%08x/%s for strategy %u",
-                   __func__, preferredStrategyDevice.mType,
-                   preferredStrategyDevice.mAddress.c_str(), strategy);
-            return DeviceVector(preferredAvailableDevDescr);
+        DeviceVector preferredAvailableDevVec =
+                availableOutputDevices.getDevicesFromDeviceTypeAddrVec(preferredStrategyDevices);
+        if (preferredAvailableDevVec.size() == preferredAvailableDevVec.size()) {
+            ALOGVV("%s using pref device %s for strategy %u",
+                   __func__, preferredAvailableDevVec.toString().c_str(), strategy);
+            return preferredAvailableDevVec;
         }
     }
 

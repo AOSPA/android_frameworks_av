@@ -100,6 +100,7 @@ aaudio_result_t AudioStreamTrack::open(const AudioStreamBuilder& builder)
 
     size_t frameCount = (size_t)builder.getBufferCapacity();
 
+    // To avoid glitching, let AudioFlinger pick the optimal burst size.
     int32_t notificationFrames = 0;
 
     const audio_format_t format = (getFormat() == AUDIO_FORMAT_DEFAULT)
@@ -122,8 +123,6 @@ aaudio_result_t AudioStreamTrack::open(const AudioStreamBuilder& builder)
             // Take advantage of a special trick that allows us to create a buffer
             // that is some multiple of the burst size.
             notificationFrames = 0 - DEFAULT_BURSTS_PER_BUFFER_CAPACITY;
-        } else {
-            notificationFrames = builder.getFramesPerDataCallback();
         }
     }
     mCallbackBufferSize = builder.getFramesPerDataCallback();
@@ -225,7 +224,7 @@ aaudio_result_t AudioStreamTrack::open(const AudioStreamBuilder& builder)
     mInitialBufferCapacity = getBufferCapacity();
     mInitialFramesPerBurst = getFramesPerBurst();
 
-    mAudioTrack->addAudioDeviceCallback(mDeviceCallback);
+    mAudioTrack->addAudioDeviceCallback(this);
 
     // Update performance mode based on the actual stream flags.
     // For example, if the sample rate is not allowed then you won't get a FAST track.
@@ -254,17 +253,24 @@ aaudio_result_t AudioStreamTrack::open(const AudioStreamBuilder& builder)
 
 aaudio_result_t AudioStreamTrack::release_l() {
     if (getState() != AAUDIO_STREAM_STATE_CLOSING) {
-        mAudioTrack->removeAudioDeviceCallback(mDeviceCallback);
+        status_t err = mAudioTrack->removeAudioDeviceCallback(this);
+        ALOGE_IF(err, "%s() removeAudioDeviceCallback returned %d", __func__, err);
         logReleaseBufferState();
-        // TODO Investigate why clear() causes a hang in test_various.cpp
-        // if I call close() from a data callback.
-        // But the same thing in AudioRecord is OK!
-        // mAudioTrack.clear();
-        mFixedBlockReader.close();
+        // Data callbacks may still be running!
         return AudioStream::release_l();
     } else {
         return AAUDIO_OK; // already released
     }
+}
+
+void AudioStreamTrack::close_l() {
+    // Stop callbacks before deleting mFixedBlockReader memory.
+    mAudioTrack.clear();
+    // Do not close mFixedBlockReader because a data callback
+    // thread might still be running if someone else has a reference
+    // to mAudioRecord.
+    // It has a unique_ptr to its buffer so it will clean up by itself.
+    AudioStream::close_l();
 }
 
 void AudioStreamTrack::processCallback(int event, void *info) {

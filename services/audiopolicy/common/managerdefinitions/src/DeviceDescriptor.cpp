@@ -227,6 +227,7 @@ void DeviceVector::add(const DeviceVector &devices)
 {
     bool added = false;
     for (const auto& device : devices) {
+        ALOG_ASSERT(device != nullptr, "Null pointer found when adding DeviceVector");
         if (indexOf(device) < 0 && SortedVector::add(device) >= 0) {
             added = true;
         }
@@ -238,6 +239,7 @@ void DeviceVector::add(const DeviceVector &devices)
 
 ssize_t DeviceVector::add(const sp<DeviceDescriptor>& item)
 {
+    ALOG_ASSERT(item != nullptr, "Adding null pointer to DeviceVector");
     ssize_t ret = indexOf(item);
 
     if (ret < 0) {
@@ -420,6 +422,24 @@ sp<DeviceDescriptor> DeviceVector::getDeviceForOpening() const
     return nullptr;
 }
 
+sp<DeviceDescriptor> DeviceVector::getDeviceFromDeviceTypeAddr(
+            const AudioDeviceTypeAddr& deviceTypeAddr) const {
+    return getDevice(deviceTypeAddr.mType, String8(deviceTypeAddr.getAddress()),
+            AUDIO_FORMAT_DEFAULT);
+}
+
+DeviceVector DeviceVector::getDevicesFromDeviceTypeAddrVec(
+        const AudioDeviceTypeAddrVector& deviceTypeAddrVector) const {
+    DeviceVector devices;
+    for (const auto& deviceTypeAddr : deviceTypeAddrVector) {
+        sp<DeviceDescriptor> device = getDeviceFromDeviceTypeAddr(deviceTypeAddr);
+        if (device != nullptr) {
+            devices.add(device);
+        }
+    }
+    return devices;
+}
+
 void DeviceVector::replaceDevicesByType(
         audio_devices_t typeToRemove, const DeviceVector &devicesToAdd) {
     DeviceVector devicesToRemove = getDevicesFromType(typeToRemove);
@@ -440,7 +460,7 @@ void DeviceVector::dump(String8 *dst, const String8 &tag, int spaces, bool verbo
     }
 }
 
-std::string DeviceVector::toString() const
+std::string DeviceVector::toString(bool includeSensitiveInfo) const
 {
     if (isEmpty()) {
         return {"AUDIO_DEVICE_NONE"};
@@ -450,7 +470,7 @@ std::string DeviceVector::toString() const
         if (device != *begin()) {
            result += ";";
         }
-        result += device->toString();
+        result += device->toString(includeSensitiveInfo);
     }
     return result + "}";
 }
