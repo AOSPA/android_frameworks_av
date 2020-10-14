@@ -361,11 +361,11 @@ public:
 
     static status_t registerPolicyMixes(const Vector<AudioMix>& mixes, bool registration);
 
-    static status_t setUidDeviceAffinities(uid_t uid, const Vector<AudioDeviceTypeAddr>& devices);
+    static status_t setUidDeviceAffinities(uid_t uid, const AudioDeviceTypeAddrVector& devices);
 
     static status_t removeUidDeviceAffinities(uid_t uid);
 
-    static status_t setUserIdDeviceAffinities(int userId, const Vector<AudioDeviceTypeAddr>& devices);
+    static status_t setUserIdDeviceAffinities(int userId, const AudioDeviceTypeAddrVector& devices);
 
     static status_t removeUserIdDeviceAffinities(int userId);
 
@@ -425,13 +425,29 @@ public:
      */
     static status_t setAudioHalPids(const std::vector<pid_t>& pids);
 
-    static status_t setPreferredDeviceForStrategy(product_strategy_t strategy,
-            const AudioDeviceTypeAddr &device);
+    static status_t setDevicesRoleForStrategy(product_strategy_t strategy,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
 
-    static status_t removePreferredDeviceForStrategy(product_strategy_t strategy);
+    static status_t removeDevicesRoleForStrategy(product_strategy_t strategy, device_role_t role);
 
-    static status_t getPreferredDeviceForStrategy(product_strategy_t strategy,
-            AudioDeviceTypeAddr &device);
+    static status_t getDevicesForRoleAndStrategy(product_strategy_t strategy,
+            device_role_t role, AudioDeviceTypeAddrVector &devices);
+
+    static status_t setDevicesRoleForCapturePreset(audio_source_t audioSource,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
+
+    static status_t addDevicesRoleForCapturePreset(audio_source_t audioSource,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
+
+    static status_t removeDevicesRoleForCapturePreset(
+            audio_source_t audioSource, device_role_t role,
+            const AudioDeviceTypeAddrVector& devices);
+
+    static status_t clearDevicesRoleForCapturePreset(
+            audio_source_t audioSource, device_role_t role);
+
+    static status_t getDevicesForRoleAndCapturePreset(audio_source_t audioSource,
+            device_role_t role, AudioDeviceTypeAddrVector &devices);
 
     static status_t getDeviceForStrategy(product_strategy_t strategy,
             AudioDeviceTypeAddr &device);

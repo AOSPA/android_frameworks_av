@@ -3,7 +3,7 @@ cc_defaults {
     double_loadable: true,
 
     srcs: [
-        "OMXMaster.cpp",
+        "OMXStore.cpp",
         "OMXNodeInstance.cpp",
         "OMXUtils.cpp",
         "OmxGraphicBufferSource.cpp",

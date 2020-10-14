@@ -213,7 +213,11 @@ status_t AudioTrack::getMetrics(mediametrics::Item * &item)
     return NO_ERROR;
 }
 
-AudioTrack::AudioTrack()
+AudioTrack::AudioTrack() : AudioTrack("" /*opPackageName*/)
+{
+}
+
+AudioTrack::AudioTrack(const std::string& opPackageName)
     : mStatus(NO_INIT),
       mState(STATE_STOPPED),
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
@@ -221,6 +225,7 @@ AudioTrack::AudioTrack()
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
       mRoutedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mOpPackageName(opPackageName),
       mPauseTimeRealUs(0),
       mAudioTrackCallback(new AudioTrackCallback())
 {
@@ -248,12 +253,14 @@ AudioTrack::AudioTrack(
         const audio_attributes_t* pAttributes,
         bool doNotReconnect,
         float maxRequiredSpeed,
-        audio_port_handle_t selectedDeviceId)
+        audio_port_handle_t selectedDeviceId,
+        const std::string& opPackageName)
     : mStatus(NO_INIT),
       mState(STATE_STOPPED),
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
+      mOpPackageName(opPackageName),
       mPauseTimeRealUs(0),
       mAudioTrackCallback(new AudioTrackCallback())
 {
@@ -282,13 +289,15 @@ AudioTrack::AudioTrack(
         pid_t pid,
         const audio_attributes_t* pAttributes,
         bool doNotReconnect,
-        float maxRequiredSpeed)
+        float maxRequiredSpeed,
+        const std::string& opPackageName)
     : mStatus(NO_INIT),
       mState(STATE_STOPPED),
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mOpPackageName(opPackageName),
       mPauseTimeRealUs(0),
       mTrackOffloaded(false),
       mAudioTrackCallback(new AudioTrackCallback())
@@ -1636,6 +1645,7 @@ status_t AudioTrack::createTrack_l()
     input.selectedDeviceId = mSelectedDeviceId;
     input.sessionId = mSessionId;
     input.audioTrackCallback = mAudioTrackCallback;
+    input.opPackageName = mOpPackageName;
 
     IAudioFlinger::CreateTrackOutput output;
 
@@ -2018,7 +2028,7 @@ ssize_t AudioTrack::write(const void* buffer, size_t userSize, bool blocking)
     }
 
     if (ssize_t(userSize) < 0 || (buffer == NULL && userSize != 0)) {
-        // Sanity-check: user is most-likely passing an error code, and it would
+        // Validation: user is most-likely passing an error code, and it would
         // make the return value ambiguous (actualSize vs error).
         ALOGE("%s(%d): AudioTrack::write(buffer=%p, size=%zu (%zd)",
                 __func__, mPortId, buffer, userSize, userSize);
@@ -2408,7 +2418,7 @@ nsecs_t AudioTrack::processAudioBuffer()
                 mUserData, &audioBuffer);
         size_t writtenSize = audioBuffer.size;
 
-        // Sanity check on returned size
+        // Validate on returned size
         if (ssize_t(writtenSize) < 0 || writtenSize > reqSize) {
             ALOGE("%s(%d): EVENT_MORE_DATA requested %zu bytes but callback returned %zd bytes",
                     __func__, mPortId, reqSize, ssize_t(writtenSize));
