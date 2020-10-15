@@ -40,7 +40,11 @@ static constexpr float kDefaultKeyFrameIntervalSeconds = 1.0f;
 template <typename T>
 void VideoTrackTranscoder::BlockingQueue<T>::push(T const& value, bool front) {
     {
-        std::unique_lock<std::mutex> lock(mMutex);
+        std::scoped_lock lock(mMutex);
+        if (mAborted) {
+            return;
+        }
+
         if (front) {
             mQueue.push_front(value);
         } else {
@@ -52,13 +56,21 @@ void VideoTrackTranscoder::BlockingQueue<T>::push(T const& value, bool front) {
 
 template <typename T>
 T VideoTrackTranscoder::BlockingQueue<T>::pop() {
-    std::unique_lock<std::mutex> lock(mMutex);
+    std::unique_lock lock(mMutex);
     while (mQueue.empty()) {
         mCondition.wait(lock);
     }
     T value = mQueue.front();
     mQueue.pop_front();
     return value;
+}
+
+// Note: Do not call if another thread might waiting in pop.
+template <typename T>
+void VideoTrackTranscoder::BlockingQueue<T>::abort() {
+    std::scoped_lock lock(mMutex);
+    mAborted = true;
+    mQueue.clear();
 }
 
 // The CodecWrapper class is used to let AMediaCodec instances outlive the transcoder object itself
@@ -258,6 +270,15 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
     // Prevent decoder from overwriting frames that the encoder has not yet consumed.
     AMediaFormat_setInt32(decoderFormat.get(), TBD_AMEDIACODEC_PARAMETER_KEY_ALLOW_FRAME_DROP, 0);
 
+    // Copy over configurations that apply to both encoder and decoder.
+    static const AMediaFormatUtils::EntryCopier kEncoderEntriesToCopy[] = {
+            ENTRY_COPIER2(AMEDIAFORMAT_KEY_OPERATING_RATE, Float, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_PRIORITY, Int32),
+    };
+    const size_t entryCount = sizeof(kEncoderEntriesToCopy) / sizeof(kEncoderEntriesToCopy[0]);
+    AMediaFormatUtils::CopyFormatEntries(mDestinationFormat.get(), decoderFormat.get(),
+                                         kEncoderEntriesToCopy, entryCount);
+
     status = AMediaCodec_configure(mDecoder, decoderFormat.get(), mSurface, NULL /* crypto */,
                                    0 /* flags */);
     if (status != AMEDIA_OK) {
@@ -375,12 +396,7 @@ void VideoTrackTranscoder::dequeueOutputSample(int32_t bufferIndex,
         sample->info.flags = bufferInfo.flags;
         sample->info.presentationTimeUs = bufferInfo.presentationTimeUs;
 
-        const bool aborted = mOutputQueue->enqueue(sample);
-        if (aborted) {
-            LOG(ERROR) << "Output sample queue was aborted. Stopping transcode.";
-            mStatus = AMEDIA_ERROR_IO;  // TODO: Define custom error codes?
-            return;
-        }
+        onOutputSampleAvailable(sample);
     } else if (bufferIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
         AMediaFormat* newFormat = AMediaCodec_getOutputFormat(mEncoder->getCodec());
         LOG(DEBUG) << "Encoder output format changed: " << AMediaFormat_toString(newFormat);
@@ -489,12 +505,14 @@ media_status_t VideoTrackTranscoder::runTranscodeLoop() {
         message();
     }
 
+    mCodecMessageQueue.abort();
+    AMediaCodec_stop(mDecoder);
+
     // Return error if transcoding was stopped before it finished.
     if (mStopRequested && !mEosFromEncoder && mStatus == AMEDIA_OK) {
         mStatus = AMEDIA_ERROR_UNKNOWN;  // TODO: Define custom error codes?
     }
 
-    AMediaCodec_stop(mDecoder);
     return mStatus;
 }
 

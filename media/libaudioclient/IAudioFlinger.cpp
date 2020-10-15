@@ -24,6 +24,8 @@
 
 #include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
+#include <media/AudioSanitizer.h>
+#include <media/IAudioPolicyService.h>
 #include <mediautils/ServiceUtilities.h>
 #include <mediautils/TimeCheck.h>
 #include "IAudioFlinger.h"
@@ -1025,6 +1027,16 @@ status_t BnAudioFlinger::onTransact(
 
     TimeCheck check(tag.c_str());
 
+    // Make sure we connect to Audio Policy Service before calling into AudioFlinger:
+    //  - AudioFlinger can call into Audio Policy Service with its global mutex held
+    //  - If this is the first time Audio Policy Service is queried from inside audioserver process
+    //  this will trigger Audio Policy Manager initialization.
+    //  - Audio Policy Manager initialization calls into AudioFlinger which will try to lock
+    //  its global mutex and a deadlock will occur.
+    if (IPCThreadState::self()->getCallingPid() != getpid()) {
+        AudioSystem::get_audio_policy_service();
+    }
+
     switch (code) {
         case CREATE_TRACK: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
@@ -1211,7 +1223,7 @@ status_t BnAudioFlinger::onTransact(
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             uint32_t sampleRate = data.readInt32();
             audio_format_t format = (audio_format_t) data.readInt32();
-            audio_channel_mask_t channelMask = data.readInt32();
+            audio_channel_mask_t channelMask = (audio_channel_mask_t) data.readInt32();
             reply->writeInt64( getInputBufferSize(sampleRate, format, channelMask) );
             return NO_ERROR;
         } break;
@@ -1485,10 +1497,15 @@ status_t BnAudioFlinger::onTransact(
         case GET_AUDIO_PORT: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             struct audio_port port = {};
-            if (data.read(&port, sizeof(struct audio_port)) != NO_ERROR) {
+            status_t status = data.read(&port, sizeof(struct audio_port));
+            if (status != NO_ERROR) {
                 ALOGE("b/23905951");
+                return status;
             }
-            status_t status = getAudioPort(&port);
+            status = AudioSanitizer::sanitizeAudioPort(&port);
+            if (status == NO_ERROR) {
+                status = getAudioPort(&port);
+            }
             reply->writeInt32(status);
             if (status == NO_ERROR) {
                 reply->write(&port, sizeof(struct audio_port));
@@ -1498,12 +1515,20 @@ status_t BnAudioFlinger::onTransact(
         case CREATE_AUDIO_PATCH: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             struct audio_patch patch;
-            data.read(&patch, sizeof(struct audio_patch));
-            audio_patch_handle_t handle = AUDIO_PATCH_HANDLE_NONE;
-            if (data.read(&handle, sizeof(audio_patch_handle_t)) != NO_ERROR) {
-                ALOGE("b/23905951");
+            status_t status = data.read(&patch, sizeof(struct audio_patch));
+            if (status != NO_ERROR) {
+                return status;
             }
-            status_t status = createAudioPatch(&patch, &handle);
+            audio_patch_handle_t handle = AUDIO_PATCH_HANDLE_NONE;
+            status = data.read(&handle, sizeof(audio_patch_handle_t));
+            if (status != NO_ERROR) {
+                ALOGE("b/23905951");
+                return status;
+            }
+            status = AudioSanitizer::sanitizeAudioPatch(&patch);
+            if (status == NO_ERROR) {
+                status = createAudioPatch(&patch, &handle);
+            }
             reply->writeInt32(status);
             if (status == NO_ERROR) {
                 reply->write(&handle, sizeof(audio_patch_handle_t));
@@ -1548,8 +1573,14 @@ status_t BnAudioFlinger::onTransact(
         case SET_AUDIO_PORT_CONFIG: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             struct audio_port_config config;
-            data.read(&config, sizeof(struct audio_port_config));
-            status_t status = setAudioPortConfig(&config);
+            status_t status = data.read(&config, sizeof(struct audio_port_config));
+            if (status != NO_ERROR) {
+                return status;
+            }
+            status = AudioSanitizer::sanitizeAudioPortConfig(&config);
+            if (status == NO_ERROR) {
+                status = setAudioPortConfig(&config);
+            }
             reply->writeInt32(status);
             return NO_ERROR;
         } break;
