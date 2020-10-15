@@ -749,6 +749,8 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch, const String
     void *iMemPointer;
     audio_track_cblk_t* cblk;
     status_t status;
+    static const int32_t kMaxCreateAttempts = 3;
+    int32_t remainingAttempts = kMaxCreateAttempts;
 
     if (audioFlinger == 0) {
         ALOGE("%s(%d): Could not get audioflinger", __func__, mPortId);
@@ -810,15 +812,24 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch, const String
     input.sessionId = mSessionId;
     originalSessionId = mSessionId;
 
-    record = audioFlinger->createRecord(input,
-                                                              output,
-                                                              &status);
+    do {
+        record = audioFlinger->createRecord(input, output, &status);
+        if (status == NO_ERROR) {
+            break;
+        }
+        if (status != FAILED_TRANSACTION || --remainingAttempts <= 0) {
+            ALOGE("%s(%d): AudioFlinger could not create record track, status: %d",
+                  __func__, mPortId, status);
+            goto exit;
+        }
+        // FAILED_TRANSACTION happens under very specific conditions causing a state mismatch
+        // between audio policy manager and audio flinger during the input stream open sequence
+        // and can be recovered by retrying.
+        // Leave time for race condition to clear before retrying and randomize delay
+        // to reduce the probability of concurrent retries in locked steps.
+        usleep((20 + rand() % 30) * 10000);
+    } while (1);
 
-    if (status != NO_ERROR) {
-        ALOGE("%s(%d): AudioFlinger could not create record track, status: %d",
-              __func__, mPortId, status);
-        goto exit;
-    }
     ALOG_ASSERT(record != 0);
 
     // AudioFlinger now owns the reference to the I/O handle,
@@ -1099,7 +1110,7 @@ ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
     }
 
     if (ssize_t(userSize) < 0 || (buffer == NULL && userSize != 0)) {
-        // sanity-check. user is most-likely passing an error code, and it would
+        // Validation. user is most-likely passing an error code, and it would
         // make the return value ambiguous (actualSize vs error).
         ALOGE("%s(%d) (buffer=%p, size=%zu (%zu)",
                 __func__, mPortId, buffer, userSize, userSize);
@@ -1326,7 +1337,7 @@ nsecs_t AudioRecord::processAudioBuffer()
         mCbf(EVENT_MORE_DATA, mUserData, &audioBuffer);
         size_t readSize = audioBuffer.size;
 
-        // Sanity check on returned size
+        // Validate on returned size
         if (ssize_t(readSize) < 0 || readSize > reqSize) {
             ALOGE("%s(%d):  EVENT_MORE_DATA requested %zu bytes but callback returned %zd bytes",
                     __func__, mPortId, reqSize, ssize_t(readSize));

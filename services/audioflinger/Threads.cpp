@@ -116,6 +116,8 @@ static inline T min(const T& a, const T& b)
 
 namespace android {
 
+using media::IEffectClient;
+
 // retry counts for buffer fill timeout
 // 50 * ~20msecs = 1 second
 static const int8_t kMaxTrackRetries = 50;
@@ -1950,7 +1952,7 @@ void AudioFlinger::PlaybackThread::onFirstRef()
         // here instead of constructor of PlaybackThread so that the onFirstRef
         // callback would not be made on an incompletely constructed object.
         if (mOutput->stream->setEventCallback(this) != OK) {
-            ALOGE("Failed to add event callback");
+            ALOGD("Failed to add event callback");
         }
     }
     run(mThreadName, ANDROID_PRIORITY_URGENT_AUDIO);
@@ -2084,7 +2086,8 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         uid_t uid,
         status_t *status,
         audio_port_handle_t portId,
-        const sp<media::IAudioTrackCallback>& callback)
+        const sp<media::IAudioTrackCallback>& callback,
+        const std::string& opPackageName)
 {
     size_t frameCount = *pFrameCount;
     size_t notificationFrameCount = *pNotificationFrameCount;
@@ -2362,10 +2365,21 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
             }
         }
 
+        // Set DIRECT flag if current thread is DirectOutputThread. This can
+        // happen when the playback is rerouted to direct output thread by
+        // dynamic audio policy.
+        // Do NOT report the flag changes back to client, since the client
+        // doesn't explicitly request a direct flag.
+        audio_output_flags_t trackFlags = *flags;
+        if (mType == DIRECT) {
+            trackFlags = static_cast<audio_output_flags_t>(trackFlags | AUDIO_OUTPUT_FLAG_DIRECT);
+        }
+
         track = new Track(this, client, streamType, attr, sampleRate, format,
                           channelMask, frameCount,
                           nullptr /* buffer */, (size_t)0 /* bufferSize */, sharedBuffer,
-                          sessionId, creatorPid, uid, *flags, TrackBase::TYPE_DEFAULT, portId);
+                          sessionId, creatorPid, uid, trackFlags, TrackBase::TYPE_DEFAULT, portId,
+                          SIZE_MAX /*frameCountToBeReady*/, opPackageName);
 
         lStatus = track != 0 ? track->initCheck() : (status_t) NO_MEMORY;
         if (lStatus != NO_ERROR) {
@@ -2377,7 +2391,7 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         {
             Mutex::Autolock _atCbL(mAudioTrackCbLock);
             if (callback.get() != nullptr) {
-                mAudioTrackCallbacks.emplace(callback);
+                mAudioTrackCallbacks.emplace(track, callback);
             }
         }
 
@@ -2611,6 +2625,10 @@ void AudioFlinger::PlaybackThread::removeTrack_l(const sp<Track>& track)
     mLocalLog.log("removeTrack_l (%p) %s", track.get(), result.string());
 
     mTracks.remove(track);
+    {
+        Mutex::Autolock _atCbL(mAudioTrackCbLock);
+        mAudioTrackCallbacks.erase(track);
+    }
     if (track->isFastTrack()) {
         int index = track->mFastIndex;
         ALOG_ASSERT(0 < index && index < (int)FastMixerState::sMaxFastTracks);
@@ -2706,8 +2724,8 @@ void AudioFlinger::PlaybackThread::onCodecFormatChanged(
                     audio_utils::metadata::byteStringFromData(metadata);
             std::vector metadataVec(metaDataStr.begin(), metaDataStr.end());
             Mutex::Autolock _l(mAudioTrackCbLock);
-            for (const auto& callback : mAudioTrackCallbacks) {
-                callback->onCodecFormatChanged(metadataVec);
+            for (const auto& callbackPair : mAudioTrackCallbacks) {
+                callbackPair.second->onCodecFormatChanged(metadataVec);
             }
     }).detach();
 }
@@ -7463,7 +7481,7 @@ reacquire_wakelock:
 
             const ssize_t availableToRead = mPipeSource->availableToRead();
             if (availableToRead >= 0) {
-                // PipeSource is the master clock.  It is up to the AudioRecord client to keep up.
+                // PipeSource is the primary clock.  It is up to the AudioRecord client to keep up.
                 LOG_ALWAYS_FATAL_IF((size_t)availableToRead > mPipeFramesP2,
                         "more frames to read than fifo size, %zd > %zu",
                         availableToRead, mPipeFramesP2);
@@ -8020,7 +8038,8 @@ status_t AudioFlinger::RecordThread::start(RecordThread::RecordTrack* recordTrac
         AutoMutex lock(mLock);
         if (recordTrack->isInvalid()) {
             recordTrack->clearSyncStartEvent();
-            return INVALID_OPERATION;
+            ALOGW("%s track %d: invalidated before startInput", __func__, recordTrack->portId());
+            return DEAD_OBJECT;
         }
         if (mActiveTracks.indexOf(recordTrack) >= 0) {
             if (recordTrack->mState == TrackBase::PAUSING) {
@@ -8050,7 +8069,8 @@ status_t AudioFlinger::RecordThread::start(RecordThread::RecordTrack* recordTrac
                     recordTrack->mState = TrackBase::STARTING_2;
                     // STARTING_2 forces destroy to call stopInput.
                 }
-                return INVALID_OPERATION;
+                ALOGW("%s track %d: invalidated after startInput", __func__, recordTrack->portId());
+                return DEAD_OBJECT;
             }
             if (recordTrack->mState != TrackBase::STARTING_1) {
                 ALOGW("%s(%d): unsynchronized mState:%d change",
@@ -8705,7 +8725,7 @@ status_t AudioFlinger::RecordThread::createAudioPatch_l(const struct audio_patch
 
     // store new device and send to effects
     mInDeviceTypeAddr.mType = patch->sources[0].ext.device.type;
-    mInDeviceTypeAddr.mAddress = patch->sources[0].ext.device.address;
+    mInDeviceTypeAddr.setAddress(patch->sources[0].ext.device.address);
     audio_port_handle_t deviceId = patch->sources[0].id;
     for (size_t i = 0; i < mEffectChains.size(); i++) {
         mEffectChains[i]->setInputDevice_l(inDeviceTypeAddr());
@@ -9346,7 +9366,7 @@ status_t AudioFlinger::MmapThread::createAudioPatch_l(const struct audio_patch *
         deviceId = patch->sources[0].id;
         numDevices = mPatch.num_sources;
         sourceDeviceTypeAddr.mType = patch->sources[0].ext.device.type;
-        sourceDeviceTypeAddr.mAddress = patch->sources[0].ext.device.address;
+        sourceDeviceTypeAddr.setAddress(patch->sources[0].ext.device.address);
     }
 
     for (size_t i = 0; i < mEffectChains.size(); i++) {

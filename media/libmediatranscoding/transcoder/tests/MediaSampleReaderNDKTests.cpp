@@ -26,8 +26,14 @@
 #include <gtest/gtest.h>
 #include <media/MediaSampleReaderNDK.h>
 #include <utils/Timers.h>
+#include <cmath>
+#include <mutex>
+#include <thread>
 
 // TODO(b/153453392): Test more asset types and validate sample data from readSampleDataForTrack.
+// TODO(b/153453392): Test for sequential and parallel (single thread and multi thread) access.
+// TODO(b/153453392): Test for switching between sequential and parallel access in different points
+//  of time.
 
 namespace android {
 
@@ -70,6 +76,31 @@ public:
 
             mExtractorTimestamps[trackIndex].push_back(sampleTime);
         } while (AMediaExtractor_advance(mExtractor));
+
+        AMediaExtractor_seekTo(mExtractor, 0, AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC);
+    }
+
+    std::vector<int32_t> getTrackBitrates() {
+        size_t totalSize[mTrackCount];
+        memset(totalSize, 0, sizeof(totalSize));
+
+        do {
+            const int trackIndex = AMediaExtractor_getSampleTrackIndex(mExtractor);
+            totalSize[trackIndex] += AMediaExtractor_getSampleSize(mExtractor);
+        } while (AMediaExtractor_advance(mExtractor));
+
+        AMediaExtractor_seekTo(mExtractor, 0, AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC);
+
+        std::vector<int32_t> bitrates;
+        for (int trackIndex = 0; trackIndex < mTrackCount; trackIndex++) {
+            int64_t durationUs;
+            AMediaFormat* trackFormat = AMediaExtractor_getTrackFormat(mExtractor, trackIndex);
+            EXPECT_NE(trackFormat, nullptr);
+            EXPECT_TRUE(AMediaFormat_getInt64(trackFormat, AMEDIAFORMAT_KEY_DURATION, &durationUs));
+            bitrates.push_back(roundf((float)totalSize[trackIndex] * 8 * 1000000 / durationUs));
+        }
+
+        return bitrates;
     }
 
     void TearDown() override {
@@ -94,50 +125,73 @@ TEST_F(MediaSampleReaderNDKTests, TestSampleTimes) {
             MediaSampleReaderNDK::createFromFd(mSourceFd, 0, mFileSize);
     ASSERT_TRUE(sampleReader);
 
-    MediaSampleInfo info;
-    int trackEosCount = 0;
-    std::vector<bool> trackReachedEos(mTrackCount, false);
-    std::vector<std::vector<int64_t>> readerTimestamps(mTrackCount);
+    for (int trackIndex = 0; trackIndex < mTrackCount; trackIndex++) {
+        EXPECT_EQ(sampleReader->selectTrack(trackIndex), AMEDIA_OK);
+    }
 
     // Initialize the extractor timestamps.
     initExtractorTimestamps();
 
-    // Read 5s of each track at a time.
-    const int64_t chunkDurationUs = SEC_TO_USEC(5);
-    int64_t chunkEndTimeUs = chunkDurationUs;
+    std::mutex timestampMutex;
+    std::vector<std::thread> trackThreads;
+    std::vector<std::vector<int64_t>> readerTimestamps(mTrackCount);
 
-    // Loop until all tracks have reached End Of Stream.
-    while (trackEosCount < mTrackCount) {
-        for (int trackIndex = 0; trackIndex < mTrackCount; trackIndex++) {
-            if (trackReachedEos[trackIndex]) continue;
-
-            // Advance current track to next chunk end time.
-            do {
+    for (int trackIndex = 0; trackIndex < mTrackCount; trackIndex++) {
+        trackThreads.emplace_back([sampleReader, trackIndex, &timestampMutex, &readerTimestamps] {
+            MediaSampleInfo info;
+            while (true) {
                 media_status_t status = sampleReader->getSampleInfoForTrack(trackIndex, &info);
                 if (status != AMEDIA_OK) {
-                    ASSERT_EQ(status, AMEDIA_ERROR_END_OF_STREAM);
-                    ASSERT_TRUE((info.flags & SAMPLE_FLAG_END_OF_STREAM) != 0);
-                    trackReachedEos[trackIndex] = true;
-                    trackEosCount++;
+                    EXPECT_EQ(status, AMEDIA_ERROR_END_OF_STREAM);
+                    EXPECT_TRUE((info.flags & SAMPLE_FLAG_END_OF_STREAM) != 0);
                     break;
                 }
                 ASSERT_TRUE((info.flags & SAMPLE_FLAG_END_OF_STREAM) == 0);
+                timestampMutex.lock();
                 readerTimestamps[trackIndex].push_back(info.presentationTimeUs);
+                timestampMutex.unlock();
                 sampleReader->advanceTrack(trackIndex);
-            } while (info.presentationTimeUs < chunkEndTimeUs);
-        }
-        chunkEndTimeUs += chunkDurationUs;
+            }
+        });
+    }
+
+    for (auto& thread : trackThreads) {
+        thread.join();
     }
 
     for (int trackIndex = 0; trackIndex < mTrackCount; trackIndex++) {
         LOG(DEBUG) << "Track " << trackIndex << ", comparing "
                    << readerTimestamps[trackIndex].size() << " samples.";
-        ASSERT_EQ(readerTimestamps[trackIndex].size(), mExtractorTimestamps[trackIndex].size());
+        EXPECT_EQ(readerTimestamps[trackIndex].size(), mExtractorTimestamps[trackIndex].size());
         for (size_t sampleIndex = 0; sampleIndex < readerTimestamps[trackIndex].size();
              sampleIndex++) {
-            ASSERT_EQ(readerTimestamps[trackIndex][sampleIndex],
+            EXPECT_EQ(readerTimestamps[trackIndex][sampleIndex],
                       mExtractorTimestamps[trackIndex][sampleIndex]);
         }
+    }
+}
+
+TEST_F(MediaSampleReaderNDKTests, TestEstimatedBitrateAccuracy) {
+    // Just put a somewhat reasonable upper bound on the estimated bitrate expected in our test
+    // assets. This is mostly to make sure the estimation is not way off.
+    static constexpr int32_t kMaxEstimatedBitrate = 100 * 1000 * 1000;  // 100 Mbps
+
+    auto sampleReader = MediaSampleReaderNDK::createFromFd(mSourceFd, 0, mFileSize);
+    ASSERT_TRUE(sampleReader);
+
+    std::vector<int32_t> actualTrackBitrates = getTrackBitrates();
+    for (int trackIndex = 0; trackIndex < mTrackCount; ++trackIndex) {
+        EXPECT_EQ(sampleReader->selectTrack(trackIndex), AMEDIA_OK);
+
+        int32_t bitrate;
+        EXPECT_EQ(sampleReader->getEstimatedBitrateForTrack(trackIndex, &bitrate), AMEDIA_OK);
+        EXPECT_GT(bitrate, 0);
+        EXPECT_LT(bitrate, kMaxEstimatedBitrate);
+
+        // Note: The test asset currently used in this test is shorter than the sampling duration
+        // used to estimate the bitrate in the sample reader. So for now the estimation should be
+        // exact but if/when a longer asset is used a reasonable delta needs to be defined.
+        EXPECT_EQ(bitrate, actualTrackBitrates[trackIndex]);
     }
 }
 

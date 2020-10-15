@@ -24,9 +24,10 @@
 #include <utils/RefBase.h>
 
 #include "fifo/FifoBuffer.h"
-#include "binding/IAAudioService.h"
 #include "binding/AudioEndpointParcelable.h"
 #include "binding/AAudioServiceMessage.h"
+#include "binding/AAudioStreamRequest.h"
+#include "core/AAudioStreamParameters.h"
 #include "utility/AAudioUtilities.h"
 #include "utility/AudioClock.h"
 
@@ -284,8 +285,8 @@ protected:
 
     pid_t                   mRegisteredClientThread = ILLEGAL_THREAD_ID;
 
-    SharedRingBuffer*       mUpMessageQueue;
     std::mutex              mUpMessageQueueLock;
+    std::shared_ptr<SharedRingBuffer> mUpMessageQueue;
 
     AAudioThread            mTimestampThread;
     // This is used by one thread to tell another thread to exit. So it must be atomic.

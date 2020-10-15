@@ -1272,7 +1272,7 @@ status_t AudioPolicyService::registerPolicyMixes(const Vector<AudioMix>& mixes, 
 }
 
 status_t AudioPolicyService::setUidDeviceAffinities(uid_t uid,
-        const Vector<AudioDeviceTypeAddr>& devices) {
+        const AudioDeviceTypeAddrVector& devices) {
     Mutex::Autolock _l(mLock);
     if(!modifyAudioRoutingAllowed()) {
         return PERMISSION_DENIED;
@@ -1297,7 +1297,7 @@ status_t AudioPolicyService::removeUidDeviceAffinities(uid_t uid) {
 }
 
 status_t AudioPolicyService::setUserIdDeviceAffinities(int userId,
-        const Vector<AudioDeviceTypeAddr>& devices) {
+        const AudioDeviceTypeAddrVector& devices) {
     Mutex::Autolock _l(mLock);
     if(!modifyAudioRoutingAllowed()) {
         return PERMISSION_DENIED;
@@ -1509,33 +1509,36 @@ bool AudioPolicyService::isCallScreenModeSupported()
     return mAudioPolicyManager->isCallScreenModeSupported();
 }
 
-status_t AudioPolicyService::setPreferredDeviceForStrategy(product_strategy_t strategy,
-                                                   const AudioDeviceTypeAddr &device)
+status_t AudioPolicyService::setDevicesRoleForStrategy(product_strategy_t strategy,
+                                                       device_role_t role,
+                                                       const AudioDeviceTypeAddrVector &devices)
 {
     if (mAudioPolicyManager == NULL) {
         return NO_INIT;
     }
     Mutex::Autolock _l(mLock);
-    return mAudioPolicyManager->setPreferredDeviceForStrategy(strategy, device);
+    return mAudioPolicyManager->setDevicesRoleForStrategy(strategy, role, devices);
 }
 
-status_t AudioPolicyService::removePreferredDeviceForStrategy(product_strategy_t strategy)
+status_t AudioPolicyService::removeDevicesRoleForStrategy(product_strategy_t strategy,
+                                                          device_role_t role)
 {
     if (mAudioPolicyManager == NULL) {
         return NO_INIT;
     }
     Mutex::Autolock _l(mLock);
-    return mAudioPolicyManager->removePreferredDeviceForStrategy(strategy);
+    return mAudioPolicyManager->removeDevicesRoleForStrategy(strategy, role);
 }
 
-status_t AudioPolicyService::getPreferredDeviceForStrategy(product_strategy_t strategy,
-                                                   AudioDeviceTypeAddr &device)
+status_t AudioPolicyService::getDevicesForRoleAndStrategy(product_strategy_t strategy,
+                                                          device_role_t role,
+                                                          AudioDeviceTypeAddrVector &devices)
 {
     if (mAudioPolicyManager == NULL) {
         return NO_INIT;
     }
     Mutex::Autolock _l(mLock);
-    return mAudioPolicyManager->getPreferredDeviceForStrategy(strategy, device);
+    return mAudioPolicyManager->getDevicesForRoleAndStrategy(strategy, role, devices);
 }
 
 status_t AudioPolicyService::registerSoundTriggerCaptureStateListener(
@@ -1544,6 +1547,57 @@ status_t AudioPolicyService::registerSoundTriggerCaptureStateListener(
 {
     *result = mCaptureStateNotifier.RegisterListener(listener);
     return NO_ERROR;
+}
+
+status_t AudioPolicyService::setDevicesRoleForCapturePreset(
+        audio_source_t audioSource, device_role_t role, const AudioDeviceTypeAddrVector &devices)
+{
+    if (mAudioPolicyManager == nullptr) {
+        return NO_INIT;
+    }
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->setDevicesRoleForCapturePreset(audioSource, role, devices);
+}
+
+status_t AudioPolicyService::addDevicesRoleForCapturePreset(
+        audio_source_t audioSource, device_role_t role, const AudioDeviceTypeAddrVector &devices)
+{
+    if (mAudioPolicyManager == nullptr) {
+        return NO_INIT;
+    }
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->addDevicesRoleForCapturePreset(audioSource, role, devices);
+}
+
+status_t AudioPolicyService::removeDevicesRoleForCapturePreset(
+        audio_source_t audioSource, device_role_t role, const AudioDeviceTypeAddrVector& devices)
+{
+    if (mAudioPolicyManager == nullptr) {
+        return NO_INIT;
+    }
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->removeDevicesRoleForCapturePreset(audioSource, role, devices);
+}
+
+status_t AudioPolicyService::clearDevicesRoleForCapturePreset(audio_source_t audioSource,
+                                                              device_role_t role)
+{
+    if (mAudioPolicyManager == nullptr) {
+        return NO_INIT;
+    }
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->clearDevicesRoleForCapturePreset(audioSource, role);
+}
+
+status_t AudioPolicyService::getDevicesForRoleAndCapturePreset(audio_source_t audioSource,
+                                                               device_role_t role,
+                                                               AudioDeviceTypeAddrVector &devices)
+{
+    if (mAudioPolicyManager == nullptr) {
+        return NO_INIT;
+    }
+    Mutex::Autolock _l(mLock);
+    return mAudioPolicyManager->getDevicesForRoleAndCapturePreset(audioSource, role, devices);
 }
 
 } // namespace android

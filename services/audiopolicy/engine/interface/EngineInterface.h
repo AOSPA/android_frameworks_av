@@ -34,6 +34,8 @@ namespace android {
 using DeviceStrategyMap = std::map<product_strategy_t, DeviceVector>;
 using StrategyVector = std::vector<product_strategy_t>;
 using VolumeGroupVector = std::vector<volume_group_t>;
+using CapturePresetDevicesRoleMap =
+        std::map<audio_source_t, std::map<device_role_t, AudioDeviceTypeAddrVector>>;
 
 /**
  * This interface is dedicated to the policy manager that a Policy Engine shall implement.
@@ -301,36 +303,113 @@ public:
     virtual status_t listAudioVolumeGroups(AudioVolumeGroupVector &groups) const = 0;
 
     /**
-     * @brief setPreferredDeviceForStrategy sets the default device to be used for a
-     * strategy when available
+     * @brief setDevicesRoleForStrategy sets devices role for a strategy when available. To remove
+     * devices role, removeDevicesRoleForStrategy must be called. When devices role is set
+     * successfully, previously set devices for the same role and strategy will be removed.
      * @param strategy the audio strategy whose routing will be affected
-     * @param device the audio device to route to when available
-     * @return BAD_VALUE if the strategy is invalid,
-     *     or NO_ERROR if the preferred device was set
+     * @param role the role of the devices for the strategy. All device roles are defined at
+     *             system/media/audio/include/system/audio_policy.h. DEVICE_ROLE_NONE is invalid
+     *             for setting.
+     * @param devices the audio devices to be set
+     * @return BAD_VALUE if the strategy or role is invalid,
+     *     or NO_ERROR if the role of the devices for strategy was set
      */
-    virtual status_t setPreferredDeviceForStrategy(product_strategy_t strategy,
-            const AudioDeviceTypeAddr &device) = 0;
+    virtual status_t setDevicesRoleForStrategy(product_strategy_t strategy, device_role_t role,
+            const AudioDeviceTypeAddrVector &devices) = 0;
 
     /**
-     * @brief removePreferredDeviceForStrategy removes the preferred device previously set
+     * @brief removeDevicesRoleForStrategy removes the role of device(s) previously set
      * for the given strategy
      * @param strategy the audio strategy whose routing will be affected
-     * @return BAD_VALUE if the strategy is invalid,
-     *     or NO_ERROR if the preferred device was removed
+     * @param role the role of the devices for strategy
+     * @return BAD_VALUE if the strategy or role is invalid,
+     *     or NO_ERROR if the devices for this role was removed
      */
-    virtual status_t removePreferredDeviceForStrategy(product_strategy_t strategy) = 0;
+    virtual status_t removeDevicesRoleForStrategy(product_strategy_t strategy,
+            device_role_t role) = 0;
 
     /**
-     * @brief getPreferredDeviceForStrategy queries which device is set as the
-     * preferred device for the given strategy
+     * @brief getDevicesForRoleAndStrategy queries which devices have the specified role for the
+     * specified strategy
      * @param strategy the strategy to query
-     * @param device returns configured as the preferred device if one was set
-     * @return BAD_VALUE if the strategy is invalid,
-     *     or NAME_NOT_FOUND if no preferred device was set
-     *     or NO_ERROR if the device parameter was initialized to the preferred device
+     * @param role the role of the devices to query
+     * @param devices returns list of devices with matching role for the specified strategy.
+     *                DEVICE_ROLE_NONE is invalid as input.
+     * @return BAD_VALUE if the strategy or role is invalid,
+     *     or NAME_NOT_FOUND if no device for the role and strategy was set
+     *     or NO_ERROR if the devices parameter contains a list of devices
      */
-    virtual status_t getPreferredDeviceForStrategy(product_strategy_t strategy,
-            AudioDeviceTypeAddr &device) const = 0;
+    virtual status_t getDevicesForRoleAndStrategy(product_strategy_t strategy, device_role_t role,
+            AudioDeviceTypeAddrVector &devices) const = 0;
+
+    /**
+     * @brief setDevicesRoleForCapturePreset sets devices role for a capture preset when available.
+     * To remove devices role, removeDevicesRoleForCapturePreset must be called. Calling
+     * clearDevicesRoleForCapturePreset will remove all devices as role. When devices role is set
+     * successfully, previously set devices for the same role and capture preset will be removed.
+     * @param audioSource the audio capture preset whose routing will be affected
+     * @param role the role of the devices for the capture preset. All device roles are defined at
+     *             system/media/audio/include/system/audio_policy.h. DEVICE_ROLE_NONE is invalid
+     *             for setting.
+     * @param devices the audio devices to be set
+     * @return BAD_VALUE if the capture preset or role is invalid,
+     *     or NO_ERROR if the role of the devices for capture preset was set
+     */
+    virtual status_t setDevicesRoleForCapturePreset(audio_source_t audioSource, device_role_t role,
+            const AudioDeviceTypeAddrVector &devices) = 0;
+
+    /**
+     * @brief addDevicesRoleForCapturePreset adds devices role for a capture preset when available.
+     * To remove devices role, removeDevicesRoleForCapturePreset must be called. Calling
+     * clearDevicesRoleForCapturePreset will remove all devices as role.
+     * @param audioSource the audio capture preset whose routing will be affected
+     * @param role the role of the devices for the capture preset. All device roles are defined at
+     *             system/media/audio/include/system/audio_policy.h. DEVICE_ROLE_NONE is invalid
+     *             for setting.
+     * @param devices the audio devices to be added
+     * @return BAD_VALUE if the capture preset or role is invalid,
+     *     or NO_ERROR if the role of the devices for capture preset was added
+     */
+    virtual status_t addDevicesRoleForCapturePreset(audio_source_t audioSource, device_role_t role,
+            const AudioDeviceTypeAddrVector &devices) = 0;
+
+    /**
+     * @brief removeDevicesRoleForCapturePreset removes the role of device(s) previously set
+     * for the given capture preset
+     * @param audioSource the audio capture preset whose routing will be affected
+     * @param role the role of the devices for the capture preset
+     * @param devices the devices to be removed
+     * @return BAD_VALUE if 1) the capture preset is invalid, 2) role is invalid or 3) the list of
+     *     devices to be removed are not all present as role for a capture preset
+     *     or NO_ERROR if the devices for this role was removed
+     */
+    virtual status_t removeDevicesRoleForCapturePreset(audio_source_t audioSource,
+            device_role_t role, const AudioDeviceTypeAddrVector& devices) = 0;
+
+    /**
+     * @brief clearDevicesRoleForCapturePreset removes the role of all device(s) previously set
+     * for the given capture preset
+     * @param audioSource the audio capture preset whose routing will be affected
+     * @param role the role of the devices for the capture preset
+     * @return BAD_VALUE if the capture preset or role is invalid,
+     *     or NO_ERROR if the devices for this role was removed
+     */
+    virtual status_t clearDevicesRoleForCapturePreset(audio_source_t audioSource,
+            device_role_t role);
+
+    /**
+     * @brief getDevicesForRoleAndCapturePreset queries which devices have the specified role for
+     * the specified capture preset
+     * @param audioSource the capture preset to query
+     * @param role the role of the devices to query
+     * @param devices returns list of devices with matching role for the specified capture preset.
+     *                DEVICE_ROLE_NONE is invalid as input.
+     * @return BAD_VALUE if the capture preset or role is invalid,
+     *     or NAME_NOT_FOUND if no device for the role and capture preset was set
+     *     or NO_ERROR if the devices parameter contains a list of devices
+     */
+    virtual status_t getDevicesForRoleAndCapturePreset(audio_source_t audioSource,
+            device_role_t role, AudioDeviceTypeAddrVector &devices) const = 0;
 
 
     virtual void dump(String8 *dst) const = 0;

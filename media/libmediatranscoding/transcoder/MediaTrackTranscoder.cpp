@@ -45,9 +45,8 @@ media_status_t MediaTrackTranscoder::configure(
     mMediaSampleReader = mediaSampleReader;
     mTrackIndex = trackIndex;
 
-    mSourceFormat =
-            std::shared_ptr<AMediaFormat>(mMediaSampleReader->getTrackFormat(mTrackIndex),
-                                          std::bind(AMediaFormat_delete, std::placeholders::_1));
+    mSourceFormat = std::shared_ptr<AMediaFormat>(mMediaSampleReader->getTrackFormat(mTrackIndex),
+                                                  &AMediaFormat_delete);
     if (mSourceFormat == nullptr) {
         LOG(ERROR) << "Unable to get format for track #" << mTrackIndex;
         return AMEDIA_ERROR_MALFORMED;
@@ -93,6 +92,7 @@ bool MediaTrackTranscoder::stop() {
 
     if (mState == STARTED) {
         abortTranscodeLoop();
+        mMediaSampleReader->setEnforceSequentialAccess(false);
         mTranscodingThread.join();
         mOutputQueue->abort();  // Wake up any threads waiting for samples.
         mState = STOPPED;
