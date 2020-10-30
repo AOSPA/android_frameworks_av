@@ -250,6 +250,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
             return BAD_VALUE;
         }
 
+        chkDpConnAndAllowedForVoice(device->type(), state);
         // Propagate device availability to Engine
         setEngineDeviceConnectionState(device, state);
 
@@ -7171,6 +7172,25 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
         mPrimaryOutput = desc;
     }
     return desc;
+}
+
+void AudioPolicyManager::chkDpConnAndAllowedForVoice(audio_devices_t device,
+                                                     audio_policy_dev_state_t state)
+{
+    if (device == AUDIO_DEVICE_OUT_AUX_DIGITAL) {
+        bool allowed = false;
+        bool connect = (state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
+        if (connect) {
+            String8 value;
+            String8 reply = mpClientInterface->getParameters(AUDIO_IO_HANDLE_NONE,
+                                                                String8("dp_for_voice"));
+            AudioParameter repliedParameters = AudioParameter(reply);
+            if (repliedParameters.get(String8("dp_for_voice"), value) == NO_ERROR) {
+                allowed = value.contains("true");
+            }
+        }
+        mEngine->setDpConnAndAllowedForVoice(connect & allowed);
+    }
 }
 
 } // namespace android
