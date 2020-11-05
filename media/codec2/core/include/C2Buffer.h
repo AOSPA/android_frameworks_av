@@ -734,6 +734,22 @@ public:
     }
 
     virtual ~C2Allocator() = default;
+
+    /**
+     * Returns a true if the handle looks valid for this allocator.
+     *
+     * It does not actually validate that the handle represents a valid allocation (by this
+     * allocator), only that the handle could have been returned by this allocator. As such,
+     * multiple allocators may return true for looksValid for the same handle.
+     *
+     * This method MUST be "non-blocking", MUST not access kernel and/or device drivers, and
+     * return within 1us.
+     *
+     * \param handle      the handle for an existing allocation (possibly from another
+     *                    allocator)
+     */
+    virtual bool checkHandle(const C2Handle *const handle) const = 0;
+
 protected:
     C2Allocator() = default;
 };
@@ -2156,9 +2172,12 @@ private:
 };
 
 /**
- * An extension of C2Info objects that can contain arbitrary buffer data.
+ * A const metadata object that can contain arbitrary buffer data.
  *
- * \note This object is not describable and contains opaque data.
+ * This object is not an actual C2Info and is not attached to buffers (C2Buffer), but rather to
+ * frames (C2FrameData). It is not describable via C2ParamDescriptor.
+ *
+ * C2InfoBuffer is a const object that can be allocated on stack and is copiable.
  */
 class C2InfoBuffer {
 public:
@@ -2167,14 +2186,65 @@ public:
      *
      * \return the parameter index.
      */
-    const C2Param::Index index() const;
+    const C2Param::Index index() const { return mIndex; }
 
     /**
      * Gets the buffer's data.
      *
      * \return the buffer's data.
      */
-    const C2BufferData data() const;
+    const C2BufferData data() const { return mData; }
+
+    /// Returns a clone of this as a global info buffer.
+    C2InfoBuffer asGlobal() const {
+        C2Param::Index index = mIndex;
+        index.convertToGlobal();
+        return C2InfoBuffer(index, mData);
+    }
+
+    /// Returns a clone of this as a port info buffer.
+    C2InfoBuffer asPort(bool output) const {
+        C2Param::Index index = mIndex;
+        index.convertToPort(output);
+        return C2InfoBuffer(index, mData);
+    }
+
+    /// Returns a clone of this as a stream info buffer.
+    C2InfoBuffer asStream(bool output, unsigned stream) const {
+        C2Param::Index index = mIndex;
+        index.convertToStream(output, stream);
+        return C2InfoBuffer(index, mData);
+    }
+
+    /**
+     * Creates a global info buffer containing a single linear block.
+     *
+     * \param index the core parameter index of this info buffer.
+     * \param block the content of the info buffer.
+     *
+     * \return shared pointer to the created info buffer.
+     */
+    static C2InfoBuffer CreateLinearBuffer(C2Param::CoreIndex index, const C2ConstLinearBlock &block);
+
+    /**
+     * Creates a global info buffer containing a single graphic block.
+     *
+     * \param index the core parameter index of this info buffer.
+     * \param block the content of the info buffer.
+     *
+     * \return shared pointer to the created info buffer.
+     */
+    static C2InfoBuffer CreateGraphicBuffer(C2Param::CoreIndex index, const C2ConstGraphicBlock &block);
+
+protected:
+    // no public constructor
+    explicit C2InfoBuffer(C2Param::Index index, const std::vector<C2ConstLinearBlock> &blocks);
+    explicit C2InfoBuffer(C2Param::Index index, const std::vector<C2ConstGraphicBlock> &blocks);
+
+private:
+    C2Param::Index mIndex;
+    C2BufferData mData;
+    explicit C2InfoBuffer(C2Param::Index index, const C2BufferData &data);
 };
 
 /// @}
