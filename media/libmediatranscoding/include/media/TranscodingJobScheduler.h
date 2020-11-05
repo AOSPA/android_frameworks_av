@@ -18,11 +18,13 @@
 #define ANDROID_MEDIA_TRANSCODING_JOB_SCHEDULER_H
 
 #include <aidl/android/media/TranscodingJobPriority.h>
+#include <media/ResourcePolicyInterface.h>
 #include <media/SchedulerClientInterface.h>
 #include <media/TranscoderInterface.h>
 #include <media/TranscodingRequest.h>
 #include <media/UidPolicyInterface.h>
 #include <utils/String8.h>
+#include <utils/Vector.h>
 
 #include <list>
 #include <map>
@@ -34,7 +36,8 @@ using ::aidl::android::media::TranscodingResultParcel;
 
 class TranscodingJobScheduler : public UidPolicyCallbackInterface,
                                 public SchedulerClientInterface,
-                                public TranscoderCallbackInterface {
+                                public TranscoderCallbackInterface,
+                                public ResourcePolicyCallbackInterface {
 public:
     virtual ~TranscodingJobScheduler();
 
@@ -58,8 +61,16 @@ public:
 
     // UidPolicyCallbackInterface
     void onTopUidsChanged(const std::unordered_set<uid_t>& uids) override;
-    void onResourceAvailable() override;
     // ~UidPolicyCallbackInterface
+
+    // ResourcePolicyCallbackInterface
+    void onResourceAvailable() override;
+    // ~ResourcePolicyCallbackInterface
+
+    /**
+     * Dump all the job information to the fd.
+     */
+    void dumpAllJobs(int fd, const Vector<String16>& args);
 
 private:
     friend class MediaTranscodingService;
@@ -71,11 +82,12 @@ private:
     struct Job {
         JobKeyType key;
         uid_t uid;
-        enum JobState {
+        enum State {
             NOT_STARTED,
             RUNNING,
             PAUSED,
         } state;
+        int32_t lastProgress;
         TranscodingRequest request;
         std::weak_ptr<ITranscodingClientCallback> callback;
     };
@@ -96,13 +108,15 @@ private:
 
     std::shared_ptr<TranscoderInterface> mTranscoder;
     std::shared_ptr<UidPolicyInterface> mUidPolicy;
+    std::shared_ptr<ResourcePolicyInterface> mResourcePolicy;
 
     Job* mCurrentJob;
     bool mResourceLost;
 
     // Only allow MediaTranscodingService and unit tests to instantiate.
     TranscodingJobScheduler(const std::shared_ptr<TranscoderInterface>& transcoder,
-                            const std::shared_ptr<UidPolicyInterface>& uidPolicy);
+                            const std::shared_ptr<UidPolicyInterface>& uidPolicy,
+                            const std::shared_ptr<ResourcePolicyInterface>& resourcePolicy);
 
     Job* getTopJob_l();
     void updateCurrentJob_l();
@@ -114,6 +128,7 @@ private:
     void validateState_l();
 
     static String8 jobToString(const JobKeyType& jobKey);
+    static const char* jobStateToString(const Job::State jobState);
 };
 
 }  // namespace android

@@ -2903,8 +2903,8 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
         (void)posix_memalign(&mEffectBuffer, 32, mEffectBufferSize);
     }
 
-    mHapticChannelMask = mChannelMask & AUDIO_CHANNEL_HAPTIC_ALL;
-    mChannelMask &= ~mHapticChannelMask;
+    mHapticChannelMask = static_cast<audio_channel_mask_t>(mChannelMask & AUDIO_CHANNEL_HAPTIC_ALL);
+    mChannelMask = static_cast<audio_channel_mask_t>(mChannelMask & ~mHapticChannelMask);
     mHapticChannelCount = audio_channel_count_from_out_mask(mHapticChannelMask);
     mChannelCount -= mHapticChannelCount;
 
@@ -4279,7 +4279,7 @@ status_t AudioFlinger::PlaybackThread::createAudioPatch_l(const struct audio_pat
                             "Enumerated device type(%#x) must not be used "
                             "as it does not support audio patches",
                             patch->sinks[i].ext.device.type);
-        type |= patch->sinks[i].ext.device.type;
+        type = static_cast<audio_devices_t>(type | patch->sinks[i].ext.device.type);
         deviceTypeAddrs.push_back(AudioDeviceTypeAddr(patch->sinks[i].ext.device.type,
                 patch->sinks[i].ext.device.address));
     }
@@ -4529,8 +4529,9 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         // wrap the source side of the MonoPipe to make it an AudioBufferProvider
         fastTrack->mBufferProvider = new SourceAudioBufferProvider(new MonoPipeReader(monoPipe));
         fastTrack->mVolumeProvider = NULL;
-        fastTrack->mChannelMask = mChannelMask | mHapticChannelMask; // mPipeSink channel mask for
-                                                                     // audio to FastMixer
+        fastTrack->mChannelMask = static_cast<audio_channel_mask_t>(
+                mChannelMask | mHapticChannelMask); // mPipeSink channel mask for
+                                                    // audio to FastMixer
         fastTrack->mFormat = mFormat; // mPipeSink format for audio to FastMixer
         fastTrack->mHapticPlaybackEnabled = mHapticChannelMask != AUDIO_CHANNEL_NONE;
         fastTrack->mHapticIntensity = os::HapticScale::NONE;
@@ -4544,7 +4545,8 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         // specify sink channel mask when haptic channel mask present as it can not
         // be calculated directly from channel count
         state->mSinkChannelMask = mHapticChannelMask == AUDIO_CHANNEL_NONE
-                ? AUDIO_CHANNEL_NONE : mChannelMask | mHapticChannelMask;
+                ? AUDIO_CHANNEL_NONE
+                : static_cast<audio_channel_mask_t>(mChannelMask | mHapticChannelMask);
         state->mCommand = FastMixerState::COLD_IDLE;
         // already done in constructor initialization list
         //mFastMixerFutex = 0;
@@ -8867,6 +8869,11 @@ status_t AudioFlinger::MmapThreadHandle::getMmapPosition(struct audio_mmap_posit
     return mThread->getMmapPosition(position);
 }
 
+status_t AudioFlinger::MmapThreadHandle::getExternalPosition(uint64_t *position,
+                                                             int64_t *timeNanos) {
+    return mThread->getExternalPosition(position, timeNanos);
+}
+
 status_t AudioFlinger::MmapThreadHandle::start(const AudioClient& client,
         const audio_attributes_t *attr, audio_port_handle_t *handle)
 
@@ -8902,7 +8909,6 @@ AudioFlinger::MmapThread::MmapThread(
 
 AudioFlinger::MmapThread::~MmapThread()
 {
-    releaseWakeLock_l();
 }
 
 void AudioFlinger::MmapThread::onFirstRef()
@@ -8952,7 +8958,6 @@ status_t AudioFlinger::MmapThread::createMmapBuffer(int32_t minSizeFrames,
         return NO_INIT;
     }
     mStandby = true;
-    acquireWakeLock();
     return mHalStream->createMmapBuffer(minSizeFrames, info);
 }
 
@@ -8991,8 +8996,12 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
     status_t ret;
 
     if (*handle == mPortId) {
-        // for the first track, reuse portId and session allocated when the stream was opened
-        return exitStandby();
+        // For the first track, reuse portId and session allocated when the stream was opened.
+        ret = exitStandby();
+        if (ret == NO_ERROR) {
+            acquireWakeLock();
+        }
+        return ret;
     }
 
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
@@ -9113,6 +9122,7 @@ status_t AudioFlinger::MmapThread::stop(audio_port_handle_t handle)
 
     if (handle == mPortId) {
         mHalStream->stop();
+        releaseWakeLock();
         return NO_ERROR;
     }
 
@@ -9355,7 +9365,7 @@ status_t AudioFlinger::MmapThread::createAudioPatch_l(const struct audio_patch *
                                 "Enumerated device type(%#x) must not be used "
                                 "as it does not support audio patches",
                                 patch->sinks[i].ext.device.type);
-            type |= patch->sinks[i].ext.device.type;
+            type = static_cast<audio_devices_t>(type | patch->sinks[i].ext.device.type);
             sinkDeviceTypeAddrs.push_back(AudioDeviceTypeAddr(patch->sinks[i].ext.device.type,
                     patch->sinks[i].ext.device.address));
         }
@@ -9821,6 +9831,20 @@ void AudioFlinger::MmapPlaybackThread::toAudioPortConfig(struct audio_port_confi
     }
 }
 
+status_t AudioFlinger::MmapPlaybackThread::getExternalPosition(uint64_t *position,
+                                                               int64_t *timeNanos)
+{
+    if (mOutput == nullptr) {
+        return NO_INIT;
+    }
+    struct timespec timestamp;
+    status_t status = mOutput->getPresentationPosition(position, &timestamp);
+    if (status == NO_ERROR) {
+        *timeNanos = timestamp.tv_sec * NANOS_PER_SECOND + timestamp.tv_nsec;
+    }
+    return status;
+}
+
 void AudioFlinger::MmapPlaybackThread::dumpInternals_l(int fd, const Vector<String16>& args)
 {
     MmapThread::dumpInternals_l(fd, args);
@@ -9923,6 +9947,15 @@ void AudioFlinger::MmapCaptureThread::toAudioPortConfig(struct audio_port_config
         config->config_mask |= AUDIO_PORT_CONFIG_FLAGS;
         config->flags.input = mInput->flags;
     }
+}
+
+status_t AudioFlinger::MmapCaptureThread::getExternalPosition(
+        uint64_t *position, int64_t *timeNanos)
+{
+    if (mInput == nullptr) {
+        return NO_INIT;
+    }
+    return mInput->getCapturePosition((int64_t*)position, timeNanos);
 }
 
 } // namespace android

@@ -196,9 +196,9 @@ aaudio_result_t AudioStreamTrack::open(const AudioStreamBuilder& builder)
     setSamplesPerFrame(mAudioTrack->channelCount());
     setFormat(mAudioTrack->format());
     setDeviceFormat(mAudioTrack->format());
-
-    int32_t actualSampleRate = mAudioTrack->getSampleRate();
-    setSampleRate(actualSampleRate);
+    setSampleRate(mAudioTrack->getSampleRate());
+    setBufferCapacity(getBufferCapacityFromDevice());
+    setFramesPerBurst(getFramesPerBurstFromDevice());
 
     // We may need to pass the data through a block size adapter to guarantee constant size.
     if (mCallbackBufferSize != AAUDIO_UNSPECIFIED) {
@@ -220,9 +220,6 @@ aaudio_result_t AudioStreamTrack::open(const AudioStreamBuilder& builder)
             ? AAUDIO_SESSION_ID_NONE
             : (aaudio_session_id_t) mAudioTrack->getSessionId();
     setSessionId(actualSessionId);
-
-    mInitialBufferCapacity = getBufferCapacity();
-    mInitialFramesPerBurst = getFramesPerBurst();
 
     mAudioTrack->addAudioDeviceCallback(this);
 
@@ -288,8 +285,8 @@ void AudioStreamTrack::processCallback(int event, void *info) {
                     || mAudioTrack->format() != getFormat()
                     || mAudioTrack->getSampleRate() != getSampleRate()
                     || mAudioTrack->getRoutedDeviceId() != getDeviceId()
-                    || getBufferCapacity() != mInitialBufferCapacity
-                    || getFramesPerBurst() != mInitialFramesPerBurst) {
+                    || getBufferCapacityFromDevice() != getBufferCapacity()
+                    || getFramesPerBurstFromDevice() != getFramesPerBurst()) {
                 processCallbackCommon(AAUDIO_CALLBACK_OPERATION_DISCONNECTED, info);
             }
             break;
@@ -478,7 +475,7 @@ int32_t AudioStreamTrack::getBufferSize() const
     return static_cast<int32_t>(mAudioTrack->getBufferSizeInFrames());
 }
 
-int32_t AudioStreamTrack::getBufferCapacity() const
+int32_t AudioStreamTrack::getBufferCapacityFromDevice() const
 {
     return static_cast<int32_t>(mAudioTrack->frameCount());
 }
@@ -488,8 +485,7 @@ int32_t AudioStreamTrack::getXRunCount() const
     return static_cast<int32_t>(mAudioTrack->getUnderrunCount());
 }
 
-int32_t AudioStreamTrack::getFramesPerBurst() const
-{
+int32_t AudioStreamTrack::getFramesPerBurstFromDevice() const {
     return static_cast<int32_t>(mAudioTrack->getNotificationPeriodInFrames());
 }
 
