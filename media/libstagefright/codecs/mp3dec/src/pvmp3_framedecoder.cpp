@@ -219,7 +219,7 @@ ERROR_CODE pvmp3_framedecoder(tPVMP3DecoderExternal *pExt,
 
     if (info->error_protection)
     {
-        if (bitsAvailable(&pVars->inputStream, 16))
+        if (!bitsAvailable(&pVars->inputStream, 16))
         {
             return SIDE_INFO_ERROR;
         }
