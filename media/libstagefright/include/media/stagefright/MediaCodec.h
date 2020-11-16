@@ -427,6 +427,10 @@ private:
 
     sp<ICrypto> mCrypto;
 
+    int32_t mTunneledInputWidth;
+    int32_t mTunneledInputHeight;
+    bool mTunneled;
+
     sp<IDescrambler> mDescrambler;
 
     List<sp<ABuffer> > mCSD;

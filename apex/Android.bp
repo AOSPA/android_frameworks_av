@@ -31,6 +31,8 @@ apex_defaults {
                 "libmpeg2extractor",
                 "liboggextractor",
                 "libwavextractor",
+                // JNI
+                "libmediaparser-jni"
             ],
         },
     },
@@ -64,10 +66,9 @@ apex {
     ],
 }
 
-prebuilt_etc {
+linker_config {
     name: "media-linker-config",
-    src: "linker.config.txt",
-    filename: "linker.config.txt",
+    src: "linker.config.json",
     installable: false,
 }
 
