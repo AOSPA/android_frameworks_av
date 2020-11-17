@@ -98,7 +98,7 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
 
                 {
                     // Lock the AudioFifo to protect against close.
-                    std::lock_guard <std::mutex> lock(streamShared->getAudioDataQueueLock());
+                    std::lock_guard <std::mutex> lock(streamShared->audioDataQueueLock);
                     std::shared_ptr<SharedRingBuffer> audioDataQueue
                             = streamShared->getAudioDataQueue_l();
                     std::shared_ptr<FifoBuffer> fifo;
@@ -145,7 +145,9 @@ void *AAudioServiceEndpointPlay::callbackLoop() {
         result = getStreamInternal()->write(mMixer.getOutputBuffer(),
                                             getFramesPerBurst(), timeoutNanos);
         if (result == AAUDIO_ERROR_DISCONNECTED) {
-            ALOGV("%s() write() returned AAUDIO_ERROR_DISCONNECTED, break", __func__);
+            ALOGD("%s() write() returned AAUDIO_ERROR_DISCONNECTED", __func__);
+            // We do not need the returned vector.
+            (void) AAudioServiceEndpointShared::disconnectRegisteredStreams();
             break;
         } else if (result != getFramesPerBurst()) {
             ALOGW("callbackLoop() wrote %d / %d",

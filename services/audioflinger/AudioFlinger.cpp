@@ -22,6 +22,15 @@
 // Define AUDIO_ARRAYS_STATIC_CHECK to check all audio arrays are correct
 #define AUDIO_ARRAYS_STATIC_CHECK 1
 
+#define VALUE_OR_FATAL(result)                   \
+    ({                                           \
+       auto _tmp = (result);                     \
+       LOG_ALWAYS_FATAL_IF(!_tmp.ok(),           \
+                           "Failed result (%d)", \
+                           _tmp.error());        \
+       std::move(_tmp.value());                  \
+     })
+
 #include "Configuration.h"
 #include <dirent.h>
 #include <math.h>
@@ -68,6 +77,7 @@
 #include <powermanager/PowerManager.h>
 
 #include <media/IMediaLogService.h>
+#include <media/AidlConversion.h>
 #include <media/nbaio/Pipe.h>
 #include <media/nbaio/PipeReader.h>
 #include <mediautils/BatteryNotifier.h>
@@ -747,10 +757,27 @@ void AudioFlinger::unregisterWriter(const sp<NBLog::Writer>& writer)
 
 // IAudioFlinger interface
 
-sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
-                                          CreateTrackOutput& output,
-                                          status_t *status)
+sp<IAudioTrack> AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
+                                          media::CreateTrackResponse& _output,
+                                          status_t* status)
 {
+    // Local version of VALUE_OR_RETURN, specific to this method's calling conventions.
+#define VALUE_OR_EXIT(expr)         \
+    ({                              \
+        auto _tmp = (expr);         \
+        if (!_tmp.ok()) {           \
+            *status = _tmp.error(); \
+            return nullptr;         \
+        }                           \
+        std::move(_tmp.value());    \
+    })
+
+    CreateTrackInput input = VALUE_OR_EXIT(CreateTrackInput::fromAidl(_input));
+
+#undef VALUE_OR_EXIT
+
+    CreateTrackOutput output;
+
     sp<PlaybackThread::Track> track;
     sp<TrackHandle> trackHandle;
     sp<Client> client;
@@ -1006,6 +1033,8 @@ sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
     if (effectThreadId != AUDIO_IO_HANDLE_NONE) {
         AudioSystem::moveEffectsToIo(effectIds, effectThreadId);
     }
+
+    _output = VALUE_OR_FATAL(output.toAidl());
 
     // return handle to client
     trackHandle = new TrackHandle(track);
@@ -1774,7 +1803,7 @@ status_t AudioFlinger::getRenderPosition(uint32_t *halFrames, uint32_t *dspFrame
     return BAD_VALUE;
 }
 
-void AudioFlinger::registerClient(const sp<IAudioFlingerClient>& client)
+void AudioFlinger::registerClient(const sp<media::IAudioFlingerClient>& client)
 {
     Mutex::Autolock _l(mLock);
     if (client == 0) {
@@ -1849,13 +1878,18 @@ void AudioFlinger::removeNotificationClient(pid_t pid)
 
 void AudioFlinger::ioConfigChanged(audio_io_config_event event,
                                    const sp<AudioIoDescriptor>& ioDesc,
-                                   pid_t pid)
-{
+                                   pid_t pid) {
+    media::AudioIoDescriptor descAidl = VALUE_OR_FATAL(
+            legacy2aidl_AudioIoDescriptor_AudioIoDescriptor(ioDesc));
+    media::AudioIoConfigEvent eventAidl = VALUE_OR_FATAL(
+            legacy2aidl_audio_io_config_event_AudioIoConfigEvent(event));
+
     Mutex::Autolock _l(mClientLock);
     size_t size = mNotificationClients.size();
     for (size_t i = 0; i < size; i++) {
         if ((pid == 0) || (mNotificationClients.keyAt(i) == pid)) {
-            mNotificationClients.valueAt(i)->audioFlingerClient()->ioConfigChanged(event, ioDesc);
+            mNotificationClients.valueAt(i)->audioFlingerClient()->ioConfigChanged(eventAidl,
+                                                                                   descAidl);
         }
     }
 }
@@ -1929,7 +1963,7 @@ sp<MemoryDealer> AudioFlinger::Client::heap() const
 // ----------------------------------------------------------------------------
 
 AudioFlinger::NotificationClient::NotificationClient(const sp<AudioFlinger>& audioFlinger,
-                                                     const sp<IAudioFlingerClient>& client,
+                                                     const sp<media::IAudioFlingerClient>& client,
                                                      pid_t pid,
                                                      uid_t uid)
     : mAudioFlinger(audioFlinger), mPid(pid), mUid(uid), mAudioFlingerClient(client)
@@ -1984,10 +2018,26 @@ void AudioFlinger::requestLogMerge() {
 
 // ----------------------------------------------------------------------------
 
-sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& input,
-                                                   CreateRecordOutput& output,
-                                                   status_t *status)
+sp<media::IAudioRecord> AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
+                                                   media::CreateRecordResponse& _output,
+                                                   status_t* status)
 {
+    // Local version of VALUE_OR_RETURN, specific to this method's calling conventions.
+#define VALUE_OR_EXIT(expr)         \
+    ({                              \
+        auto _tmp = (expr);         \
+        if (!_tmp.ok()) {           \
+            *status = _tmp.error(); \
+            return nullptr;         \
+        }                           \
+        std::move(_tmp.value());    \
+    })
+
+    CreateRecordInput input = VALUE_OR_EXIT(CreateRecordInput::fromAidl(_input));
+
+#undef VALUE_OR_EXIT
+    CreateRecordOutput output;
+
     sp<RecordThread::RecordTrack> recordTrack;
     sp<RecordHandle> recordHandle;
     sp<Client> client;
@@ -2124,6 +2174,8 @@ sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& inpu
     output.cblk = recordTrack->getCblk();
     output.buffers = recordTrack->getBuffers();
     output.portId = portId;
+
+    _output = VALUE_OR_FATAL(output.toAidl());
 
     // return handle to client
     recordHandle = new RecordHandle(recordTrack);

@@ -20,11 +20,13 @@
 #include <atomic>
 #include <mutex>
 #include <stdint.h>
-#include <aaudio/AAudio.h>
+
+#include <android-base/thread_annotations.h>
 #include <binder/IServiceManager.h>
 #include <binder/Status.h>
 #include <utils/StrongPointer.h>
 
+#include <aaudio/AAudio.h>
 #include <media/AudioSystem.h>
 #include <media/PlayerBase.h>
 #include <media/VolumeShaper.h>
@@ -57,11 +59,6 @@ public:
 
 protected:
 
-    /* Asynchronous requests.
-     * Use waitForStateChange() to wait for completion.
-     */
-    virtual aaudio_result_t requestStart() = 0;
-
     /**
      * Check the state to see if Pause is currently legal.
      *
@@ -80,18 +77,22 @@ protected:
         return false;
     }
 
-    virtual aaudio_result_t requestPause()
-    {
+    /* Asynchronous requests.
+     * Use waitForStateChange() to wait for completion.
+     */
+    virtual aaudio_result_t requestStart_l() REQUIRES(mStreamLock) = 0;
+
+    virtual aaudio_result_t requestPause_l() REQUIRES(mStreamLock) {
         // Only implement this for OUTPUT streams.
         return AAUDIO_ERROR_UNIMPLEMENTED;
     }
 
-    virtual aaudio_result_t requestFlush() {
+    virtual aaudio_result_t requestFlush_l() REQUIRES(mStreamLock) {
         // Only implement this for OUTPUT streams.
         return AAUDIO_ERROR_UNIMPLEMENTED;
     }
 
-    virtual aaudio_result_t requestStop() = 0;
+    virtual aaudio_result_t requestStop_l() REQUIRES(mStreamLock) = 0;
 
 public:
     virtual aaudio_result_t getTimestamp(clockid_t clockId,
@@ -131,11 +132,12 @@ public:
      * The AAudioStream_close() method releases if needed and then closes.
      */
 
+protected:
     /**
      * Free any hardware or system resources from the open() call.
      * It is safe to call release_l() multiple times.
      */
-    virtual aaudio_result_t release_l() {
+    virtual aaudio_result_t release_l() REQUIRES(mStreamLock) {
         setState(AAUDIO_STREAM_STATE_CLOSING);
         return AAUDIO_OK;
     }
@@ -144,7 +146,7 @@ public:
      * Free any resources not already freed by release_l().
      * Assume release_l() already called.
      */
-    virtual void close_l() {
+    virtual void close_l() REQUIRES(mStreamLock) {
         // Releasing the stream will set the state to CLOSING.
         assert(getState() == AAUDIO_STREAM_STATE_CLOSING);
         // setState() prevents a transition from CLOSING to any state other than CLOSED.
@@ -152,17 +154,7 @@ public:
         setState(AAUDIO_STREAM_STATE_CLOSED);
     }
 
-    /**
-     * Release then close the stream.
-     */
-    void releaseCloseFinal() {
-        if (getState() != AAUDIO_STREAM_STATE_CLOSING) { // not already released?
-            // Ignore result and keep closing.
-            (void) release_l();
-        }
-        close_l();
-    }
-
+public:
     // This is only used to identify a stream in the logs without
     // revealing any pointers.
     aaudio_stream_id_t getId() {
@@ -171,11 +163,11 @@ public:
 
     virtual aaudio_result_t setBufferSize(int32_t requestedFrames) = 0;
 
-    virtual aaudio_result_t createThread(int64_t periodNanoseconds,
-                                       aaudio_audio_thread_proc_t threadProc,
-                                       void *threadArg);
+    virtual aaudio_result_t createThread_l(int64_t periodNanoseconds,
+                                           aaudio_audio_thread_proc_t threadProc,
+                                           void *threadArg);
 
-    aaudio_result_t joinThread(void **returnArg, int64_t timeoutNanoseconds);
+    aaudio_result_t joinThread(void **returnArg);
 
     virtual aaudio_result_t registerThread() {
         return AAUDIO_OK;
@@ -432,6 +424,8 @@ public:
      */
     aaudio_result_t safeReleaseClose();
 
+    aaudio_result_t safeReleaseCloseFromCallback();
+
 protected:
 
     // PlayerBase allows the system to control the stream volume.
@@ -483,9 +477,8 @@ protected:
 
     private:
         // Use a weak pointer so the AudioStream can be deleted.
-
         std::mutex               mParentLock;
-        android::wp<AudioStream> mParent;
+        android::wp<AudioStream> mParent GUARDED_BY(mParentLock);
         aaudio_result_t          mResult = AAUDIO_OK;
         bool                     mRegistered = false;
     };
@@ -542,6 +535,8 @@ protected:
     void setSessionId(int32_t sessionId) {
         mSessionId = sessionId;
     }
+
+    aaudio_result_t joinThread_l(void **returnArg) REQUIRES(mStreamLock);
 
     std::atomic<bool>    mCallbackEnabled{false};
 
@@ -609,11 +604,22 @@ protected:
 
     std::string mMetricsId; // set once during open()
 
+    std::mutex                 mStreamLock;
+
 private:
 
-    aaudio_result_t safeStop();
+    aaudio_result_t safeStop_l() REQUIRES(mStreamLock);
 
-    std::mutex                 mStreamLock;
+    /**
+     * Release then close the stream.
+     */
+    void releaseCloseFinal_l() REQUIRES(mStreamLock) {
+        if (getState() != AAUDIO_STREAM_STATE_CLOSING) { // not already released?
+            // Ignore result and keep closing.
+            (void) release_l();
+        }
+        close_l();
+    }
 
     const android::sp<MyPlayerBase>   mPlayerBase;
 
@@ -653,8 +659,8 @@ private:
     std::atomic<pid_t>          mErrorCallbackThread{CALLBACK_THREAD_NONE};
 
     // background thread ----------------------------------
-    bool                        mHasThread = false;
-    pthread_t                   mThread; // initialized in constructor
+    bool                        mHasThread GUARDED_BY(mStreamLock) = false;
+    pthread_t                   mThread  GUARDED_BY(mStreamLock) = {};
 
     // These are set by the application thread and then read by the audio pthread.
     std::atomic<int64_t>        mPeriodNanoseconds; // for tuning SCHED_FIFO threads

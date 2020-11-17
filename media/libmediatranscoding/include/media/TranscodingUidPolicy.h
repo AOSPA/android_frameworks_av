@@ -35,7 +35,7 @@ namespace android {
 
 class ActivityManager;
 // Observer for UID lifecycle and provide information about the uid's app
-// priority used by the job scheduler.
+// priority used by the session controller.
 class TranscodingUidPolicy : public UidPolicyInterface {
 public:
     explicit TranscodingUidPolicy();
@@ -49,7 +49,6 @@ public:
     void setCallback(const std::shared_ptr<UidPolicyCallbackInterface>& cb) override;
     // ~UidPolicyInterface
 
-    static bool getNamesForUids(const std::vector<int32_t>& uids, std::vector<std::string>* names);
     static status_t getUidForPackage(String16 packageName, /*inout*/ uid_t& uid);
 
 private:
