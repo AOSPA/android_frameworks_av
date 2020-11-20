@@ -1468,7 +1468,7 @@ bool AudioFlinger::streamMute(audio_stream_type_t stream) const
 }
 
 
-void AudioFlinger::broacastParametersToRecordThreads_l(const String8& keyValuePairs)
+void AudioFlinger::broadcastParametersToRecordThreads_l(const String8& keyValuePairs)
 {
     for (size_t i = 0; i < mRecordThreads.size(); i++) {
         mRecordThreads.valueAt(i)->setParameters(keyValuePairs);
@@ -1626,7 +1626,7 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
             int value;
             if ((param.getInt(String8(AudioParameter::keyRouting), value) == NO_ERROR) &&
                     (value != 0)) {
-                broacastParametersToRecordThreads_l(filteredKeyValuePairs);
+                broadcastParametersToRecordThreads_l(filteredKeyValuePairs);
             }
         }
     }
@@ -3203,7 +3203,8 @@ std::vector<sp<AudioFlinger::EffectModule>> AudioFlinger::purgeStaleEffects_l() 
 // dumpToThreadLog_l() must be called with AudioFlinger::mLock held
 void AudioFlinger::dumpToThreadLog_l(const sp<ThreadBase> &thread)
 {
-    audio_utils::FdToString fdToString;
+    constexpr int THREAD_DUMP_TIMEOUT_MS = 2;
+    audio_utils::FdToString fdToString("- ", THREAD_DUMP_TIMEOUT_MS);
     const int fd = fdToString.fd();
     if (fd >= 0) {
         thread->dump(fd, {} /* args */);
