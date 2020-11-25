@@ -1378,15 +1378,17 @@ void NuPlayer::Renderer::postDrainVideoQueue() {
             clearAnchorTime();
         }
         if (mAnchorTimeMediaUs < 0) {
-            if (mPaused && !mVideoSampleReceived /* peroll check */ && mHasAudio) {
+            if (mPaused && !mVideoSampleReceived && mHasAudio) {
+
                 // this is the first video buffer to be drained, and we know there is audio track
                 // exist. sicne audio start has inevitable latency, we wait audio for a while, give
                 // audio a chance to update anchor time. video doesn't update anchor this time to
                 // alleviate a/v sync issue
                 auto audioStartLatency = 1000 * (mAudioSink->latency()
                                 - (1000 * mAudioSink->frameCount() / mAudioSink->getSampleRate()));
-                ALOGI("NOTE: First video buffer, wait audio for a while due to audio start"
-                        "latency(%zuus)", audioStartLatency);
+                ALOGI("NOTE: First video buffer, wait audio for a while due to audio start latency(%zuus)",
+                        audioStartLatency);
+                // use first buffer ts to update anchor
                 msg->setInt64("mediaTimeUs", mediaTimeUs);
                 msg->post(audioStartLatency);
                 mDrainVideoQueuePending = true;
