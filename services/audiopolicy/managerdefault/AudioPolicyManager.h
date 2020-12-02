@@ -591,6 +591,8 @@ protected:
          */
         void checkAudioSourceForAttributes(const audio_attributes_t &attr);
 
+        bool isInvalidationOfMusicStreamNeeded(const audio_attributes_t &attr);
+
         bool followsSameRouting(const audio_attributes_t &lAttr,
                                 const audio_attributes_t &rAttr) const;
 

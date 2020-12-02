@@ -5662,8 +5662,21 @@ const unsigned int muteLatencyFactor = property_get_int32(
 const unsigned int routingLatency = property_get_int32(
             "audio.sys.routing.latency", DEFAULT_ROUTING_LATENCY_MS);
 
+bool AudioPolicyManager::isInvalidationOfMusicStreamNeeded(const audio_attributes_t &attr)
+{
+    if (followsSameRouting(attr, attributes_initializer(AUDIO_USAGE_MEDIA))) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            sp<SwAudioOutputDescriptor> newOutputDesc = mOutputs.valueAt(i);
+            if (newOutputDesc->getFormat() == AUDIO_FORMAT_DSD)
+                return false;
+        }
+    }
+    return true;
+}
 void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr)
 {
+    if (!isInvalidationOfMusicStreamNeeded(attr))
+        return;
     auto psId = mEngine->getProductStrategyForAttributes(attr);
 
     DeviceVector oldDevices = mEngine->getOutputDevicesForAttributes(attr, 0, true /*fromCache*/);
