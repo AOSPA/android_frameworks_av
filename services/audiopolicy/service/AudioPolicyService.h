@@ -773,6 +773,8 @@ private:
 
         void setSoundTriggerCaptureState(bool active) override;
 
+        status_t getAudioPort(struct audio_port_v7 *port) override;
+
      private:
         AudioPolicyService *mAudioPolicyService;
     };
