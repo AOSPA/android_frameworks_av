@@ -24,7 +24,7 @@
 
 #include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
-#include <media/AudioSanitizer.h>
+#include <media/AudioValidator.h>
 #include <media/IAudioPolicyService.h>
 #include <mediautils/ServiceUtilities.h>
 #include <mediautils/TimeCheck.h>
@@ -946,14 +946,14 @@ public:
         reply.read(ports, *num_ports * sizeof(struct audio_port));
         return status;
     }
-    virtual status_t getAudioPort(struct audio_port *port)
+    virtual status_t getAudioPort(struct audio_port_v7 *port)
     {
-        if (port == NULL) {
+        if (port == nullptr) {
             return BAD_VALUE;
         }
         Parcel data, reply;
         data.writeInterfaceToken(IAudioFlinger::getInterfaceDescriptor());
-        data.write(port, sizeof(struct audio_port));
+        data.write(port, sizeof(struct audio_port_v7));
         status_t status = remote()->transact(GET_AUDIO_PORT, data, &reply);
         if (status != NO_ERROR ||
                 (status = (status_t)reply.readInt32()) != NO_ERROR) {
@@ -1646,19 +1646,19 @@ status_t BnAudioFlinger::onTransact(
         } break;
         case GET_AUDIO_PORT: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
-            struct audio_port port = {};
+            struct audio_port_v7 port = {};
             status_t status = data.read(&port, sizeof(struct audio_port));
             if (status != NO_ERROR) {
                 ALOGE("b/23905951");
                 return status;
             }
-            status = AudioSanitizer::sanitizeAudioPort(&port);
+            status = AudioValidator::validateAudioPort(port);
             if (status == NO_ERROR) {
                 status = getAudioPort(&port);
             }
             reply->writeInt32(status);
             if (status == NO_ERROR) {
-                reply->write(&port, sizeof(struct audio_port));
+                reply->write(&port, sizeof(struct audio_port_v7));
             }
             return NO_ERROR;
         } break;
@@ -1675,7 +1675,7 @@ status_t BnAudioFlinger::onTransact(
                 ALOGE("b/23905951");
                 return status;
             }
-            status = AudioSanitizer::sanitizeAudioPatch(&patch);
+            status = AudioValidator::validateAudioPatch(patch);
             if (status == NO_ERROR) {
                 status = createAudioPatch(&patch, &handle);
             }
@@ -1727,7 +1727,7 @@ status_t BnAudioFlinger::onTransact(
             if (status != NO_ERROR) {
                 return status;
             }
-            status = AudioSanitizer::sanitizeAudioPortConfig(&config);
+            status = AudioValidator::validateAudioPortConfig(config);
             if (status == NO_ERROR) {
                 status = setAudioPortConfig(&config);
             }
