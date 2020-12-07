@@ -1732,7 +1732,10 @@ bool CCodecBufferChannel::handleWork(
             outBuffer->meta()->setInt64("timeUs", timestamp.peek());
             outBuffer->meta()->setInt32("flags", MediaCodec::BUFFER_FLAG_CODECCONFIG);
             ALOGV("[%s] onWorkDone: csd index = %zu [%p]", mName, index, outBuffer.get());
-
+            if (outputFormat) {
+                ALOGD("[%s] sending CSD : output format changed to %s",
+                      mName, outputFormat->debugString().c_str());
+            }
             output.unlock();
             mCallback->onOutputBufferAvailable(index, outBuffer);
         } else {
@@ -1780,7 +1783,7 @@ bool CCodecBufferChannel::handleWork(
                 notifyClient,
                 timestamp.peek(),
                 flags,
-                outputFormat,
+                (initData == nullptr ? outputFormat : nullptr),
                 worklet->output.ordinal);
     }
     sendOutputBuffers();
