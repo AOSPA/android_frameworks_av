@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "92654d52_f5844915",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000002
+      },
+      "writtenOn": "2020-12-08T16:31:30Z",
+      "side": 1,
+      "message": "We went over this in Slack if I recall correctly. Removing restrictions like this is not a good idea.",
+      "revId": "61d692e78b3ae2a5f73daefb5d40df484fbb1c62",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
