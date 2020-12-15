@@ -33,7 +33,7 @@
 
 #include <system/audio.h>
 
-#define VALUE_OR_RETURN_STATUS(x) \
+#define VALUE_OR_RETURN_BINDER_STATUS(x) \
     ({ auto _tmp = (x); \
        if (!_tmp.ok()) return Status::fromStatusT(_tmp.error()); \
        std::move(_tmp.value()); })
@@ -71,7 +71,7 @@ const sp<IAudioFlinger> AudioSystem::get_audio_flinger()
             sp<IServiceManager> sm = defaultServiceManager();
             sp<IBinder> binder;
             do {
-                binder = sm->getService(String16("media.audio_flinger"));
+                binder = sm->getService(String16(IAudioFlinger::DEFAULT_SERVICE_NAME));
                 if (binder != 0)
                     break;
                 ALOGW("AudioFlinger not published, waiting...");
@@ -83,7 +83,8 @@ const sp<IAudioFlinger> AudioSystem::get_audio_flinger()
                 reportNoError = true;
             }
             binder->linkToDeath(gAudioFlingerClient);
-            gAudioFlinger = interface_cast<IAudioFlinger>(binder);
+            gAudioFlinger = new AudioFlingerClientAdapter(
+                    interface_cast<media::IAudioFlingerService>(binder));
             LOG_ALWAYS_FATAL_IF(gAudioFlinger == 0);
             afc = gAudioFlingerClient;
             // Make sure callbacks can be received by gAudioFlingerClient
@@ -532,10 +533,10 @@ void AudioSystem::AudioFlingerClient::binderDied(const wp<IBinder>& who __unused
 Status AudioSystem::AudioFlingerClient::ioConfigChanged(
         media::AudioIoConfigEvent _event,
         const media::AudioIoDescriptor& _ioDesc) {
-    audio_io_config_event event = VALUE_OR_RETURN_STATUS(
+    audio_io_config_event event = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioIoConfigEvent_audio_io_config_event(_event));
     sp<AudioIoDescriptor> ioDesc(
-            VALUE_OR_RETURN_STATUS(aidl2legacy_AudioIoDescriptor_AudioIoDescriptor(_ioDesc)));
+            VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_AudioIoDescriptor_AudioIoDescriptor(_ioDesc)));
 
     ALOGV("ioConfigChanged() event %d", event);
 
