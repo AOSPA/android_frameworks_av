@@ -52,7 +52,8 @@ DeviceDescriptor::DeviceDescriptor(audio_devices_t type,
 DeviceDescriptor::DeviceDescriptor(const AudioDeviceTypeAddr &deviceTypeAddr,
                                    const std::string &tagName,
                                    const FormatVector &encodedFormats) :
-        DeviceDescriptorBase(deviceTypeAddr), mTagName(tagName), mEncodedFormats(encodedFormats)
+        DeviceDescriptorBase(deviceTypeAddr), mTagName(tagName), mEncodedFormats(encodedFormats),
+        mDeclaredAddress(deviceTypeAddr.getAddress())
 {
     mCurrentEncodedFormat = AUDIO_FORMAT_DEFAULT;
     /* If framework runs against a pre 5.0 Audio HAL, encoded formats are absent from the config.
@@ -75,6 +76,10 @@ void DeviceDescriptor::attach(const sp<HwModule>& module)
 void DeviceDescriptor::detach() {
     mId = AUDIO_PORT_HANDLE_NONE;
     PolicyAudioPort::detach();
+    // The device address may have been overwritten on device connection
+    setAddress(mDeclaredAddress);
+    // Device Port does not have a name unless provided by setDeviceConnectionState
+    setName("");
 }
 
 template<typename T>
@@ -227,6 +232,7 @@ void DeviceVector::add(const DeviceVector &devices)
 {
     bool added = false;
     for (const auto& device : devices) {
+        ALOG_ASSERT(device != nullptr, "Null pointer found when adding DeviceVector");
         if (indexOf(device) < 0 && SortedVector::add(device) >= 0) {
             added = true;
         }
@@ -238,6 +244,7 @@ void DeviceVector::add(const DeviceVector &devices)
 
 ssize_t DeviceVector::add(const sp<DeviceDescriptor>& item)
 {
+    ALOG_ASSERT(item != nullptr, "Adding null pointer to DeviceVector");
     ssize_t ret = indexOf(item);
 
     if (ret < 0) {
@@ -407,7 +414,7 @@ sp<DeviceDescriptor> DeviceVector::getDeviceForOpening() const
     if (isEmpty()) {
         // Return nullptr if this collection is empty.
         return nullptr;
-    } else if (areAllOfSameDeviceType(types(), audio_is_input_device)) {
+    } else if (areAllOfSameDeviceType(types(), audio_call_is_input_device)) {
         // For input case, return the first one when there is only one device.
         return size() > 1 ? nullptr : *begin();
     } else if (areAllOfSameDeviceType(types(), audio_is_output_device)) {
@@ -418,6 +425,24 @@ sp<DeviceDescriptor> DeviceVector::getDeviceForOpening() const
     }
     // Return null pointer if the devices are not all input/output device.
     return nullptr;
+}
+
+sp<DeviceDescriptor> DeviceVector::getDeviceFromDeviceTypeAddr(
+            const AudioDeviceTypeAddr& deviceTypeAddr) const {
+    return getDevice(deviceTypeAddr.mType, String8(deviceTypeAddr.getAddress()),
+            AUDIO_FORMAT_DEFAULT);
+}
+
+DeviceVector DeviceVector::getDevicesFromDeviceTypeAddrVec(
+        const AudioDeviceTypeAddrVector& deviceTypeAddrVector) const {
+    DeviceVector devices;
+    for (const auto& deviceTypeAddr : deviceTypeAddrVector) {
+        sp<DeviceDescriptor> device = getDeviceFromDeviceTypeAddr(deviceTypeAddr);
+        if (device != nullptr) {
+            devices.add(device);
+        }
+    }
+    return devices;
 }
 
 void DeviceVector::replaceDevicesByType(
@@ -440,7 +465,7 @@ void DeviceVector::dump(String8 *dst, const String8 &tag, int spaces, bool verbo
     }
 }
 
-std::string DeviceVector::toString() const
+std::string DeviceVector::toString(bool includeSensitiveInfo) const
 {
     if (isEmpty()) {
         return {"AUDIO_DEVICE_NONE"};
@@ -450,7 +475,7 @@ std::string DeviceVector::toString() const
         if (device != *begin()) {
            result += ";";
         }
-        result += device->toString();
+        result += device->toString(includeSensitiveInfo);
     }
     return result + "}";
 }

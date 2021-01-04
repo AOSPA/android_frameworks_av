@@ -24,9 +24,9 @@
 #include <cutils/properties.h>
 #include <media/TranscoderWrapper.h>
 #include <media/TranscodingClientManager.h>
-#include <media/TranscodingJobScheduler.h>
+#include <media/TranscodingResourcePolicy.h>
+#include <media/TranscodingSessionController.h>
 #include <media/TranscodingUidPolicy.h>
-#include <private/android_filesystem_config.h>
 #include <utils/Log.h>
 #include <utils/Vector.h>
 
@@ -40,28 +40,17 @@ namespace android {
             errorCode,                                \
             String8::format("%s:%d: " errorString, __FUNCTION__, __LINE__, ##__VA_ARGS__))
 
-// Can MediaTranscoding service trust the caller based on the calling UID?
-// TODO(hkuang): Add MediaProvider's UID.
-static bool isTrustedCallingUid(uid_t uid) {
-    switch (uid) {
-    case AID_ROOT:  // root user
-    case AID_SYSTEM:
-    case AID_SHELL:
-    case AID_MEDIA:  // mediaserver
-        return true;
-    default:
-        return false;
-    }
-}
-
 MediaTranscodingService::MediaTranscodingService(
         const std::shared_ptr<TranscoderInterface>& transcoder)
       : mUidPolicy(new TranscodingUidPolicy()),
-        mJobScheduler(new TranscodingJobScheduler(transcoder, mUidPolicy)),
-        mClientManager(new TranscodingClientManager(mJobScheduler)) {
+        mResourcePolicy(new TranscodingResourcePolicy()),
+        mSessionController(
+                new TranscodingSessionController(transcoder, mUidPolicy, mResourcePolicy)),
+        mClientManager(new TranscodingClientManager(mSessionController)) {
     ALOGV("MediaTranscodingService is created");
-    transcoder->setCallback(mJobScheduler);
-    mUidPolicy->setCallback(mJobScheduler);
+    transcoder->setCallback(mSessionController);
+    mUidPolicy->setCallback(mSessionController);
+    mResourcePolicy->setCallback(mSessionController);
 }
 
 MediaTranscodingService::~MediaTranscodingService() {
@@ -90,6 +79,7 @@ binder_status_t MediaTranscodingService::dump(int fd, const char** /*args*/, uin
 
     Vector<String16> args;
     mClientManager->dumpAllClients(fd, args);
+    mSessionController->dumpAllSessions(fd, args);
     return OK;
 }
 
@@ -113,51 +103,18 @@ void MediaTranscodingService::instantiate() {
 
 Status MediaTranscodingService::registerClient(
         const std::shared_ptr<ITranscodingClientCallback>& in_callback,
-        const std::string& in_clientName, const std::string& in_opPackageName, int32_t in_clientUid,
-        int32_t in_clientPid, std::shared_ptr<ITranscodingClient>* _aidl_return) {
+        const std::string& in_clientName, const std::string& in_opPackageName,
+        std::shared_ptr<ITranscodingClient>* _aidl_return) {
     if (in_callback == nullptr) {
         *_aidl_return = nullptr;
         return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT, "Client callback cannot be null!");
     }
 
-    int32_t callingPid = AIBinder_getCallingPid();
-    int32_t callingUid = AIBinder_getCallingUid();
-
-    // Check if we can trust clientUid. Only privilege caller could forward the
-    // uid on app client's behalf.
-    if (in_clientUid == USE_CALLING_UID) {
-        in_clientUid = callingUid;
-    } else if (!isTrustedCallingUid(callingUid)) {
-        ALOGE("MediaTranscodingService::registerClient failed (calling PID %d, calling UID %d) "
-              "rejected "
-              "(don't trust clientUid %d)",
-              in_clientPid, in_clientUid, in_clientUid);
-        return STATUS_ERROR_FMT(ERROR_PERMISSION_DENIED,
-                                "Untrusted caller (calling PID %d, UID %d) trying to "
-                                "register client",
-                                in_clientPid, in_clientUid);
-    }
-
-    // Check if we can trust clientPid. Only privilege caller could forward the
-    // pid on app client's behalf.
-    if (in_clientPid == USE_CALLING_PID) {
-        in_clientPid = callingPid;
-    } else if (!isTrustedCallingUid(callingUid)) {
-        ALOGE("MediaTranscodingService::registerClient client failed (calling PID %d, calling UID "
-              "%d) rejected "
-              "(don't trust clientPid %d)",
-              in_clientPid, in_clientUid, in_clientPid);
-        return STATUS_ERROR_FMT(ERROR_PERMISSION_DENIED,
-                                "Untrusted caller (calling PID %d, UID %d) trying to "
-                                "register client",
-                                in_clientPid, in_clientUid);
-    }
-
     // Creates the client and uses its process id as client id.
     std::shared_ptr<ITranscodingClient> newClient;
 
-    status_t err = mClientManager->addClient(in_callback, in_clientPid, in_clientUid, in_clientName,
-                                             in_opPackageName, &newClient);
+    status_t err =
+            mClientManager->addClient(in_callback, in_clientName, in_opPackageName, &newClient);
     if (err != OK) {
         *_aidl_return = nullptr;
         return STATUS_ERROR_FMT(err, "Failed to add client to TranscodingClientManager");

@@ -18,7 +18,11 @@
 #define LOG_TAG "VideoTrackTranscoder"
 
 #include <android-base/logging.h>
+#include <media/NdkCommon.h>
 #include <media/VideoTrackTranscoder.h>
+#include <utils/AndroidThreads.h>
+
+using namespace AMediaFormatUtils;
 
 namespace android {
 
@@ -34,11 +38,21 @@ static_assert(SAMPLE_FLAG_PARTIAL_FRAME == AMEDIACODEC_BUFFER_FLAG_PARTIAL_FRAME
 static constexpr int32_t kColorFormatSurface = 0x7f000789;
 // Default key frame interval in seconds.
 static constexpr float kDefaultKeyFrameIntervalSeconds = 1.0f;
+// Default codec operating rate.
+static constexpr int32_t kDefaultCodecOperatingRate = 240;
+// Default codec priority.
+static constexpr int32_t kDefaultCodecPriority = 1;
+// Default bitrate, in case source estimation fails.
+static constexpr int32_t kDefaultBitrateMbps = 10 * 1000 * 1000;
 
 template <typename T>
 void VideoTrackTranscoder::BlockingQueue<T>::push(T const& value, bool front) {
     {
-        std::unique_lock<std::mutex> lock(mMutex);
+        std::scoped_lock lock(mMutex);
+        if (mAborted) {
+            return;
+        }
+
         if (front) {
             mQueue.push_front(value);
         } else {
@@ -50,13 +64,21 @@ void VideoTrackTranscoder::BlockingQueue<T>::push(T const& value, bool front) {
 
 template <typename T>
 T VideoTrackTranscoder::BlockingQueue<T>::pop() {
-    std::unique_lock<std::mutex> lock(mMutex);
+    std::unique_lock lock(mMutex);
     while (mQueue.empty()) {
         mCondition.wait(lock);
     }
     T value = mQueue.front();
     mQueue.pop_front();
     return value;
+}
+
+// Note: Do not call if another thread might waiting in pop.
+template <typename T>
+void VideoTrackTranscoder::BlockingQueue<T>::abort() {
+    std::scoped_lock lock(mMutex);
+    mAborted = true;
+    mQueue.clear();
 }
 
 // The CodecWrapper class is used to let AMediaCodec instances outlive the transcoder object itself
@@ -175,11 +197,24 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
         return AMEDIA_ERROR_INVALID_PARAMETER;
     }
 
-    float tmp;
-    if (!AMediaFormat_getFloat(encoderFormat, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, &tmp)) {
-        AMediaFormat_setFloat(encoderFormat, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
-                              kDefaultKeyFrameIntervalSeconds);
+    int32_t bitrate;
+    if (!AMediaFormat_getInt32(encoderFormat, AMEDIAFORMAT_KEY_BIT_RATE, &bitrate)) {
+        status = mMediaSampleReader->getEstimatedBitrateForTrack(mTrackIndex, &bitrate);
+        if (status != AMEDIA_OK) {
+            LOG(ERROR) << "Unable to estimate bitrate. Using default " << kDefaultBitrateMbps;
+            bitrate = kDefaultBitrateMbps;
+        }
+
+        LOG(INFO) << "Configuring bitrate " << bitrate;
+        AMediaFormat_setInt32(encoderFormat, AMEDIAFORMAT_KEY_BIT_RATE, bitrate);
     }
+
+    SetDefaultFormatValueFloat(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, encoderFormat,
+                               kDefaultKeyFrameIntervalSeconds);
+    SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_OPERATING_RATE, encoderFormat,
+                               kDefaultCodecOperatingRate);
+    SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_PRIORITY, encoderFormat, kDefaultCodecPriority);
+
     AMediaFormat_setInt32(encoderFormat, AMEDIAFORMAT_KEY_COLOR_FORMAT, kColorFormatSurface);
 
     // Always encode without rotation. The rotation degree will be transferred directly to
@@ -232,7 +267,26 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
         return AMEDIA_ERROR_UNSUPPORTED;
     }
 
-    status = AMediaCodec_configure(mDecoder, mSourceFormat.get(), mSurface, NULL /* crypto */,
+    auto decoderFormat = std::shared_ptr<AMediaFormat>(AMediaFormat_new(), &AMediaFormat_delete);
+    if (!decoderFormat ||
+        AMediaFormat_copy(decoderFormat.get(), mSourceFormat.get()) != AMEDIA_OK) {
+        LOG(ERROR) << "Unable to copy source format";
+        return AMEDIA_ERROR_INVALID_PARAMETER;
+    }
+
+    // Prevent decoder from overwriting frames that the encoder has not yet consumed.
+    AMediaFormat_setInt32(decoderFormat.get(), TBD_AMEDIACODEC_PARAMETER_KEY_ALLOW_FRAME_DROP, 0);
+
+    // Copy over configurations that apply to both encoder and decoder.
+    static const EntryCopier kEncoderEntriesToCopy[] = {
+            ENTRY_COPIER2(AMEDIAFORMAT_KEY_OPERATING_RATE, Float, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_PRIORITY, Int32),
+    };
+    const size_t entryCount = sizeof(kEncoderEntriesToCopy) / sizeof(kEncoderEntriesToCopy[0]);
+    CopyFormatEntries(mDestinationFormat.get(), decoderFormat.get(), kEncoderEntriesToCopy,
+                      entryCount);
+
+    status = AMediaCodec_configure(mDecoder, decoderFormat.get(), mSurface, NULL /* crypto */,
                                    0 /* flags */);
     if (status != AMEDIA_OK) {
         LOG(ERROR) << "Unable to configure video decoder: " << status;
@@ -300,8 +354,6 @@ void VideoTrackTranscoder::enqueueInputSample(int32_t bufferIndex) {
             mStatus = status;
             return;
         }
-
-        mMediaSampleReader->advanceTrack(mTrackIndex);
     } else {
         LOG(DEBUG) << "EOS from source.";
         mEosFromSource = true;
@@ -351,12 +403,7 @@ void VideoTrackTranscoder::dequeueOutputSample(int32_t bufferIndex,
         sample->info.flags = bufferInfo.flags;
         sample->info.presentationTimeUs = bufferInfo.presentationTimeUs;
 
-        const bool aborted = mOutputQueue->enqueue(sample);
-        if (aborted) {
-            LOG(ERROR) << "Output sample queue was aborted. Stopping transcode.";
-            mStatus = AMEDIA_ERROR_IO;  // TODO: Define custom error codes?
-            return;
-        }
+        onOutputSampleAvailable(sample);
     } else if (bufferIndex == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
         AMediaFormat* newFormat = AMediaCodec_getOutputFormat(mEncoder->getCodec());
         LOG(DEBUG) << "Encoder output format changed: " << AMediaFormat_toString(newFormat);
@@ -437,8 +484,10 @@ void VideoTrackTranscoder::updateTrackFormat(AMediaFormat* outputFormat) {
 }
 
 media_status_t VideoTrackTranscoder::runTranscodeLoop() {
+    androidSetThreadPriority(0 /* tid (0 = current) */, ANDROID_PRIORITY_VIDEO);
+
     // Push start decoder and encoder as two messages, so that these are subject to the
-    // stop request as well. If the job is cancelled (or paused) immediately after start,
+    // stop request as well. If the session is cancelled (or paused) immediately after start,
     // we don't need to waste time start then stop the codecs.
     mCodecMessageQueue.push([this] {
         media_status_t status = AMediaCodec_start(mDecoder);
@@ -463,12 +512,14 @@ media_status_t VideoTrackTranscoder::runTranscodeLoop() {
         message();
     }
 
+    mCodecMessageQueue.abort();
+    AMediaCodec_stop(mDecoder);
+
     // Return error if transcoding was stopped before it finished.
     if (mStopRequested && !mEosFromEncoder && mStatus == AMEDIA_OK) {
         mStatus = AMEDIA_ERROR_UNKNOWN;  // TODO: Define custom error codes?
     }
 
-    AMediaCodec_stop(mDecoder);
     return mStatus;
 }
 

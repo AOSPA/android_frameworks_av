@@ -25,7 +25,7 @@
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 #include <gtest/gtest.h>
-#include <media/SchedulerClientInterface.h>
+#include <media/ControllerClientInterface.h>
 #include <media/TranscodingClientManager.h>
 #include <media/TranscodingRequest.h>
 #include <utils/Log.h>
@@ -38,21 +38,20 @@ using Status = ::ndk::ScopedAStatus;
 using ::aidl::android::media::BnTranscodingClientCallback;
 using ::aidl::android::media::IMediaTranscodingService;
 using ::aidl::android::media::TranscodingErrorCode;
-using ::aidl::android::media::TranscodingJobParcel;
-using ::aidl::android::media::TranscodingJobPriority;
 using ::aidl::android::media::TranscodingRequestParcel;
 using ::aidl::android::media::TranscodingResultParcel;
+using ::aidl::android::media::TranscodingSessionParcel;
+using ::aidl::android::media::TranscodingSessionPriority;
 
-constexpr pid_t kInvalidClientPid = -1;
+constexpr pid_t kInvalidClientPid = -5;
+constexpr pid_t kInvalidClientUid = -10;
 constexpr const char* kInvalidClientName = "";
 constexpr const char* kInvalidClientPackage = "";
 
-constexpr pid_t kClientPid = 2;
-constexpr uid_t kClientUid = 3;
 constexpr const char* kClientName = "TestClientName";
 constexpr const char* kClientPackage = "TestClientPackage";
 
-#define JOB(n) (n)
+#define SESSION(n) (n)
 
 struct TestClientCallback : public BnTranscodingClientCallback {
     TestClientCallback() { ALOGI("TestClientCallback Created"); }
@@ -64,30 +63,32 @@ struct TestClientCallback : public BnTranscodingClientCallback {
         return Status::ok();
     }
 
-    Status onTranscodingStarted(int32_t /*in_jobId*/) override { return Status::ok(); }
+    Status onTranscodingStarted(int32_t /*in_sessionId*/) override { return Status::ok(); }
 
-    Status onTranscodingPaused(int32_t /*in_jobId*/) override { return Status::ok(); }
+    Status onTranscodingPaused(int32_t /*in_sessionId*/) override { return Status::ok(); }
 
-    Status onTranscodingResumed(int32_t /*in_jobId*/) override { return Status::ok(); }
+    Status onTranscodingResumed(int32_t /*in_sessionId*/) override { return Status::ok(); }
 
-    Status onTranscodingFinished(int32_t in_jobId,
+    Status onTranscodingFinished(int32_t in_sessionId,
                                  const TranscodingResultParcel& in_result) override {
-        EXPECT_EQ(in_jobId, in_result.jobId);
-        mEventQueue.push_back(Finished(in_jobId));
+        EXPECT_EQ(in_sessionId, in_result.sessionId);
+        mEventQueue.push_back(Finished(in_sessionId));
         return Status::ok();
     }
 
-    Status onTranscodingFailed(int32_t in_jobId, TranscodingErrorCode /*in_errorCode */) override {
-        mEventQueue.push_back(Failed(in_jobId));
+    Status onTranscodingFailed(int32_t in_sessionId,
+                               TranscodingErrorCode /*in_errorCode */) override {
+        mEventQueue.push_back(Failed(in_sessionId));
         return Status::ok();
     }
 
-    Status onAwaitNumberOfJobsChanged(int32_t /* in_jobId */, int32_t /* in_oldAwaitNumber */,
-                                      int32_t /* in_newAwaitNumber */) override {
+    Status onAwaitNumberOfSessionsChanged(int32_t /* in_sessionId */,
+                                          int32_t /* in_oldAwaitNumber */,
+                                          int32_t /* in_newAwaitNumber */) override {
         return Status::ok();
     }
 
-    Status onProgressUpdate(int32_t /* in_jobId */, int32_t /* in_progress */) override {
+    Status onProgressUpdate(int32_t /* in_sessionId */, int32_t /* in_progress */) override {
         return Status::ok();
     }
 
@@ -97,12 +98,12 @@ struct TestClientCallback : public BnTranscodingClientCallback {
             Finished,
             Failed,
         } type;
-        JobIdType jobId;
+        SessionIdType sessionId;
     };
 
     static constexpr Event NoEvent = {Event::NoEvent, 0};
 #define DECLARE_EVENT(action) \
-    static Event action(JobIdType jobId) { return {Event::action, jobId}; }
+    static Event action(SessionIdType sessionId) { return {Event::action, sessionId}; }
 
     DECLARE_EVENT(Finished);
     DECLARE_EVENT(Failed);
@@ -126,102 +127,102 @@ private:
 };
 
 bool operator==(const TestClientCallback::Event& lhs, const TestClientCallback::Event& rhs) {
-    return lhs.type == rhs.type && lhs.jobId == rhs.jobId;
+    return lhs.type == rhs.type && lhs.sessionId == rhs.sessionId;
 }
 
-struct TestScheduler : public SchedulerClientInterface {
-    TestScheduler() { ALOGI("TestScheduler Created"); }
+struct TestController : public ControllerClientInterface {
+    TestController() { ALOGI("TestController Created"); }
 
-    virtual ~TestScheduler() { ALOGI("TestScheduler Destroyed"); }
+    virtual ~TestController() { ALOGI("TestController Destroyed"); }
 
-    bool submit(ClientIdType clientId, JobIdType jobId, uid_t /*uid*/,
+    bool submit(ClientIdType clientId, SessionIdType sessionId, uid_t /*uid*/,
                 const TranscodingRequestParcel& request,
                 const std::weak_ptr<ITranscodingClientCallback>& clientCallback) override {
-        JobKeyType jobKey = std::make_pair(clientId, jobId);
-        if (mJobs.count(jobKey) > 0) {
+        SessionKeyType sessionKey = std::make_pair(clientId, sessionId);
+        if (mSessions.count(sessionKey) > 0) {
             return false;
         }
 
         // This is the secret name we'll check, to test error propagation from
-        // the scheduler back to client.
+        // the controller back to client.
         if (request.sourceFilePath == "bad_source_file") {
             return false;
         }
 
-        mJobs[jobKey].request = request;
-        mJobs[jobKey].callback = clientCallback;
+        mSessions[sessionKey].request = request;
+        mSessions[sessionKey].callback = clientCallback;
 
-        mLastJob = jobKey;
+        mLastSession = sessionKey;
         return true;
     }
 
-    bool cancel(ClientIdType clientId, JobIdType jobId) override {
-        JobKeyType jobKey = std::make_pair(clientId, jobId);
+    bool cancel(ClientIdType clientId, SessionIdType sessionId) override {
+        SessionKeyType sessionKey = std::make_pair(clientId, sessionId);
 
-        if (mJobs.count(jobKey) == 0) {
+        if (mSessions.count(sessionKey) == 0) {
             return false;
         }
-        mJobs.erase(jobKey);
+        mSessions.erase(sessionKey);
         return true;
     }
 
-    bool getJob(ClientIdType clientId, JobIdType jobId,
-                TranscodingRequestParcel* request) override {
-        JobKeyType jobKey = std::make_pair(clientId, jobId);
-        if (mJobs.count(jobKey) == 0) {
+    bool getSession(ClientIdType clientId, SessionIdType sessionId,
+                    TranscodingRequestParcel* request) override {
+        SessionKeyType sessionKey = std::make_pair(clientId, sessionId);
+        if (mSessions.count(sessionKey) == 0) {
             return false;
         }
 
-        *(TranscodingRequest*)request = mJobs[jobKey].request;
+        *(TranscodingRequest*)request = mSessions[sessionKey].request;
         return true;
     }
 
-    void finishLastJob() {
-        auto it = mJobs.find(mLastJob);
-        if (it == mJobs.end()) {
+    void finishLastSession() {
+        auto it = mSessions.find(mLastSession);
+        if (it == mSessions.end()) {
             return;
         }
         {
             auto clientCallback = it->second.callback.lock();
             if (clientCallback != nullptr) {
                 clientCallback->onTranscodingFinished(
-                        mLastJob.second,
-                        TranscodingResultParcel({mLastJob.second, 0, std::nullopt}));
+                        mLastSession.second,
+                        TranscodingResultParcel({mLastSession.second, 0, std::nullopt}));
             }
         }
-        mJobs.erase(it);
+        mSessions.erase(it);
     }
 
-    void abortLastJob() {
-        auto it = mJobs.find(mLastJob);
-        if (it == mJobs.end()) {
+    void abortLastSession() {
+        auto it = mSessions.find(mLastSession);
+        if (it == mSessions.end()) {
             return;
         }
         {
             auto clientCallback = it->second.callback.lock();
             if (clientCallback != nullptr) {
-                clientCallback->onTranscodingFailed(mLastJob.second,
+                clientCallback->onTranscodingFailed(mLastSession.second,
                                                     TranscodingErrorCode::kUnknown);
             }
         }
-        mJobs.erase(it);
+        mSessions.erase(it);
     }
 
-    struct Job {
+    struct Session {
         TranscodingRequest request;
         std::weak_ptr<ITranscodingClientCallback> callback;
     };
 
-    typedef std::pair<ClientIdType, JobIdType> JobKeyType;
-    std::map<JobKeyType, Job> mJobs;
-    JobKeyType mLastJob;
+    typedef std::pair<ClientIdType, SessionIdType> SessionKeyType;
+    std::map<SessionKeyType, Session> mSessions;
+    SessionKeyType mLastSession;
 };
 
 class TranscodingClientManagerTest : public ::testing::Test {
 public:
     TranscodingClientManagerTest()
-          : mScheduler(new TestScheduler()),
-            mClientManager(new TranscodingClientManager(mScheduler)) {
+          : mController(new TestController()),
+            mClientManager(new TranscodingClientManager(mController)) {
         ALOGD("TranscodingClientManagerTest created");
     }
 
@@ -236,19 +237,19 @@ public:
     ~TranscodingClientManagerTest() { ALOGD("TranscodingClientManagerTest destroyed"); }
 
     void addMultipleClients() {
-        EXPECT_EQ(mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, kClientName,
-                                            kClientPackage, &mClient1),
-                  OK);
+        EXPECT_EQ(
+                mClientManager->addClient(mClientCallback1, kClientName, kClientPackage, &mClient1),
+                OK);
         EXPECT_NE(mClient1, nullptr);
 
-        EXPECT_EQ(mClientManager->addClient(mClientCallback2, kClientPid, kClientUid, kClientName,
-                                            kClientPackage, &mClient2),
-                  OK);
+        EXPECT_EQ(
+                mClientManager->addClient(mClientCallback2, kClientName, kClientPackage, &mClient2),
+                OK);
         EXPECT_NE(mClient2, nullptr);
 
-        EXPECT_EQ(mClientManager->addClient(mClientCallback3, kClientPid, kClientUid, kClientName,
-                                            kClientPackage, &mClient3),
-                  OK);
+        EXPECT_EQ(
+                mClientManager->addClient(mClientCallback3, kClientName, kClientPackage, &mClient3),
+                OK);
         EXPECT_NE(mClient3, nullptr);
 
         EXPECT_EQ(mClientManager->getNumOfClients(), 3);
@@ -261,7 +262,7 @@ public:
         EXPECT_EQ(mClientManager->getNumOfClients(), 0);
     }
 
-    std::shared_ptr<TestScheduler> mScheduler;
+    std::shared_ptr<TestController> mController;
     std::shared_ptr<TranscodingClientManager> mClientManager;
     std::shared_ptr<ITranscodingClient> mClient1;
     std::shared_ptr<ITranscodingClient> mClient2;
@@ -274,40 +275,39 @@ public:
 TEST_F(TranscodingClientManagerTest, TestAddingWithInvalidClientCallback) {
     // Add a client with null callback and expect failure.
     std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(nullptr, kClientPid, kClientUid, kClientName,
-                                             kClientPackage, &client);
+    status_t err = mClientManager->addClient(nullptr, kClientName, kClientPackage, &client);
     EXPECT_EQ(err, IMediaTranscodingService::ERROR_ILLEGAL_ARGUMENT);
 }
-
-TEST_F(TranscodingClientManagerTest, TestAddingWithInvalidClientPid) {
-    // Add a client with invalid Pid and expect failure.
-    std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(mClientCallback1, kInvalidClientPid, kClientUid,
-                                             kClientName, kClientPackage, &client);
-    EXPECT_EQ(err, IMediaTranscodingService::ERROR_ILLEGAL_ARGUMENT);
-}
+//
+//TEST_F(TranscodingClientManagerTest, TestAddingWithInvalidClientPid) {
+//    // Add a client with invalid Pid and expect failure.
+//    std::shared_ptr<ITranscodingClient> client;
+//    status_t err = mClientManager->addClient(mClientCallback1,
+//                                             kClientName, kClientPackage, &client);
+//    EXPECT_EQ(err, IMediaTranscodingService::ERROR_ILLEGAL_ARGUMENT);
+//}
 
 TEST_F(TranscodingClientManagerTest, TestAddingWithInvalidClientName) {
     // Add a client with invalid name and expect failure.
     std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid,
-                                             kInvalidClientName, kClientPackage, &client);
+    status_t err = mClientManager->addClient(mClientCallback1, kInvalidClientName, kClientPackage,
+                                             &client);
     EXPECT_EQ(err, IMediaTranscodingService::ERROR_ILLEGAL_ARGUMENT);
 }
 
 TEST_F(TranscodingClientManagerTest, TestAddingWithInvalidClientPackageName) {
     // Add a client with invalid packagename and expect failure.
     std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, kClientName,
-                                             kInvalidClientPackage, &client);
+    status_t err = mClientManager->addClient(mClientCallback1, kClientName, kInvalidClientPackage,
+                                             &client);
     EXPECT_EQ(err, IMediaTranscodingService::ERROR_ILLEGAL_ARGUMENT);
 }
 
 TEST_F(TranscodingClientManagerTest, TestAddingValidClient) {
     // Add a valid client, should succeed.
     std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, kClientName,
-                                             kClientPackage, &client);
+    status_t err =
+            mClientManager->addClient(mClientCallback1, kClientName, kClientPackage, &client);
     EXPECT_EQ(err, OK);
     EXPECT_NE(client.get(), nullptr);
     EXPECT_EQ(mClientManager->getNumOfClients(), 1);
@@ -320,15 +320,14 @@ TEST_F(TranscodingClientManagerTest, TestAddingValidClient) {
 
 TEST_F(TranscodingClientManagerTest, TestAddingDupliacteClient) {
     std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, kClientName,
-                                             kClientPackage, &client);
+    status_t err =
+            mClientManager->addClient(mClientCallback1, kClientName, kClientPackage, &client);
     EXPECT_EQ(err, OK);
     EXPECT_NE(client.get(), nullptr);
     EXPECT_EQ(mClientManager->getNumOfClients(), 1);
 
     std::shared_ptr<ITranscodingClient> dupClient;
-    err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, "dupClient",
-                                    "dupPackage", &dupClient);
+    err = mClientManager->addClient(mClientCallback1, "dupClient", "dupPackage", &dupClient);
     EXPECT_EQ(err, IMediaTranscodingService::ERROR_ALREADY_EXISTS);
     EXPECT_EQ(dupClient.get(), nullptr);
     EXPECT_EQ(mClientManager->getNumOfClients(), 1);
@@ -337,8 +336,7 @@ TEST_F(TranscodingClientManagerTest, TestAddingDupliacteClient) {
     EXPECT_TRUE(status.isOk());
     EXPECT_EQ(mClientManager->getNumOfClients(), 0);
 
-    err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, "dupClient",
-                                    "dupPackage", &dupClient);
+    err = mClientManager->addClient(mClientCallback1, "dupClient", "dupPackage", &dupClient);
     EXPECT_EQ(err, OK);
     EXPECT_NE(dupClient.get(), nullptr);
     EXPECT_EQ(mClientManager->getNumOfClients(), 1);
@@ -353,78 +351,86 @@ TEST_F(TranscodingClientManagerTest, TestAddingMultipleClient) {
     unregisterMultipleClients();
 }
 
-TEST_F(TranscodingClientManagerTest, TestSubmitCancelGetJobs) {
+TEST_F(TranscodingClientManagerTest, TestSubmitCancelGetSessions) {
     addMultipleClients();
 
-    // Test jobId assignment.
+    // Test sessionId assignment.
     TranscodingRequestParcel request;
     request.sourceFilePath = "test_source_file_0";
     request.destinationFilePath = "test_desintaion_file_0";
-    TranscodingJobParcel job;
+    TranscodingSessionParcel session;
     bool result;
-    EXPECT_TRUE(mClient1->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(0));
+    EXPECT_EQ(session.sessionId, SESSION(0));
 
     request.sourceFilePath = "test_source_file_1";
     request.destinationFilePath = "test_desintaion_file_1";
-    EXPECT_TRUE(mClient1->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(1));
+    EXPECT_EQ(session.sessionId, SESSION(1));
 
     request.sourceFilePath = "test_source_file_2";
     request.destinationFilePath = "test_desintaion_file_2";
-    EXPECT_TRUE(mClient1->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(2));
+    EXPECT_EQ(session.sessionId, SESSION(2));
 
     // Test submit bad request (no valid sourceFilePath) fails.
     TranscodingRequestParcel badRequest;
     badRequest.sourceFilePath = "bad_source_file";
     badRequest.destinationFilePath = "bad_destination_file";
-    EXPECT_TRUE(mClient1->submitRequest(badRequest, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(badRequest, &session, &result).isOk());
     EXPECT_FALSE(result);
 
-    // Test get jobs by id.
-    EXPECT_TRUE(mClient1->getJobWithId(JOB(2), &job, &result).isOk());
-    EXPECT_EQ(job.jobId, JOB(2));
-    EXPECT_EQ(job.request.sourceFilePath, "test_source_file_2");
-    EXPECT_TRUE(result);
-
-    // Test get jobs by invalid id fails.
-    EXPECT_TRUE(mClient1->getJobWithId(JOB(100), &job, &result).isOk());
+    // Test submit with bad pid/uid.
+    badRequest.sourceFilePath = "test_source_file_3";
+    badRequest.destinationFilePath = "test_desintaion_file_3";
+    badRequest.clientPid = kInvalidClientPid;
+    badRequest.clientUid = kInvalidClientUid;
+    EXPECT_TRUE(mClient1->submitRequest(badRequest, &session, &result).isOk());
     EXPECT_FALSE(result);
 
-    // Test cancel non-existent job fail.
-    EXPECT_TRUE(mClient2->cancelJob(JOB(100), &result).isOk());
+    // Test get sessions by id.
+    EXPECT_TRUE(mClient1->getSessionWithId(SESSION(2), &session, &result).isOk());
+    EXPECT_EQ(session.sessionId, SESSION(2));
+    EXPECT_EQ(session.request.sourceFilePath, "test_source_file_2");
+    EXPECT_TRUE(result);
+
+    // Test get sessions by invalid id fails.
+    EXPECT_TRUE(mClient1->getSessionWithId(SESSION(100), &session, &result).isOk());
     EXPECT_FALSE(result);
 
-    // Test cancel valid jobId in arbitrary order.
-    EXPECT_TRUE(mClient1->cancelJob(JOB(2), &result).isOk());
-    EXPECT_TRUE(result);
-
-    EXPECT_TRUE(mClient1->cancelJob(JOB(0), &result).isOk());
-    EXPECT_TRUE(result);
-
-    EXPECT_TRUE(mClient1->cancelJob(JOB(1), &result).isOk());
-    EXPECT_TRUE(result);
-
-    // Test cancel job again fails.
-    EXPECT_TRUE(mClient1->cancelJob(JOB(1), &result).isOk());
+    // Test cancel non-existent session fail.
+    EXPECT_TRUE(mClient2->cancelSession(SESSION(100), &result).isOk());
     EXPECT_FALSE(result);
 
-    // Test get job after cancel fails.
-    EXPECT_TRUE(mClient1->getJobWithId(JOB(2), &job, &result).isOk());
+    // Test cancel valid sessionId in arbitrary order.
+    EXPECT_TRUE(mClient1->cancelSession(SESSION(2), &result).isOk());
+    EXPECT_TRUE(result);
+
+    EXPECT_TRUE(mClient1->cancelSession(SESSION(0), &result).isOk());
+    EXPECT_TRUE(result);
+
+    EXPECT_TRUE(mClient1->cancelSession(SESSION(1), &result).isOk());
+    EXPECT_TRUE(result);
+
+    // Test cancel session again fails.
+    EXPECT_TRUE(mClient1->cancelSession(SESSION(1), &result).isOk());
     EXPECT_FALSE(result);
 
-    // Test jobId independence for each client.
-    EXPECT_TRUE(mClient2->submitRequest(request, &job, &result).isOk());
-    EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(0));
+    // Test get session after cancel fails.
+    EXPECT_TRUE(mClient1->getSessionWithId(SESSION(2), &session, &result).isOk());
+    EXPECT_FALSE(result);
 
-    EXPECT_TRUE(mClient2->submitRequest(request, &job, &result).isOk());
+    // Test sessionId independence for each client.
+    EXPECT_TRUE(mClient2->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(1));
+    EXPECT_EQ(session.sessionId, SESSION(0));
+
+    EXPECT_TRUE(mClient2->submitRequest(request, &session, &result).isOk());
+    EXPECT_TRUE(result);
+    EXPECT_EQ(session.sessionId, SESSION(1));
 
     unregisterMultipleClients();
 }
@@ -435,32 +441,32 @@ TEST_F(TranscodingClientManagerTest, TestClientCallback) {
     TranscodingRequestParcel request;
     request.sourceFilePath = "test_source_file_name";
     request.destinationFilePath = "test_destination_file_name";
-    TranscodingJobParcel job;
+    TranscodingSessionParcel session;
     bool result;
-    EXPECT_TRUE(mClient1->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(0));
+    EXPECT_EQ(session.sessionId, SESSION(0));
 
-    mScheduler->finishLastJob();
-    EXPECT_EQ(mClientCallback1->popEvent(), TestClientCallback::Finished(job.jobId));
+    mController->finishLastSession();
+    EXPECT_EQ(mClientCallback1->popEvent(), TestClientCallback::Finished(session.sessionId));
 
-    EXPECT_TRUE(mClient1->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(1));
+    EXPECT_EQ(session.sessionId, SESSION(1));
 
-    mScheduler->abortLastJob();
-    EXPECT_EQ(mClientCallback1->popEvent(), TestClientCallback::Failed(job.jobId));
+    mController->abortLastSession();
+    EXPECT_EQ(mClientCallback1->popEvent(), TestClientCallback::Failed(session.sessionId));
 
-    EXPECT_TRUE(mClient1->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient1->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(2));
+    EXPECT_EQ(session.sessionId, SESSION(2));
 
-    EXPECT_TRUE(mClient2->submitRequest(request, &job, &result).isOk());
+    EXPECT_TRUE(mClient2->submitRequest(request, &session, &result).isOk());
     EXPECT_TRUE(result);
-    EXPECT_EQ(job.jobId, JOB(0));
+    EXPECT_EQ(session.sessionId, SESSION(0));
 
-    mScheduler->finishLastJob();
-    EXPECT_EQ(mClientCallback2->popEvent(), TestClientCallback::Finished(job.jobId));
+    mController->finishLastSession();
+    EXPECT_EQ(mClientCallback2->popEvent(), TestClientCallback::Finished(session.sessionId));
 
     unregisterMultipleClients();
 }
@@ -468,27 +474,27 @@ TEST_F(TranscodingClientManagerTest, TestClientCallback) {
 TEST_F(TranscodingClientManagerTest, TestUseAfterUnregister) {
     // Add a client.
     std::shared_ptr<ITranscodingClient> client;
-    status_t err = mClientManager->addClient(mClientCallback1, kClientPid, kClientUid, kClientName,
-                                             kClientPackage, &client);
+    status_t err =
+            mClientManager->addClient(mClientCallback1, kClientName, kClientPackage, &client);
     EXPECT_EQ(err, OK);
     EXPECT_NE(client.get(), nullptr);
 
     // Submit 2 requests, 1 offline and 1 realtime.
     TranscodingRequestParcel request;
-    TranscodingJobParcel job;
+    TranscodingSessionParcel session;
     bool result;
 
     request.sourceFilePath = "test_source_file_0";
     request.destinationFilePath = "test_destination_file_0";
-    request.priority = TranscodingJobPriority::kUnspecified;
-    EXPECT_TRUE(client->submitRequest(request, &job, &result).isOk() && result);
-    EXPECT_EQ(job.jobId, JOB(0));
+    request.priority = TranscodingSessionPriority::kUnspecified;
+    EXPECT_TRUE(client->submitRequest(request, &session, &result).isOk() && result);
+    EXPECT_EQ(session.sessionId, SESSION(0));
 
     request.sourceFilePath = "test_source_file_1";
     request.destinationFilePath = "test_destination_file_1";
-    request.priority = TranscodingJobPriority::kNormal;
-    EXPECT_TRUE(client->submitRequest(request, &job, &result).isOk() && result);
-    EXPECT_EQ(job.jobId, JOB(1));
+    request.priority = TranscodingSessionPriority::kNormal;
+    EXPECT_TRUE(client->submitRequest(request, &session, &result).isOk() && result);
+    EXPECT_EQ(session.sessionId, SESSION(1));
 
     // Unregister client, should succeed.
     Status status = client->unregister();
@@ -497,36 +503,36 @@ TEST_F(TranscodingClientManagerTest, TestUseAfterUnregister) {
     // Test submit new request after unregister, should fail with ERROR_DISCONNECTED.
     request.sourceFilePath = "test_source_file_2";
     request.destinationFilePath = "test_destination_file_2";
-    request.priority = TranscodingJobPriority::kNormal;
-    status = client->submitRequest(request, &job, &result);
+    request.priority = TranscodingSessionPriority::kNormal;
+    status = client->submitRequest(request, &session, &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 
-    // Test cancel jobs after unregister, should fail with ERROR_DISCONNECTED
-    // regardless of realtime or offline job, or whether the jobId is valid.
-    status = client->cancelJob(JOB(0), &result);
+    // Test cancel sessions after unregister, should fail with ERROR_DISCONNECTED
+    // regardless of realtime or offline session, or whether the sessionId is valid.
+    status = client->cancelSession(SESSION(0), &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 
-    status = client->cancelJob(JOB(1), &result);
+    status = client->cancelSession(SESSION(1), &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 
-    status = client->cancelJob(JOB(2), &result);
+    status = client->cancelSession(SESSION(2), &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 
-    // Test get jobs, should fail with ERROR_DISCONNECTED regardless of realtime
-    // or offline job, or whether the jobId is valid.
-    status = client->getJobWithId(JOB(0), &job, &result);
+    // Test get sessions, should fail with ERROR_DISCONNECTED regardless of realtime
+    // or offline session, or whether the sessionId is valid.
+    status = client->getSessionWithId(SESSION(0), &session, &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 
-    status = client->getJobWithId(JOB(1), &job, &result);
+    status = client->getSessionWithId(SESSION(1), &session, &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 
-    status = client->getJobWithId(JOB(2), &job, &result);
+    status = client->getSessionWithId(SESSION(2), &session, &result);
     EXPECT_FALSE(status.isOk());
     EXPECT_EQ(status.getServiceSpecificError(), IMediaTranscodingService::ERROR_DISCONNECTED);
 }

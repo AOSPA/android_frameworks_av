@@ -2,6 +2,7 @@ cc_library_headers {
     name: "libaudioclient_headers",
     vendor_available: true,
     min_sdk_version: "29",
+    host_supported: true,
 
     header_libs: [
         "libaudiofoundation_headers",
@@ -12,7 +13,14 @@ cc_library_headers {
     export_header_lib_headers: [
         "libaudiofoundation_headers",
     ],
-    host_supported: true,
+    static_libs: [
+        "audioflinger-aidl-unstable-cpp",
+        "av-types-aidl-unstable-cpp",
+    ],
+    export_static_lib_headers: [
+        "audioflinger-aidl-unstable-cpp",
+        "av-types-aidl-unstable-cpp",
+    ],
     target: {
         darwin: {
             enabled: false,
@@ -29,6 +37,7 @@ cc_library_shared {
         "AudioVolumeGroup.cpp",
     ],
     shared_libs: [
+        "audioflinger-aidl-unstable-cpp",
         "capture_state_listener-aidl-cpp",
         "libaudiofoundation",
         "libaudioutils",
@@ -44,6 +53,7 @@ cc_library_shared {
     include_dirs: ["system/media/audio_utils/include"],
     export_include_dirs: ["include"],
     export_shared_lib_headers: [
+        "audioflinger-aidl-unstable-cpp",
         "capture_state_listener-aidl-cpp",
     ],
 }
@@ -55,7 +65,7 @@ cc_library_shared {
         export_aidl_headers: true,
         local_include_dirs: ["aidl"],
         include_dirs: [
-            "frameworks/av/media/libaudioclient/aidl",
+            "frameworks/av/aidl",
         ],
     },
 
@@ -63,7 +73,6 @@ cc_library_shared {
         // AIDL files for audioclient interfaces
         // The headers for these interfaces will be available to any modules that
         // include libaudioclient, at the path "aidl/package/path/BnFoo.h"
-        ":libaudioclient_aidl_callback",
         ":libaudioclient_aidl_private",
         ":libaudioclient_aidl",
 
@@ -73,19 +82,20 @@ cc_library_shared {
         "AudioTrack.cpp",
         "AudioTrackShared.cpp",
         "IAudioFlinger.cpp",
-        "IAudioFlingerClient.cpp",
         "IAudioPolicyService.cpp",
         "IAudioPolicyServiceClient.cpp",
         "IAudioTrack.cpp",
-        "IEffect.cpp",
-        "IEffectClient.cpp",
         "ToneGenerator.cpp",
         "PlayerBase.cpp",
         "RecordingActivityTracker.cpp",
         "TrackPlayerBase.cpp",
     ],
     shared_libs: [
+        "audioclient-types-aidl-unstable-cpp",
+        "audioflinger-aidl-unstable-cpp",
+        "av-types-aidl-unstable-cpp",
         "capture_state_listener-aidl-cpp",
+        "libaudioclient_aidl_conversion",
         "libaudiofoundation",
         "libaudioutils",
         "libaudiopolicy",
@@ -99,17 +109,22 @@ cc_library_shared {
         "libmediautils",
         "libnblog",
         "libprocessgroup",
+        "libshmemcompat",
         "libutils",
         "libvibrator",
     ],
-    export_shared_lib_headers: ["libbinder"],
+    export_shared_lib_headers: [
+        "audioflinger-aidl-unstable-cpp",
+        "libbinder",
+    ],
 
     include_dirs: [
         "frameworks/av/media/libavextensions",
         "frameworks/av/media/libnbaio/include_mono/",
     ],
     local_include_dirs: [
-        "include/media", "aidl"
+        "include/media",
+        "aidl",
     ],
     header_libs: [
         "libaudioclient_headers",
@@ -117,10 +132,16 @@ cc_library_shared {
         "libmedia_headers",
     ],
     export_header_lib_headers: ["libaudioclient_headers"],
+    export_static_lib_headers: [
+        "effect-aidl-cpp",
+        "shared-file-region-aidl-unstable-cpp",
+    ],
 
-    // for memory heap analysis
     static_libs: [
+        "effect-aidl-cpp",
+        // for memory heap analysis
         "libc_malloc_debug_backtrace",
+        "shared-file-region-aidl-unstable-cpp",
         "libavmediaextentions",
     ],
     cflags: [
@@ -129,7 +150,38 @@ cc_library_shared {
         "-Wno-error=deprecated-declarations",
     ],
     sanitize: {
-        misc_undefined : [
+        misc_undefined: [
+            "unsigned-integer-overflow",
+            "signed-integer-overflow",
+        ],
+    },
+}
+
+cc_library_shared {
+    name: "libaudioclient_aidl_conversion",
+    srcs: ["AidlConversion.cpp"],
+    local_include_dirs: ["include"],
+    shared_libs: [
+        "audioclient-types-aidl-unstable-cpp",
+        "libbase",
+        "libbinder",
+        "liblog",
+        "libshmemcompat",
+        "libutils",
+        "shared-file-region-aidl-unstable-cpp",
+    ],
+    export_shared_lib_headers: [
+        "audioclient-types-aidl-unstable-cpp",
+        "libbase",
+        "shared-file-region-aidl-unstable-cpp",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-error=deprecated-declarations",
+    ],
+    sanitize: {
+        misc_undefined: [
             "unsigned-integer-overflow",
             "signed-integer-overflow",
         ],
@@ -155,15 +207,6 @@ filegroup {
     path: "aidl",
 }
 
-// AIDL interface for audio track callback
-filegroup {
-    name: "libaudioclient_aidl_callback",
-    srcs: [
-        "aidl/android/media/IAudioTrackCallback.aidl",
-    ],
-    path: "aidl",
-}
-
 aidl_interface {
     name: "capture_state_listener-aidl",
     unstable: true,
@@ -171,4 +214,99 @@ aidl_interface {
     srcs: [
         "aidl/android/media/ICaptureStateListener.aidl",
     ],
+}
+
+aidl_interface {
+    name: "effect-aidl",
+    unstable: true,
+    local_include_dir: "aidl",
+    srcs: [
+        "aidl/android/media/IEffect.aidl",
+        "aidl/android/media/IEffectClient.aidl",
+    ],
+    imports: [
+        "shared-file-region-aidl",
+    ],
+}
+
+aidl_interface {
+    name: "audioclient-types-aidl",
+    unstable: true,
+    host_supported: true,
+    vendor_available: true,
+    double_loadable: true,
+    local_include_dir: "aidl",
+    srcs: [
+        "aidl/android/media/AudioAttributesInternal.aidl",
+        "aidl/android/media/AudioClient.aidl",
+        "aidl/android/media/AudioConfig.aidl",
+        "aidl/android/media/AudioConfigBase.aidl",
+        "aidl/android/media/AudioContentType.aidl",
+        "aidl/android/media/AudioEncapsulationMode.aidl",
+        "aidl/android/media/AudioFlag.aidl",
+        "aidl/android/media/AudioGainConfig.aidl",
+        "aidl/android/media/AudioGainMode.aidl",
+        "aidl/android/media/AudioInputFlags.aidl",
+        "aidl/android/media/AudioIoConfigEvent.aidl",
+        "aidl/android/media/AudioIoDescriptor.aidl",
+        "aidl/android/media/AudioIoFlags.aidl",
+        "aidl/android/media/AudioOffloadInfo.aidl",
+        "aidl/android/media/AudioOutputFlags.aidl",
+        "aidl/android/media/AudioPatch.aidl",
+        "aidl/android/media/AudioPortConfig.aidl",
+        "aidl/android/media/AudioPortConfigType.aidl",
+        "aidl/android/media/AudioPortConfigDeviceExt.aidl",
+        "aidl/android/media/AudioPortConfigExt.aidl",
+        "aidl/android/media/AudioPortConfigMixExt.aidl",
+        "aidl/android/media/AudioPortConfigMixExtUseCase.aidl",
+        "aidl/android/media/AudioPortConfigSessionExt.aidl",
+        "aidl/android/media/AudioPortRole.aidl",
+        "aidl/android/media/AudioPortType.aidl",
+        "aidl/android/media/AudioSourceType.aidl",
+        "aidl/android/media/AudioStreamType.aidl",
+        "aidl/android/media/AudioUsage.aidl",
+     ],
+    imports: [
+        "audio_common-aidl",
+    ],
+    backend: {
+        cpp: {
+            min_sdk_version: "29",
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.media",
+            ],
+        },
+    },
+}
+
+aidl_interface {
+    name: "audioflinger-aidl",
+    unstable: true,
+    local_include_dir: "aidl",
+    host_supported: true,
+    vendor_available: true,
+    srcs: [
+        "aidl/android/media/CreateRecordRequest.aidl",
+        "aidl/android/media/CreateRecordResponse.aidl",
+        "aidl/android/media/CreateTrackRequest.aidl",
+        "aidl/android/media/CreateTrackResponse.aidl",
+
+        "aidl/android/media/IAudioFlingerClient.aidl",
+        "aidl/android/media/IAudioTrackCallback.aidl",
+    ],
+    imports: [
+        "audioclient-types-aidl",
+        "shared-file-region-aidl",
+    ],
+    double_loadable: true,
+    backend: {
+        cpp: {
+            min_sdk_version: "29",
+            apex_available: [
+                "//apex_available:platform",
+                "com.android.media",
+            ],
+        },
+    },
 }

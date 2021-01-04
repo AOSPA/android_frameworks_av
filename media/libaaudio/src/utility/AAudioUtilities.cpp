@@ -27,7 +27,7 @@
 #include "core/AudioGlobal.h"
 #include <aaudio/AAudioTesting.h>
 #include <math.h>
-#include <system/audio-base.h>
+#include <system/audio.h>
 #include <assert.h>
 
 #include "utility/AAudioUtilities.h"
@@ -231,7 +231,8 @@ audio_flags_mask_t AAudioConvert_allowCapturePolicyToAudioFlagsMask(
         case AAUDIO_ALLOW_CAPTURE_BY_SYSTEM:
             return AUDIO_FLAG_NO_MEDIA_PROJECTION;
         case AAUDIO_ALLOW_CAPTURE_BY_NONE:
-            return AUDIO_FLAG_NO_MEDIA_PROJECTION | AUDIO_FLAG_NO_SYSTEM_CAPTURE;
+            return static_cast<audio_flags_mask_t>(
+                    AUDIO_FLAG_NO_MEDIA_PROJECTION | AUDIO_FLAG_NO_SYSTEM_CAPTURE);
         default:
             ALOGE("%s() 0x%08X unrecognized", __func__, policy);
             return AUDIO_FLAG_NONE; //

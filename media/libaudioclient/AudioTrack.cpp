@@ -40,6 +40,15 @@
 #include <binder/MemoryDealer.h>
 #include "media/AVMediaExtensions.h"
 
+#define VALUE_OR_FATAL(result)                   \
+    ({                                           \
+       auto _tmp = (result);                     \
+       LOG_ALWAYS_FATAL_IF(!_tmp.ok(),           \
+                           "Failed result (%d)", \
+                           _tmp.error());        \
+       std::move(_tmp.value());                  \
+     })
+
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
 #define DUMMY_TRACK_SMP_BUF_SIZE        12000
@@ -213,7 +222,11 @@ status_t AudioTrack::getMetrics(mediametrics::Item * &item)
     return NO_ERROR;
 }
 
-AudioTrack::AudioTrack()
+AudioTrack::AudioTrack() : AudioTrack("" /*opPackageName*/)
+{
+}
+
+AudioTrack::AudioTrack(const std::string& opPackageName)
     : mStatus(NO_INIT),
       mState(STATE_STOPPED),
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
@@ -221,12 +234,13 @@ AudioTrack::AudioTrack()
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
       mRoutedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mOpPackageName(opPackageName),
       mPauseTimeRealUs(0),
       mAudioTrackCallback(new AudioTrackCallback())
 {
     mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
     mAttributes.usage = AUDIO_USAGE_UNKNOWN;
-    mAttributes.flags = 0x0;
+    mAttributes.flags = AUDIO_FLAG_NONE;
     strcpy(mAttributes.tags, "");
 }
 
@@ -248,12 +262,14 @@ AudioTrack::AudioTrack(
         const audio_attributes_t* pAttributes,
         bool doNotReconnect,
         float maxRequiredSpeed,
-        audio_port_handle_t selectedDeviceId)
+        audio_port_handle_t selectedDeviceId,
+        const std::string& opPackageName)
     : mStatus(NO_INIT),
       mState(STATE_STOPPED),
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
+      mOpPackageName(opPackageName),
       mPauseTimeRealUs(0),
       mAudioTrackCallback(new AudioTrackCallback())
 {
@@ -282,13 +298,15 @@ AudioTrack::AudioTrack(
         pid_t pid,
         const audio_attributes_t* pAttributes,
         bool doNotReconnect,
-        float maxRequiredSpeed)
+        float maxRequiredSpeed,
+        const std::string& opPackageName)
     : mStatus(NO_INIT),
       mState(STATE_STOPPED),
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
       mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
+      mOpPackageName(opPackageName),
       mPauseTimeRealUs(0),
       mTrackOffloaded(false),
       mAudioTrackCallback(new AudioTrackCallback())
@@ -504,7 +522,7 @@ status_t AudioTrack::set(
         mStreamType = streamType;
         mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
         mAttributes.usage = AUDIO_USAGE_UNKNOWN;
-        mAttributes.flags = 0x0;
+        mAttributes.flags = AUDIO_FLAG_NONE;
         strcpy(mAttributes.tags, "");
     } else {
         // stream type shouldn't be looked at, this track has audio attributes
@@ -521,7 +539,7 @@ status_t AudioTrack::set(
     if (format == AUDIO_FORMAT_DEFAULT) {
         format = AUDIO_FORMAT_PCM_16_BIT;
     } else if (format == AUDIO_FORMAT_IEC61937) { // HDMI pass-through?
-        mAttributes.flags |= AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO;
+        flags = static_cast<audio_output_flags_t>(flags | AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO);
     }
 
     // validate parameters
@@ -592,6 +610,7 @@ status_t AudioTrack::set(
     } else {
         mOffloadInfo = NULL;
         memset(&mOffloadInfoCopy, 0, sizeof(audio_offload_info_t));
+        mOffloadInfoCopy = AUDIO_INFO_INITIALIZER;
     }
 
     mVolume[AUDIO_INTERLEAVE_LEFT] = 1.0f;
@@ -696,6 +715,36 @@ status_t AudioTrack::set(
 exit:
     mStatus = status;
     return status;
+}
+
+
+status_t AudioTrack::set(
+        audio_stream_type_t streamType,
+        uint32_t sampleRate,
+        audio_format_t format,
+        uint32_t channelMask,
+        size_t frameCount,
+        audio_output_flags_t flags,
+        callback_t cbf,
+        void* user,
+        int32_t notificationFrames,
+        const sp<IMemory>& sharedBuffer,
+        bool threadCanCallJava,
+        audio_session_t sessionId,
+        transfer_type transferType,
+        const audio_offload_info_t *offloadInfo,
+        uid_t uid,
+        pid_t pid,
+        const audio_attributes_t* pAttributes,
+        bool doNotReconnect,
+        float maxRequiredSpeed,
+        audio_port_handle_t selectedDeviceId)
+{
+    return set(streamType, sampleRate, format,
+            static_cast<audio_channel_mask_t>(channelMask),
+            frameCount, flags, cbf, user, notificationFrames, sharedBuffer,
+            threadCanCallJava, sessionId, transferType, offloadInfo, uid, pid,
+            pAttributes, doNotReconnect, maxRequiredSpeed, selectedDeviceId);
 }
 
 // -------------------------------------------------------------------------
@@ -1636,12 +1685,15 @@ status_t AudioTrack::createTrack_l()
     input.selectedDeviceId = mSelectedDeviceId;
     input.sessionId = mSessionId;
     input.audioTrackCallback = mAudioTrackCallback;
+    input.opPackageName = mOpPackageName;
 
-    IAudioFlinger::CreateTrackOutput output;
-
-    sp<IAudioTrack> track = audioFlinger->createTrack(input,
-                                                      output,
+    media::CreateTrackResponse response;
+    sp<IAudioTrack> track = audioFlinger->createTrack(VALUE_OR_FATAL(input.toAidl()),
+                                                      response,
                                                       &status);
+    IAudioFlinger::CreateTrackOutput output = VALUE_OR_FATAL(
+            IAudioFlinger::CreateTrackOutput::fromAidl(
+                    response));
 
     if (status != NO_ERROR || output.outputId == AUDIO_IO_HANDLE_NONE) {
         ALOGE("%s(%d): AudioFlinger could not create track, status: %d output %d",
@@ -2018,7 +2070,7 @@ ssize_t AudioTrack::write(const void* buffer, size_t userSize, bool blocking)
     }
 
     if (ssize_t(userSize) < 0 || (buffer == NULL && userSize != 0)) {
-        // Sanity-check: user is most-likely passing an error code, and it would
+        // Validation: user is most-likely passing an error code, and it would
         // make the return value ambiguous (actualSize vs error).
         ALOGE("%s(%d): AudioTrack::write(buffer=%p, size=%zu (%zd)",
                 __func__, mPortId, buffer, userSize, userSize);
@@ -2408,7 +2460,7 @@ nsecs_t AudioTrack::processAudioBuffer()
                 mUserData, &audioBuffer);
         size_t writtenSize = audioBuffer.size;
 
-        // Sanity check on returned size
+        // Validate on returned size
         if (ssize_t(writtenSize) < 0 || writtenSize > reqSize) {
             ALOGE("%s(%d): EVENT_MORE_DATA requested %zu bytes but callback returned %zd bytes",
                     __func__, mPortId, reqSize, ssize_t(writtenSize));

@@ -29,7 +29,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "SchedulerClientInterface.h"
+#include "ControllerClientInterface.h"
 
 namespace android {
 
@@ -58,16 +58,14 @@ public:
      * already been added, it will also return non-zero errorcode.
      *
      * @param callback client callback for the service to call this client.
-     * @param pid client's process id.
-     * @param uid client's user id.
      * @param clientName client's name.
      * @param opPackageName client's package name.
      * @param client output holding the ITranscodingClient interface for the client
      *        to use for subsequent communications with the service.
      * @return 0 if client is added successfully, non-zero errorcode otherwise.
      */
-    status_t addClient(const std::shared_ptr<ITranscodingClientCallback>& callback, pid_t pid,
-                       uid_t uid, const std::string& clientName, const std::string& opPackageName,
+    status_t addClient(const std::shared_ptr<ITranscodingClientCallback>& callback,
+                       const std::string& clientName, const std::string& opPackageName,
                        std::shared_ptr<ITranscodingClient>* client);
 
     /**
@@ -86,7 +84,10 @@ private:
     struct ClientImpl;
 
     // Only allow MediaTranscodingService and unit tests to instantiate.
-    TranscodingClientManager(const std::shared_ptr<SchedulerClientInterface>& scheduler);
+    TranscodingClientManager(const std::shared_ptr<ControllerClientInterface>& controller);
+
+    // Checks if a user is trusted (and allowed to submit sessions on behalf of other uids)
+    bool isTrustedCallingUid(uid_t uid);
 
     /**
      * Removes an existing client from the manager.
@@ -107,7 +108,8 @@ private:
 
     ::ndk::ScopedAIBinder_DeathRecipient mDeathRecipient;
 
-    std::shared_ptr<SchedulerClientInterface> mJobScheduler;
+    std::shared_ptr<ControllerClientInterface> mSessionController;
+    std::unordered_set<uid_t> mMediaProviderUid;
 
     static std::atomic<ClientIdType> sCookieCounter;
     static std::mutex sCookie2ClientLock;

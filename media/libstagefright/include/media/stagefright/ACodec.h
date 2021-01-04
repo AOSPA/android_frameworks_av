@@ -150,6 +150,7 @@ protected:
         kWhatReleaseCodecInstance    = 'relC',
         kWhatForceStateTransition    = 'fstt',
         kWhatCheckIfStuck            = 'Cstk',
+        kWhatSubmitExtraOutputMetadataBuffer = 'sbxo',
     };
 
     enum {
@@ -278,6 +279,7 @@ protected:
     bool mExplicitShutdown;
     bool mIsLegacyVP9Decoder;
     bool mIsStreamCorruptFree;
+    bool mIsLowLatency;
 
     // If "mKeepComponentAllocated" we only transition back to Loaded state
     // and do not release the component instance.
@@ -505,6 +507,7 @@ protected:
     status_t setupAMRCodec(bool encoder, bool isWAMR, int32_t bitRate);
     status_t setupG711Codec(bool encoder, int32_t sampleRate, int32_t numChannels);
 
+    status_t setupOpusCodec(bool encoder, int32_t sampleRate, int32_t numChannels);
     status_t setupFlacCodec(
             bool encoder, int32_t numChannels, int32_t sampleRate, int32_t compressionLevel,
             AudioEncoding encoding);
@@ -607,10 +610,6 @@ protected:
     void forceStateTransition(int generation);
 
     virtual void setBFrames(OMX_VIDEO_PARAM_MPEG4TYPE *mpeg4type __unused) {}
-
-    virtual status_t getVQZIPInfo(const sp<AMessage> &msg __unused) {
-        return OK;
-    }
 
     virtual bool getDSModeHint(const sp<AMessage>& msg __unused, int64_t timeUs __unused) {
        return false;

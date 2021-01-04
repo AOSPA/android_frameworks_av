@@ -19,12 +19,12 @@
 
 #include <sys/types.h>
 
+#include <android/media/BnAudioFlingerClient.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioPolicy.h>
 #include <media/AudioProductStrategy.h>
 #include <media/AudioVolumeGroup.h>
 #include <media/AudioIoDescriptor.h>
-#include <media/IAudioFlingerClient.h>
 #include <media/IAudioPolicyServiceClient.h>
 #include <media/MicrophoneInfo.h>
 #include <set>
@@ -361,11 +361,11 @@ public:
 
     static status_t registerPolicyMixes(const Vector<AudioMix>& mixes, bool registration);
 
-    static status_t setUidDeviceAffinities(uid_t uid, const Vector<AudioDeviceTypeAddr>& devices);
+    static status_t setUidDeviceAffinities(uid_t uid, const AudioDeviceTypeAddrVector& devices);
 
     static status_t removeUidDeviceAffinities(uid_t uid);
 
-    static status_t setUserIdDeviceAffinities(int userId, const Vector<AudioDeviceTypeAddr>& devices);
+    static status_t setUserIdDeviceAffinities(int userId, const AudioDeviceTypeAddrVector& devices);
 
     static status_t removeUserIdDeviceAffinities(int userId);
 
@@ -425,13 +425,29 @@ public:
      */
     static status_t setAudioHalPids(const std::vector<pid_t>& pids);
 
-    static status_t setPreferredDeviceForStrategy(product_strategy_t strategy,
-            const AudioDeviceTypeAddr &device);
+    static status_t setDevicesRoleForStrategy(product_strategy_t strategy,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
 
-    static status_t removePreferredDeviceForStrategy(product_strategy_t strategy);
+    static status_t removeDevicesRoleForStrategy(product_strategy_t strategy, device_role_t role);
 
-    static status_t getPreferredDeviceForStrategy(product_strategy_t strategy,
-            AudioDeviceTypeAddr &device);
+    static status_t getDevicesForRoleAndStrategy(product_strategy_t strategy,
+            device_role_t role, AudioDeviceTypeAddrVector &devices);
+
+    static status_t setDevicesRoleForCapturePreset(audio_source_t audioSource,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
+
+    static status_t addDevicesRoleForCapturePreset(audio_source_t audioSource,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
+
+    static status_t removeDevicesRoleForCapturePreset(
+            audio_source_t audioSource, device_role_t role,
+            const AudioDeviceTypeAddrVector& devices);
+
+    static status_t clearDevicesRoleForCapturePreset(
+            audio_source_t audioSource, device_role_t role);
+
+    static status_t getDevicesForRoleAndCapturePreset(audio_source_t audioSource,
+            device_role_t role, AudioDeviceTypeAddrVector &devices);
 
     static status_t getDeviceForStrategy(product_strategy_t strategy,
             AudioDeviceTypeAddr &device);
@@ -515,7 +531,7 @@ public:
 
 private:
 
-    class AudioFlingerClient: public IBinder::DeathRecipient, public BnAudioFlingerClient
+    class AudioFlingerClient: public IBinder::DeathRecipient, public media::BnAudioFlingerClient
     {
     public:
         AudioFlingerClient() :
@@ -535,9 +551,9 @@ private:
 
         // indicate a change in the configuration of an output or input: keeps the cached
         // values for output/input parameters up-to-date in client process
-        virtual void ioConfigChanged(audio_io_config_event event,
-                                     const sp<AudioIoDescriptor>& ioDesc);
-
+        binder::Status ioConfigChanged(
+                media::AudioIoConfigEvent event,
+                const media::AudioIoDescriptor& ioDesc) override;
 
         status_t addAudioDeviceCallback(const wp<AudioDeviceCallback>& callback,
                                                audio_io_handle_t audioIo,

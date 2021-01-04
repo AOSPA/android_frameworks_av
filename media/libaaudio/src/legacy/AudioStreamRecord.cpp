@@ -118,6 +118,7 @@ aaudio_result_t AudioStreamRecord::open(const AudioStreamBuilder& builder)
         setDeviceFormat(getFormat());
     }
 
+    // To avoid glitching, let AudioFlinger pick the optimal burst size.
     uint32_t notificationFrames = 0;
 
     // Setup the callback if there is one.
@@ -128,7 +129,6 @@ aaudio_result_t AudioStreamRecord::open(const AudioStreamBuilder& builder)
         streamTransferType = AudioRecord::transfer_type::TRANSFER_CALLBACK;
         callback = getLegacyCallback();
         callbackData = this;
-        notificationFrames = builder.getFramesPerDataCallback();
     }
     mCallbackBufferSize = builder.getFramesPerDataCallback();
 
@@ -185,7 +185,7 @@ aaudio_result_t AudioStreamRecord::open(const AudioStreamBuilder& builder)
         // Did we get a valid track?
         status_t status = mAudioRecord->initCheck();
         if (status != OK) {
-            releaseCloseFinal();
+            safeReleaseClose();
             ALOGE("open(), initCheck() returned %d", status);
             return AAudioConvert_androidToAAudioResult(status);
         }
@@ -210,9 +210,9 @@ aaudio_result_t AudioStreamRecord::open(const AudioStreamBuilder& builder)
 
     // Get the actual values from the AudioRecord.
     setSamplesPerFrame(mAudioRecord->channelCount());
-
-    int32_t actualSampleRate = mAudioRecord->getSampleRate();
-    setSampleRate(actualSampleRate);
+    setSampleRate(mAudioRecord->getSampleRate());
+    setBufferCapacity(getBufferCapacityFromDevice());
+    setFramesPerBurst(getFramesPerBurstFromDevice());
 
     // We may need to pass the data through a block size adapter to guarantee constant size.
     if (mCallbackBufferSize != AAUDIO_UNSPECIFIED) {
@@ -279,7 +279,7 @@ aaudio_result_t AudioStreamRecord::open(const AudioStreamBuilder& builder)
             : (aaudio_session_id_t) mAudioRecord->getSessionId();
     setSessionId(actualSessionId);
 
-    mAudioRecord->addAudioDeviceCallback(mDeviceCallback);
+    mAudioRecord->addAudioDeviceCallback(this);
 
     return AAUDIO_OK;
 }
@@ -288,14 +288,22 @@ aaudio_result_t AudioStreamRecord::release_l() {
     // TODO add close() or release() to AudioFlinger's AudioRecord API.
     //  Then call it from here
     if (getState() != AAUDIO_STREAM_STATE_CLOSING) {
-        mAudioRecord->removeAudioDeviceCallback(mDeviceCallback);
+        mAudioRecord->removeAudioDeviceCallback(this);
         logReleaseBufferState();
-        mAudioRecord.clear();
-        mFixedBlockWriter.close();
+        // Data callbacks may still be running!
         return AudioStream::release_l();
     } else {
         return AAUDIO_OK; // already released
     }
+}
+
+void AudioStreamRecord::close_l() {
+    mAudioRecord.clear();
+    // Do not close mFixedBlockWriter because a data callback
+    // thread might still be running if someone else has a reference
+    // to mAudioRecord.
+    // It has a unique_ptr to its buffer so it will clean up by itself.
+    AudioStream::close_l();
 }
 
 const void * AudioStreamRecord::maybeConvertDeviceData(const void *audioData, int32_t numFrames) {
@@ -333,7 +341,7 @@ void AudioStreamRecord::processCallback(int event, void *info) {
     return;
 }
 
-aaudio_result_t AudioStreamRecord::requestStart()
+aaudio_result_t AudioStreamRecord::requestStart_l()
 {
     if (mAudioRecord.get() == nullptr) {
         return AAUDIO_ERROR_INVALID_STATE;
@@ -357,7 +365,7 @@ aaudio_result_t AudioStreamRecord::requestStart()
     return AAUDIO_OK;
 }
 
-aaudio_result_t AudioStreamRecord::requestStop() {
+aaudio_result_t AudioStreamRecord::requestStop_l() {
     if (mAudioRecord.get() == nullptr) {
         return AAUDIO_ERROR_INVALID_STATE;
     }
@@ -480,7 +488,7 @@ int32_t AudioStreamRecord::getBufferSize() const
     return getBufferCapacity(); // TODO implement in AudioRecord?
 }
 
-int32_t AudioStreamRecord::getBufferCapacity() const
+int32_t AudioStreamRecord::getBufferCapacityFromDevice() const
 {
     return static_cast<int32_t>(mAudioRecord->frameCount());
 }
@@ -490,8 +498,7 @@ int32_t AudioStreamRecord::getXRunCount() const
     return 0; // TODO implement when AudioRecord supports it
 }
 
-int32_t AudioStreamRecord::getFramesPerBurst() const
-{
+int32_t AudioStreamRecord::getFramesPerBurstFromDevice() const {
     return static_cast<int32_t>(mAudioRecord->getNotificationPeriodInFrames());
 }
 

@@ -45,9 +45,8 @@ media_status_t MediaTrackTranscoder::configure(
     mMediaSampleReader = mediaSampleReader;
     mTrackIndex = trackIndex;
 
-    mSourceFormat =
-            std::shared_ptr<AMediaFormat>(mMediaSampleReader->getTrackFormat(mTrackIndex),
-                                          std::bind(AMediaFormat_delete, std::placeholders::_1));
+    mSourceFormat = std::shared_ptr<AMediaFormat>(mMediaSampleReader->getTrackFormat(mTrackIndex),
+                                                  &AMediaFormat_delete);
     if (mSourceFormat == nullptr) {
         LOG(ERROR) << "Unable to get format for track #" << mTrackIndex;
         return AMEDIA_ERROR_MALFORMED;
@@ -93,8 +92,12 @@ bool MediaTrackTranscoder::stop() {
 
     if (mState == STARTED) {
         abortTranscodeLoop();
+        mMediaSampleReader->setEnforceSequentialAccess(false);
         mTranscodingThread.join();
-        mOutputQueue->abort();  // Wake up any threads waiting for samples.
+        {
+            std::scoped_lock lock{mSampleMutex};
+            mSampleQueue.abort();  // Release any buffered samples.
+        }
         mState = STOPPED;
         return true;
     }
@@ -109,8 +112,24 @@ void MediaTrackTranscoder::notifyTrackFormatAvailable() {
     }
 }
 
-std::shared_ptr<MediaSampleQueue> MediaTrackTranscoder::getOutputQueue() const {
-    return mOutputQueue;
+void MediaTrackTranscoder::onOutputSampleAvailable(const std::shared_ptr<MediaSample>& sample) {
+    std::scoped_lock lock{mSampleMutex};
+    if (mSampleConsumer == nullptr) {
+        mSampleQueue.enqueue(sample);
+    } else {
+        mSampleConsumer(sample);
+    }
+}
+
+void MediaTrackTranscoder::setSampleConsumer(
+        const MediaSampleWriter::MediaSampleConsumerFunction& sampleConsumer) {
+    std::scoped_lock lock{mSampleMutex};
+    mSampleConsumer = sampleConsumer;
+
+    std::shared_ptr<MediaSample> sample;
+    while (!mSampleQueue.isEmpty() && !mSampleQueue.dequeue(&sample)) {
+        mSampleConsumer(sample);
+    }
 }
 
 }  // namespace android

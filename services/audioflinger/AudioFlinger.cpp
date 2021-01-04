@@ -22,6 +22,15 @@
 // Define AUDIO_ARRAYS_STATIC_CHECK to check all audio arrays are correct
 #define AUDIO_ARRAYS_STATIC_CHECK 1
 
+#define VALUE_OR_FATAL(result)                   \
+    ({                                           \
+       auto _tmp = (result);                     \
+       LOG_ALWAYS_FATAL_IF(!_tmp.ok(),           \
+                           "Failed result (%d)", \
+                           _tmp.error());        \
+       std::move(_tmp.value());                  \
+     })
+
 #include "Configuration.h"
 #include <dirent.h>
 #include <math.h>
@@ -68,6 +77,7 @@
 #include <powermanager/PowerManager.h>
 
 #include <media/IMediaLogService.h>
+#include <media/AidlConversion.h>
 #include <media/nbaio/Pipe.h>
 #include <media/nbaio/PipeReader.h>
 #include <mediautils/BatteryNotifier.h>
@@ -97,6 +107,8 @@
 #endif
 
 namespace android {
+
+using media::IEffectClient;
 
 static const char kDeadlockedString[] = "AudioFlinger may be deadlocked\n";
 static const char kHardwareLockedString[] = "Hardware lock is taken\n";
@@ -195,7 +207,12 @@ AudioFlinger::AudioFlinger()
         mNextUniqueIds[use] = AUDIO_UNIQUE_ID_USE_MAX;
     }
 
+#if 1
+    // FIXME See bug 165702394 and bug 168511485
+    const bool doLog = false;
+#else
     const bool doLog = property_get_bool("ro.test_harness", false);
+#endif
     if (doLog) {
         mLogMemoryDealer = new MemoryDealer(kLogMemorySize, "LogWriters",
                 MemoryHeapBase::READ_ONLY);
@@ -685,8 +702,8 @@ sp<AudioFlinger::Client> AudioFlinger::registerPid(pid_t pid)
 
 sp<NBLog::Writer> AudioFlinger::newWriter_l(size_t size, const char *name)
 {
-    // If there is no memory allocated for logs, return a dummy writer that does nothing.
-    // Similarly if we can't contact the media.log service, also return a dummy writer.
+    // If there is no memory allocated for logs, return a no-op writer that does nothing.
+    // Similarly if we can't contact the media.log service, also return a no-op writer.
     if (mLogMemoryDealer == 0 || sMediaLogService == 0) {
         return new NBLog::Writer();
     }
@@ -712,7 +729,7 @@ sp<NBLog::Writer> AudioFlinger::newWriter_l(size_t size, const char *name)
             }
         }
         // Even after garbage-collecting all old writers, there is still not enough memory,
-        // so return a dummy writer
+        // so return a no-op writer
         return new NBLog::Writer();
     }
 success:
@@ -740,10 +757,27 @@ void AudioFlinger::unregisterWriter(const sp<NBLog::Writer>& writer)
 
 // IAudioFlinger interface
 
-sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
-                                          CreateTrackOutput& output,
-                                          status_t *status)
+sp<IAudioTrack> AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
+                                          media::CreateTrackResponse& _output,
+                                          status_t* status)
 {
+    // Local version of VALUE_OR_RETURN, specific to this method's calling conventions.
+#define VALUE_OR_EXIT(expr)         \
+    ({                              \
+        auto _tmp = (expr);         \
+        if (!_tmp.ok()) {           \
+            *status = _tmp.error(); \
+            return nullptr;         \
+        }                           \
+        std::move(_tmp.value());    \
+    })
+
+    CreateTrackInput input = VALUE_OR_EXIT(CreateTrackInput::fromAidl(_input));
+
+#undef VALUE_OR_EXIT
+
+    CreateTrackOutput output;
+
     sp<PlaybackThread::Track> track;
     sp<TrackHandle> trackHandle;
     sp<Client> client;
@@ -853,7 +887,8 @@ sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
                                       input.notificationsPerBuffer, input.speed,
                                       input.sharedBuffer, sessionId, &output.flags,
                                       callingPid, input.clientInfo.clientTid, clientUid,
-                                      &lStatus, portId, input.audioTrackCallback);
+                                      &lStatus, portId, input.audioTrackCallback,
+                                      input.opPackageName);
         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (track == 0));
         // we don't abort yet if lStatus != NO_ERROR; there is still work to be done regardless
 
@@ -998,6 +1033,8 @@ sp<IAudioTrack> AudioFlinger::createTrack(const CreateTrackInput& input,
     if (effectThreadId != AUDIO_IO_HANDLE_NONE) {
         AudioSystem::moveEffectsToIo(effectIds, effectThreadId);
     }
+
+    _output = VALUE_OR_FATAL(output.toAidl());
 
     // return handle to client
     trackHandle = new TrackHandle(track);
@@ -1284,9 +1321,9 @@ status_t AudioFlinger::setMasterMute(bool muted)
     }
 
     // Now set the master mute in each playback thread.  Playback threads
-    // assigned to HALs which do not have master mute support will apply master
-    // mute during the mix operation.  Threads with HALs which do support master
-    // mute will simply ignore the setting.
+    // assigned to HALs which do not have master mute support will apply master mute
+    // during the mix operation.  Threads with HALs which do support master mute
+    // will simply ignore the setting.
     Vector<VolumeInterface *> volumeInterfaces = getAllVolumeInterfaces_l();
     for (size_t i = 0; i < volumeInterfaces.size(); i++) {
         volumeInterfaces[i]->setMasterMute(muted);
@@ -1431,7 +1468,7 @@ bool AudioFlinger::streamMute(audio_stream_type_t stream) const
 }
 
 
-void AudioFlinger::broacastParametersToRecordThreads_l(const String8& keyValuePairs)
+void AudioFlinger::broadcastParametersToRecordThreads_l(const String8& keyValuePairs)
 {
     for (size_t i = 0; i < mRecordThreads.size(); i++) {
         mRecordThreads.valueAt(i)->setParameters(keyValuePairs);
@@ -1589,7 +1626,7 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
             int value;
             if ((param.getInt(String8(AudioParameter::keyRouting), value) == NO_ERROR) &&
                     (value != 0)) {
-                broacastParametersToRecordThreads_l(filteredKeyValuePairs);
+                broadcastParametersToRecordThreads_l(filteredKeyValuePairs);
             }
         }
     }
@@ -1766,7 +1803,7 @@ status_t AudioFlinger::getRenderPosition(uint32_t *halFrames, uint32_t *dspFrame
     return BAD_VALUE;
 }
 
-void AudioFlinger::registerClient(const sp<IAudioFlingerClient>& client)
+void AudioFlinger::registerClient(const sp<media::IAudioFlingerClient>& client)
 {
     Mutex::Autolock _l(mLock);
     if (client == 0) {
@@ -1841,13 +1878,18 @@ void AudioFlinger::removeNotificationClient(pid_t pid)
 
 void AudioFlinger::ioConfigChanged(audio_io_config_event event,
                                    const sp<AudioIoDescriptor>& ioDesc,
-                                   pid_t pid)
-{
+                                   pid_t pid) {
+    media::AudioIoDescriptor descAidl = VALUE_OR_FATAL(
+            legacy2aidl_AudioIoDescriptor_AudioIoDescriptor(ioDesc));
+    media::AudioIoConfigEvent eventAidl = VALUE_OR_FATAL(
+            legacy2aidl_audio_io_config_event_AudioIoConfigEvent(event));
+
     Mutex::Autolock _l(mClientLock);
     size_t size = mNotificationClients.size();
     for (size_t i = 0; i < size; i++) {
         if ((pid == 0) || (mNotificationClients.keyAt(i) == pid)) {
-            mNotificationClients.valueAt(i)->audioFlingerClient()->ioConfigChanged(event, ioDesc);
+            mNotificationClients.valueAt(i)->audioFlingerClient()->ioConfigChanged(eventAidl,
+                                                                                   descAidl);
         }
     }
 }
@@ -1921,7 +1963,7 @@ sp<MemoryDealer> AudioFlinger::Client::heap() const
 // ----------------------------------------------------------------------------
 
 AudioFlinger::NotificationClient::NotificationClient(const sp<AudioFlinger>& audioFlinger,
-                                                     const sp<IAudioFlingerClient>& client,
+                                                     const sp<media::IAudioFlingerClient>& client,
                                                      pid_t pid,
                                                      uid_t uid)
     : mAudioFlinger(audioFlinger), mPid(pid), mUid(uid), mAudioFlingerClient(client)
@@ -1976,10 +2018,26 @@ void AudioFlinger::requestLogMerge() {
 
 // ----------------------------------------------------------------------------
 
-sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& input,
-                                                   CreateRecordOutput& output,
-                                                   status_t *status)
+sp<media::IAudioRecord> AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
+                                                   media::CreateRecordResponse& _output,
+                                                   status_t* status)
 {
+    // Local version of VALUE_OR_RETURN, specific to this method's calling conventions.
+#define VALUE_OR_EXIT(expr)         \
+    ({                              \
+        auto _tmp = (expr);         \
+        if (!_tmp.ok()) {           \
+            *status = _tmp.error(); \
+            return nullptr;         \
+        }                           \
+        std::move(_tmp.value());    \
+    })
+
+    CreateRecordInput input = VALUE_OR_EXIT(CreateRecordInput::fromAidl(_input));
+
+#undef VALUE_OR_EXIT
+    CreateRecordOutput output;
+
     sp<RecordThread::RecordTrack> recordTrack;
     sp<RecordHandle> recordHandle;
     sp<Client> client;
@@ -2069,8 +2127,8 @@ sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& inpu
         Mutex::Autolock _l(mLock);
         RecordThread *thread = checkRecordThread_l(output.inputId);
         if (thread == NULL) {
-            ALOGE("createRecord() checkRecordThread_l failed, input handle %d", output.inputId);
-            lStatus = BAD_VALUE;
+            ALOGW("createRecord() checkRecordThread_l failed, input handle %d", output.inputId);
+            lStatus = FAILED_TRANSACTION;
             goto Exit;
         }
 
@@ -2116,6 +2174,8 @@ sp<media::IAudioRecord> AudioFlinger::createRecord(const CreateRecordInput& inpu
     output.cblk = recordTrack->getCblk();
     output.buffers = recordTrack->getBuffers();
     output.portId = portId;
+
+    _output = VALUE_OR_FATAL(output.toAidl());
 
     // return handle to client
     recordHandle = new RecordHandle(recordTrack);
@@ -3143,7 +3203,8 @@ std::vector<sp<AudioFlinger::EffectModule>> AudioFlinger::purgeStaleEffects_l() 
 // dumpToThreadLog_l() must be called with AudioFlinger::mLock held
 void AudioFlinger::dumpToThreadLog_l(const sp<ThreadBase> &thread)
 {
-    audio_utils::FdToString fdToString;
+    constexpr int THREAD_DUMP_TIMEOUT_MS = 2;
+    audio_utils::FdToString fdToString("- ", THREAD_DUMP_TIMEOUT_MS);
     const int fd = fdToString.fd();
     if (fd >= 0) {
         thread->dump(fd, {} /* args */);
@@ -3439,7 +3500,7 @@ status_t AudioFlinger::getEffectDescriptor(const effect_uuid_t *pUuid,
     return status;
 }
 
-sp<IEffect> AudioFlinger::createEffect(
+sp<media::IEffect> AudioFlinger::createEffect(
         effect_descriptor_t *pDesc,
         const sp<IEffectClient>& effectClient,
         int32_t priority,

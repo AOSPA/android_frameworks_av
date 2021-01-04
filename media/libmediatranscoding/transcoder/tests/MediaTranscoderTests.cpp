@@ -20,6 +20,7 @@
 #define LOG_TAG "MediaTranscoderTests"
 
 #include <android-base/logging.h>
+#include <android/binder_process.h>
 #include <fcntl.h>
 #include <gtest/gtest.h>
 #include <media/MediaSampleReaderNDK.h>
@@ -72,10 +73,16 @@ public:
     }
 
     virtual void onProgressUpdate(const MediaTranscoder* transcoder __unused,
-                                  int32_t progress __unused) override {}
+                                  int32_t progress) override {
+        std::unique_lock<std::mutex> lock(mMutex);
+        if (progress > 0 && !mProgressMade) {
+            mProgressMade = true;
+            mCondition.notify_all();
+        }
+    }
 
     virtual void onCodecResourceLost(const MediaTranscoder* transcoder __unused,
-                                     const std::shared_ptr<const Parcel>& pausedState
+                                     const std::shared_ptr<ndk::ScopedAParcel>& pausedState
                                              __unused) override {}
 
     void waitForTranscodingFinished() {
@@ -85,12 +92,19 @@ public:
         }
     }
 
+    void waitForProgressMade() {
+        std::unique_lock<std::mutex> lock(mMutex);
+        while (!mProgressMade && !mFinished) {
+            mCondition.wait(lock);
+        }
+    }
     media_status_t mStatus = AMEDIA_OK;
 
 private:
     std::mutex mMutex;
     std::condition_variable mCondition;
     bool mFinished = false;
+    bool mProgressMade = false;
 };
 
 // Write-only, create file if non-existent, don't overwrite existing file.
@@ -106,6 +120,7 @@ public:
     void SetUp() override {
         LOG(DEBUG) << "MediaTranscoderTests set up";
         mCallbacks = std::make_shared<TestCallbacks>();
+        ABinderProcess_startThreadPool();
     }
 
     void TearDown() override {
@@ -115,9 +130,27 @@ public:
 
     void deleteFile(const char* path) { unlink(path); }
 
+    float getFileSizeDiffPercent(const char* path1, const char* path2, bool absolute = false) {
+        struct stat s1, s2;
+        EXPECT_EQ(stat(path1, &s1), 0);
+        EXPECT_EQ(stat(path2, &s2), 0);
+
+        int64_t diff = s2.st_size - s1.st_size;
+        if (absolute && diff < 0) diff = -diff;
+
+        return (float)diff * 100.0f / s1.st_size;
+    }
+
+    typedef enum {
+        kRunToCompletion,
+        kCancelAfterProgress,
+        kCancelAfterStart,
+    } TranscodeExecutionControl;
+
     using FormatConfigurationCallback = std::function<AMediaFormat*(AMediaFormat*)>;
     media_status_t transcodeHelper(const char* srcPath, const char* destPath,
-                                   FormatConfigurationCallback formatCallback) {
+                                   FormatConfigurationCallback formatCallback,
+                                   TranscodeExecutionControl executionControl = kRunToCompletion) {
         auto transcoder = MediaTranscoder::create(mCallbacks, nullptr);
         EXPECT_NE(transcoder, nullptr);
 
@@ -149,7 +182,18 @@ public:
         media_status_t startStatus = transcoder->start();
         EXPECT_EQ(startStatus, AMEDIA_OK);
         if (startStatus == AMEDIA_OK) {
-            mCallbacks->waitForTranscodingFinished();
+            switch (executionControl) {
+            case kCancelAfterProgress:
+                mCallbacks->waitForProgressMade();
+                FALLTHROUGH_INTENDED;
+            case kCancelAfterStart:
+                transcoder->cancel();
+                break;
+            case kRunToCompletion:
+            default:
+                mCallbacks->waitForTranscodingFinished();
+                break;
+            }
         }
         close(srcFd);
         close(dstFd);
@@ -157,28 +201,32 @@ public:
         return mCallbacks->mStatus;
     }
 
-    void testTranscodeVideo(const char* srcPath, const char* destPath, const char* dstMime) {
-        const int32_t kBitRate = 8 * 1000 * 1000;  // 8Mbs
+    void testTranscodeVideo(const char* srcPath, const char* destPath, const char* dstMime,
+                            int32_t bitrate = 0) {
+        EXPECT_EQ(transcodeHelper(srcPath, destPath,
+                                  [dstMime, bitrate](AMediaFormat* sourceFormat) {
+                                      AMediaFormat* format = nullptr;
+                                      const char* mime = nullptr;
+                                      AMediaFormat_getString(sourceFormat, AMEDIAFORMAT_KEY_MIME,
+                                                             &mime);
 
-        EXPECT_EQ(
-                transcodeHelper(
-                        srcPath, destPath,
-                        [dstMime](AMediaFormat* sourceFormat) {
-                            AMediaFormat* format = nullptr;
-                            const char* mime = nullptr;
-                            AMediaFormat_getString(sourceFormat, AMEDIAFORMAT_KEY_MIME, &mime);
+                                      if (strncmp(mime, "video/", 6) == 0 &&
+                                          (bitrate > 0 || dstMime != nullptr)) {
+                                          format = AMediaFormat_new();
 
-                            if (strncmp(mime, "video/", 6) == 0) {
-                                format = AMediaFormat_new();
-                                AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_BIT_RATE, kBitRate);
+                                          if (bitrate > 0) {
+                                              AMediaFormat_setInt32(
+                                                      format, AMEDIAFORMAT_KEY_BIT_RATE, bitrate);
+                                          }
 
-                                if (dstMime != nullptr) {
-                                    AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, dstMime);
-                                }
-                            }
-                            return format;
-                        }),
-                AMEDIA_OK);
+                                          if (dstMime != nullptr) {
+                                              AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME,
+                                                                     dstMime);
+                                          }
+                                      }
+                                      return format;
+                                  }),
+                  AMEDIA_OK);
 
         if (dstMime != nullptr) {
             std::vector<FormatVerifierEntry> extraVerifiers = {
@@ -251,16 +299,13 @@ public:
 TEST_F(MediaTranscoderTests, TestPassthrough) {
     const char* srcPath = "/data/local/tmp/TranscodingTestAssets/cubicle_avc_480x240_aac_24KHz.mp4";
     const char* destPath = "/data/local/tmp/MediaTranscoder_Passthrough.MP4";
-
-    EXPECT_EQ(transcodeHelper(srcPath, destPath, [](AMediaFormat*) { return nullptr; }), AMEDIA_OK);
-
-    verifyOutputFormat(destPath);
+    testTranscodeVideo(srcPath, destPath, nullptr);
 }
 
 TEST_F(MediaTranscoderTests, TestVideoTranscode_AvcToAvc_Basic) {
     const char* srcPath = "/data/local/tmp/TranscodingTestAssets/cubicle_avc_480x240_aac_24KHz.mp4";
     const char* destPath = "/data/local/tmp/MediaTranscoder_VideoTranscode_AvcToAvc_Basic.MP4";
-    testTranscodeVideo(srcPath, destPath, nullptr /*dstMime*/);
+    testTranscodeVideo(srcPath, destPath, AMEDIA_MIMETYPE_VIDEO_AVC);
 }
 
 TEST_F(MediaTranscoderTests, TestVideoTranscode_HevcToAvc_Basic) {
@@ -274,6 +319,63 @@ TEST_F(MediaTranscoderTests, TestVideoTranscode_HevcToAvc_Rotation) {
             "/data/local/tmp/TranscodingTestAssets/desk_hevc_1920x1080_aac_48KHz_rot90.mp4";
     const char* destPath = "/data/local/tmp/MediaTranscoder_VideoTranscode_HevcToAvc_Rotation.MP4";
     testTranscodeVideo(srcPath, destPath, AMEDIA_MIMETYPE_VIDEO_AVC);
+}
+
+TEST_F(MediaTranscoderTests, TestPreserveBitrate) {
+    const char* srcPath = "/data/local/tmp/TranscodingTestAssets/cubicle_avc_480x240_aac_24KHz.mp4";
+    const char* destPath = "/data/local/tmp/MediaTranscoder_PreserveBitrate.MP4";
+    testTranscodeVideo(srcPath, destPath, AMEDIA_MIMETYPE_VIDEO_AVC);
+
+    // Require maximum of 10% difference in file size.
+    EXPECT_LT(getFileSizeDiffPercent(srcPath, destPath, true /* absolute*/), 10);
+}
+
+TEST_F(MediaTranscoderTests, TestCustomBitrate) {
+    const char* srcPath = "/data/local/tmp/TranscodingTestAssets/cubicle_avc_480x240_aac_24KHz.mp4";
+    const char* destPath1 = "/data/local/tmp/MediaTranscoder_CustomBitrate_2Mbps.MP4";
+    const char* destPath2 = "/data/local/tmp/MediaTranscoder_CustomBitrate_8Mbps.MP4";
+    testTranscodeVideo(srcPath, destPath1, AMEDIA_MIMETYPE_VIDEO_AVC, 2 * 1000 * 1000);
+    mCallbacks = std::make_shared<TestCallbacks>();
+    testTranscodeVideo(srcPath, destPath2, AMEDIA_MIMETYPE_VIDEO_AVC, 8 * 1000 * 1000);
+
+    // The source asset is very short and heavily compressed from the beginning so don't expect the
+    // requested bitrate to be exactly matched. However 40% difference seems reasonable.
+    EXPECT_GT(getFileSizeDiffPercent(destPath1, destPath2), 40);
+}
+
+static AMediaFormat* getAVCVideoFormat(AMediaFormat* sourceFormat) {
+    AMediaFormat* format = nullptr;
+    const char* mime = nullptr;
+    AMediaFormat_getString(sourceFormat, AMEDIAFORMAT_KEY_MIME, &mime);
+
+    if (strncmp(mime, "video/", 6) == 0) {
+        format = AMediaFormat_new();
+        AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, AMEDIA_MIMETYPE_VIDEO_AVC);
+    }
+
+    return format;
+}
+
+TEST_F(MediaTranscoderTests, TestCancelAfterProgress) {
+    const char* srcPath = "/data/local/tmp/TranscodingTestAssets/longtest_15s.mp4";
+    const char* destPath = "/data/local/tmp/MediaTranscoder_Cancel.MP4";
+
+    for (int i = 0; i < 32; ++i) {
+        EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kCancelAfterProgress),
+                  AMEDIA_OK);
+        mCallbacks = std::make_shared<TestCallbacks>();
+    }
+}
+
+TEST_F(MediaTranscoderTests, TestCancelAfterStart) {
+    const char* srcPath = "/data/local/tmp/TranscodingTestAssets/longtest_15s.mp4";
+    const char* destPath = "/data/local/tmp/MediaTranscoder_Cancel.MP4";
+
+    for (int i = 0; i < 32; ++i) {
+        EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kCancelAfterStart),
+                  AMEDIA_OK);
+        mCallbacks = std::make_shared<TestCallbacks>();
+    }
 }
 
 }  // namespace android

@@ -24,6 +24,8 @@
 
 #include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
+#include <media/AudioSanitizer.h>
+#include <media/IAudioPolicyService.h>
 #include <mediautils/ServiceUtilities.h>
 #include <mediautils/TimeCheck.h>
 #include "IAudioFlinger.h"
@@ -95,6 +97,156 @@ enum {
 
 #define MAX_ITEMS_PER_LIST 1024
 
+ConversionResult<media::CreateTrackRequest> IAudioFlinger::CreateTrackInput::toAidl() const {
+    media::CreateTrackRequest aidl;
+    aidl.attr = VALUE_OR_RETURN(legacy2aidl_audio_attributes_t_AudioAttributesInternal(attr));
+    aidl.config = VALUE_OR_RETURN(legacy2aidl_audio_config_t_AudioConfig(config));
+    aidl.clientInfo = VALUE_OR_RETURN(legacy2aidl_AudioClient(clientInfo));
+    aidl.sharedBuffer = VALUE_OR_RETURN(legacy2aidl_NullableIMemory_SharedFileRegion(sharedBuffer));
+    aidl.notificationsPerBuffer = VALUE_OR_RETURN(convertIntegral<int32_t>(notificationsPerBuffer));
+    aidl.speed = speed;
+    aidl.audioTrackCallback = audioTrackCallback;
+    aidl.opPackageName = opPackageName;
+    aidl.flags = VALUE_OR_RETURN(legacy2aidl_audio_output_flags_mask(flags));
+    aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(frameCount));
+    aidl.notificationFrameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(notificationFrameCount));
+    aidl.selectedDeviceId = VALUE_OR_RETURN(
+            legacy2aidl_audio_port_handle_t_int32_t(selectedDeviceId));
+    aidl.sessionId = VALUE_OR_RETURN(legacy2aidl_audio_session_t_int32_t(sessionId));
+    return aidl;
+}
+
+ConversionResult<IAudioFlinger::CreateTrackInput>
+IAudioFlinger::CreateTrackInput::fromAidl(const media::CreateTrackRequest& aidl) {
+    IAudioFlinger::CreateTrackInput legacy;
+    legacy.attr = VALUE_OR_RETURN(aidl2legacy_AudioAttributesInternal_audio_attributes_t(aidl.attr));
+    legacy.config = VALUE_OR_RETURN(aidl2legacy_AudioConfig_audio_config_t(aidl.config));
+    legacy.clientInfo = VALUE_OR_RETURN(aidl2legacy_AudioClient(aidl.clientInfo));
+    legacy.sharedBuffer = VALUE_OR_RETURN(aidl2legacy_NullableSharedFileRegion_IMemory(aidl.sharedBuffer));
+    legacy.notificationsPerBuffer = VALUE_OR_RETURN(
+            convertIntegral<uint32_t>(aidl.notificationsPerBuffer));
+    legacy.speed = aidl.speed;
+    legacy.audioTrackCallback = aidl.audioTrackCallback;
+    legacy.opPackageName = aidl.opPackageName;
+    legacy.flags = VALUE_OR_RETURN(aidl2legacy_audio_output_flags_mask(aidl.flags));
+    legacy.frameCount = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCount));
+    legacy.notificationFrameCount = VALUE_OR_RETURN(
+            convertIntegral<size_t>(aidl.notificationFrameCount));
+    legacy.selectedDeviceId = VALUE_OR_RETURN(
+            aidl2legacy_int32_t_audio_port_handle_t(aidl.selectedDeviceId));
+    legacy.sessionId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_session_t(aidl.sessionId));
+    return legacy;
+}
+
+ConversionResult<media::CreateTrackResponse>
+IAudioFlinger::CreateTrackOutput::toAidl() const {
+    media::CreateTrackResponse aidl;
+    aidl.flags = VALUE_OR_RETURN(legacy2aidl_audio_output_flags_mask(flags));
+    aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(frameCount));
+    aidl.notificationFrameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(notificationFrameCount));
+    aidl.selectedDeviceId = VALUE_OR_RETURN(
+            legacy2aidl_audio_port_handle_t_int32_t(selectedDeviceId));
+    aidl.sessionId = VALUE_OR_RETURN(legacy2aidl_audio_session_t_int32_t(sessionId));
+    aidl.sampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(sampleRate));
+    aidl.afFrameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(afFrameCount));
+    aidl.afSampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(afSampleRate));
+    aidl.afLatencyMs = VALUE_OR_RETURN(convertIntegral<int32_t>(afLatencyMs));
+    aidl.outputId = VALUE_OR_RETURN(legacy2aidl_audio_io_handle_t_int32_t(outputId));
+    aidl.portId = VALUE_OR_RETURN(legacy2aidl_audio_port_handle_t_int32_t(portId));
+    return aidl;
+}
+
+ConversionResult<IAudioFlinger::CreateTrackOutput>
+IAudioFlinger::CreateTrackOutput::fromAidl(
+        const media::CreateTrackResponse& aidl) {
+    IAudioFlinger::CreateTrackOutput legacy;
+    legacy.flags = VALUE_OR_RETURN(aidl2legacy_audio_output_flags_mask(aidl.flags));
+    legacy.frameCount = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCount));
+    legacy.notificationFrameCount = VALUE_OR_RETURN(
+            convertIntegral<size_t>(aidl.notificationFrameCount));
+    legacy.selectedDeviceId = VALUE_OR_RETURN(
+            aidl2legacy_int32_t_audio_port_handle_t(aidl.selectedDeviceId));
+    legacy.sessionId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_session_t(aidl.sessionId));
+    legacy.sampleRate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.sampleRate));
+    legacy.afFrameCount = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.afFrameCount));
+    legacy.afSampleRate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.afSampleRate));
+    legacy.afLatencyMs = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.afLatencyMs));
+    legacy.outputId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_io_handle_t(aidl.outputId));
+    legacy.portId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_port_handle_t(aidl.portId));
+    return legacy;
+}
+
+ConversionResult<media::CreateRecordRequest>
+IAudioFlinger::CreateRecordInput::toAidl() const {
+    media::CreateRecordRequest aidl;
+    aidl.attr = VALUE_OR_RETURN(legacy2aidl_audio_attributes_t_AudioAttributesInternal(attr));
+    aidl.config = VALUE_OR_RETURN(legacy2aidl_audio_config_base_t_AudioConfigBase(config));
+    aidl.clientInfo = VALUE_OR_RETURN(legacy2aidl_AudioClient(clientInfo));
+    aidl.opPackageName = VALUE_OR_RETURN(legacy2aidl_String16_string(opPackageName));
+    aidl.riid = VALUE_OR_RETURN(legacy2aidl_audio_unique_id_t_int32_t(riid));
+    aidl.flags = VALUE_OR_RETURN(legacy2aidl_audio_input_flags_mask(flags));
+    aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(frameCount));
+    aidl.notificationFrameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(notificationFrameCount));
+    aidl.selectedDeviceId = VALUE_OR_RETURN(
+            legacy2aidl_audio_port_handle_t_int32_t(selectedDeviceId));
+    aidl.sessionId = VALUE_OR_RETURN(legacy2aidl_audio_session_t_int32_t(sessionId));
+    return aidl;
+}
+
+ConversionResult<IAudioFlinger::CreateRecordInput>
+IAudioFlinger::CreateRecordInput::fromAidl(
+        const media::CreateRecordRequest& aidl) {
+    IAudioFlinger::CreateRecordInput legacy;
+    legacy.attr = VALUE_OR_RETURN(aidl2legacy_AudioAttributesInternal_audio_attributes_t(aidl.attr));
+    legacy.config = VALUE_OR_RETURN(aidl2legacy_AudioConfigBase_audio_config_base_t(aidl.config));
+    legacy.clientInfo = VALUE_OR_RETURN(aidl2legacy_AudioClient(aidl.clientInfo));
+    legacy.opPackageName = VALUE_OR_RETURN(aidl2legacy_string_view_String16(aidl.opPackageName));
+    legacy.riid = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_unique_id_t(aidl.riid));
+    legacy.flags = VALUE_OR_RETURN(aidl2legacy_audio_input_flags_mask(aidl.flags));
+    legacy.frameCount = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCount));
+    legacy.notificationFrameCount = VALUE_OR_RETURN(
+            convertIntegral<size_t>(aidl.notificationFrameCount));
+    legacy.selectedDeviceId = VALUE_OR_RETURN(
+            aidl2legacy_int32_t_audio_port_handle_t(aidl.selectedDeviceId));
+    legacy.sessionId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_session_t(aidl.sessionId));
+    return legacy;
+}
+
+ConversionResult<media::CreateRecordResponse>
+IAudioFlinger::CreateRecordOutput::toAidl() const {
+    media::CreateRecordResponse aidl;
+    aidl.flags = VALUE_OR_RETURN(legacy2aidl_audio_input_flags_mask(flags));
+    aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(frameCount));
+    aidl.notificationFrameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(notificationFrameCount));
+    aidl.selectedDeviceId = VALUE_OR_RETURN(
+            legacy2aidl_audio_port_handle_t_int32_t(selectedDeviceId));
+    aidl.sessionId = VALUE_OR_RETURN(legacy2aidl_audio_session_t_int32_t(sessionId));
+    aidl.sampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(sampleRate));
+    aidl.inputId = VALUE_OR_RETURN(legacy2aidl_audio_io_handle_t_int32_t(inputId));
+    aidl.cblk = VALUE_OR_RETURN(legacy2aidl_NullableIMemory_SharedFileRegion(cblk));
+    aidl.buffers = VALUE_OR_RETURN(legacy2aidl_NullableIMemory_SharedFileRegion(buffers));
+    aidl.portId = VALUE_OR_RETURN(legacy2aidl_audio_port_handle_t_int32_t(portId));
+    return aidl;
+}
+
+ConversionResult<IAudioFlinger::CreateRecordOutput>
+IAudioFlinger::CreateRecordOutput::fromAidl(
+        const media::CreateRecordResponse& aidl) {
+    IAudioFlinger::CreateRecordOutput legacy;
+    legacy.flags = VALUE_OR_RETURN(aidl2legacy_audio_input_flags_mask(aidl.flags));
+    legacy.frameCount = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCount));
+    legacy.notificationFrameCount = VALUE_OR_RETURN(
+            convertIntegral<size_t>(aidl.notificationFrameCount));
+    legacy.selectedDeviceId = VALUE_OR_RETURN(
+            aidl2legacy_int32_t_audio_port_handle_t(aidl.selectedDeviceId));
+    legacy.sessionId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_session_t(aidl.sessionId));
+    legacy.sampleRate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.sampleRate));
+    legacy.inputId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_io_handle_t(aidl.inputId));
+    legacy.cblk = VALUE_OR_RETURN(aidl2legacy_NullableSharedFileRegion_IMemory(aidl.cblk));
+    legacy.buffers = VALUE_OR_RETURN(aidl2legacy_NullableSharedFileRegion_IMemory(aidl.buffers));
+    legacy.portId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_port_handle_t(aidl.portId));
+    return legacy;
+}
 
 class BpAudioFlinger : public BpInterface<IAudioFlinger>
 {
@@ -104,9 +256,9 @@ public:
     {
     }
 
-    virtual sp<IAudioTrack> createTrack(const CreateTrackInput& input,
-                                        CreateTrackOutput& output,
-                                        status_t *status)
+    virtual sp<IAudioTrack> createTrack(const media::CreateTrackRequest& input,
+                                        media::CreateTrackResponse& output,
+                                        status_t* status)
     {
         Parcel data, reply;
         sp<IAudioTrack> track;
@@ -116,7 +268,7 @@ public:
             return track;
         }
 
-        input.writeToParcel(&data);
+        data.writeParcelable(input);
 
         status_t lStatus = remote()->transact(CREATE_TRACK, data, &reply);
         if (lStatus != NO_ERROR) {
@@ -139,9 +291,9 @@ public:
         return track;
     }
 
-    virtual sp<media::IAudioRecord> createRecord(const CreateRecordInput& input,
-                                                 CreateRecordOutput& output,
-                                                 status_t *status)
+    virtual sp<media::IAudioRecord> createRecord(const media::CreateRecordRequest& input,
+                                                 media::CreateRecordResponse& output,
+                                                 status_t* status)
     {
         Parcel data, reply;
         sp<media::IAudioRecord> record;
@@ -151,7 +303,7 @@ public:
             return record;
         }
 
-        input.writeToParcel(&data);
+        data.writeParcelable(input);
 
         status_t lStatus = remote()->transact(CREATE_RECORD, data, &reply);
         if (lStatus != NO_ERROR) {
@@ -371,7 +523,7 @@ public:
         return reply.readString8();
     }
 
-    virtual void registerClient(const sp<IAudioFlingerClient>& client)
+    virtual void registerClient(const sp<media::IAudioFlingerClient>& client)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IAudioFlinger::getInterfaceDescriptor());
@@ -653,9 +805,9 @@ public:
         return NO_ERROR;
     }
 
-    virtual sp<IEffect> createEffect(
+    virtual sp<media::IEffect> createEffect(
                                     effect_descriptor_t *pDesc,
-                                    const sp<IEffectClient>& client,
+                                    const sp<media::IEffectClient>& client,
                                     int32_t priority,
                                     audio_io_handle_t output,
                                     audio_session_t sessionId,
@@ -668,7 +820,7 @@ public:
                                     int *enabled)
     {
         Parcel data, reply;
-        sp<IEffect> effect;
+        sp<media::IEffect> effect;
         if (pDesc == NULL) {
             if (status != NULL) {
                 *status = BAD_VALUE;
@@ -705,7 +857,7 @@ public:
             if (enabled != NULL) {
                 *enabled = tmp;
             }
-            effect = interface_cast<IEffect>(reply.readStrongBinder());
+            effect = interface_cast<media::IEffect>(reply.readStrongBinder());
             reply.read(pDesc, sizeof(effect_descriptor_t));
         }
         if (status != NULL) {
@@ -1025,18 +1177,28 @@ status_t BnAudioFlinger::onTransact(
 
     TimeCheck check(tag.c_str());
 
+    // Make sure we connect to Audio Policy Service before calling into AudioFlinger:
+    //  - AudioFlinger can call into Audio Policy Service with its global mutex held
+    //  - If this is the first time Audio Policy Service is queried from inside audioserver process
+    //  this will trigger Audio Policy Manager initialization.
+    //  - Audio Policy Manager initialization calls into AudioFlinger which will try to lock
+    //  its global mutex and a deadlock will occur.
+    if (IPCThreadState::self()->getCallingPid() != getpid()) {
+        AudioSystem::get_audio_policy_service();
+    }
+
     switch (code) {
         case CREATE_TRACK: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
 
-            CreateTrackInput input;
-            if (input.readFromParcel((Parcel*)&data) != NO_ERROR) {
+            media::CreateTrackRequest input;
+            if (data.readParcelable(&input) != NO_ERROR) {
                 reply->writeInt32(DEAD_OBJECT);
                 return NO_ERROR;
             }
 
             status_t status;
-            CreateTrackOutput output;
+            media::CreateTrackResponse output;
 
             sp<IAudioTrack> track= createTrack(input,
                                                output,
@@ -1054,14 +1216,14 @@ status_t BnAudioFlinger::onTransact(
         case CREATE_RECORD: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
 
-            CreateRecordInput input;
-            if (input.readFromParcel((Parcel*)&data) != NO_ERROR) {
+            media::CreateRecordRequest input;
+            if (data.readParcelable(&input) != NO_ERROR) {
                 reply->writeInt32(DEAD_OBJECT);
                 return NO_ERROR;
             }
 
             status_t status;
-            CreateRecordOutput output;
+            media::CreateRecordResponse output;
 
             sp<media::IAudioRecord> record = createRecord(input,
                                                           output,
@@ -1202,7 +1364,7 @@ status_t BnAudioFlinger::onTransact(
 
         case REGISTER_CLIENT: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
-            sp<IAudioFlingerClient> client = interface_cast<IAudioFlingerClient>(
+            sp<media::IAudioFlingerClient> client = interface_cast<media::IAudioFlingerClient>(
                     data.readStrongBinder());
             registerClient(client);
             return NO_ERROR;
@@ -1211,7 +1373,7 @@ status_t BnAudioFlinger::onTransact(
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             uint32_t sampleRate = data.readInt32();
             audio_format_t format = (audio_format_t) data.readInt32();
-            audio_channel_mask_t channelMask = data.readInt32();
+            audio_channel_mask_t channelMask = (audio_channel_mask_t) data.readInt32();
             reply->writeInt64( getInputBufferSize(sampleRate, format, channelMask) );
             return NO_ERROR;
         } break;
@@ -1387,7 +1549,8 @@ status_t BnAudioFlinger::onTransact(
             if (data.read(&desc, sizeof(effect_descriptor_t)) != NO_ERROR) {
                 ALOGE("b/23905951");
             }
-            sp<IEffectClient> client = interface_cast<IEffectClient>(data.readStrongBinder());
+            sp<media::IEffectClient> client =
+                    interface_cast<media::IEffectClient>(data.readStrongBinder());
             int32_t priority = data.readInt32();
             audio_io_handle_t output = (audio_io_handle_t) data.readInt32();
             audio_session_t sessionId = (audio_session_t) data.readInt32();
@@ -1403,8 +1566,8 @@ status_t BnAudioFlinger::onTransact(
             int id = 0;
             int enabled = 0;
 
-            sp<IEffect> effect = createEffect(&desc, client, priority, output, sessionId, device,
-                    opPackageName, pid, probe, &status, &id, &enabled);
+            sp<media::IEffect> effect = createEffect(&desc, client, priority, output, sessionId,
+                    device, opPackageName, pid, probe, &status, &id, &enabled);
             reply->writeInt32(status);
             reply->writeInt32(id);
             reply->writeInt32(enabled);
@@ -1484,10 +1647,15 @@ status_t BnAudioFlinger::onTransact(
         case GET_AUDIO_PORT: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             struct audio_port port = {};
-            if (data.read(&port, sizeof(struct audio_port)) != NO_ERROR) {
+            status_t status = data.read(&port, sizeof(struct audio_port));
+            if (status != NO_ERROR) {
                 ALOGE("b/23905951");
+                return status;
             }
-            status_t status = getAudioPort(&port);
+            status = AudioSanitizer::sanitizeAudioPort(&port);
+            if (status == NO_ERROR) {
+                status = getAudioPort(&port);
+            }
             reply->writeInt32(status);
             if (status == NO_ERROR) {
                 reply->write(&port, sizeof(struct audio_port));
@@ -1497,12 +1665,20 @@ status_t BnAudioFlinger::onTransact(
         case CREATE_AUDIO_PATCH: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             struct audio_patch patch;
-            data.read(&patch, sizeof(struct audio_patch));
-            audio_patch_handle_t handle = AUDIO_PATCH_HANDLE_NONE;
-            if (data.read(&handle, sizeof(audio_patch_handle_t)) != NO_ERROR) {
-                ALOGE("b/23905951");
+            status_t status = data.read(&patch, sizeof(struct audio_patch));
+            if (status != NO_ERROR) {
+                return status;
             }
-            status_t status = createAudioPatch(&patch, &handle);
+            audio_patch_handle_t handle = AUDIO_PATCH_HANDLE_NONE;
+            status = data.read(&handle, sizeof(audio_patch_handle_t));
+            if (status != NO_ERROR) {
+                ALOGE("b/23905951");
+                return status;
+            }
+            status = AudioSanitizer::sanitizeAudioPatch(&patch);
+            if (status == NO_ERROR) {
+                status = createAudioPatch(&patch, &handle);
+            }
             reply->writeInt32(status);
             if (status == NO_ERROR) {
                 reply->write(&handle, sizeof(audio_patch_handle_t));
@@ -1547,8 +1723,14 @@ status_t BnAudioFlinger::onTransact(
         case SET_AUDIO_PORT_CONFIG: {
             CHECK_INTERFACE(IAudioFlinger, data, reply);
             struct audio_port_config config;
-            data.read(&config, sizeof(struct audio_port_config));
-            status_t status = setAudioPortConfig(&config);
+            status_t status = data.read(&config, sizeof(struct audio_port_config));
+            if (status != NO_ERROR) {
+                return status;
+            }
+            status = AudioSanitizer::sanitizeAudioPortConfig(&config);
+            if (status == NO_ERROR) {
+                status = setAudioPortConfig(&config);
+            }
             reply->writeInt32(status);
             return NO_ERROR;
         } break;

@@ -23,7 +23,7 @@ namespace android {
 
 class UidPolicyCallbackInterface;
 
-// Interface for the scheduler to query a uid's info.
+// Interface for the controller to query a uid's info.
 class UidPolicyInterface {
 public:
     // Instruct the uid policy to start monitoring a uid.
@@ -41,18 +41,12 @@ protected:
     virtual ~UidPolicyInterface() = default;
 };
 
-// Interface for notifying the scheduler of a change in uid states or
-// transcoding resource availability.
+// Interface for notifying the controller of a change in uid states.
 class UidPolicyCallbackInterface {
 public:
     // Called when the set of uids that's top priority among the uids of interest
     // has changed. The receiver of this callback should adjust accordingly.
     virtual void onTopUidsChanged(const std::unordered_set<uid_t>& uids) = 0;
-
-    // Called when resources become available for transcoding use. The scheduler
-    // may use this as a signal to attempt restart transcoding activity that
-    // were previously paused due to temporary resource loss.
-    virtual void onResourceAvailable() = 0;
 
 protected:
     virtual ~UidPolicyCallbackInterface() = default;

@@ -26,6 +26,8 @@
 #include <media/Modulo.h>
 #include <utils/threads.h>
 
+#include <string>
+
 #include "android/media/BnAudioTrackCallback.h"
 #include "android/media/IAudioTrackCallback.h"
 
@@ -177,6 +179,8 @@ public:
      */
                         AudioTrack();
 
+                        AudioTrack(const std::string& opPackageName);
+
     /* Creates an AudioTrack object and registers it with AudioFlinger.
      * Once created, the track needs to be started before it can be used.
      * Unspecified values are set to appropriate default values.
@@ -258,7 +262,8 @@ public:
                                     const audio_attributes_t* pAttributes = NULL,
                                     bool doNotReconnect = false,
                                     float maxRequiredSpeed = 1.0f,
-                                    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE);
+                                    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE,
+                                    const std::string& opPackageName = "");
 
     /* Creates an audio track and registers it with AudioFlinger.
      * With this constructor, the track is configured for static buffer mode.
@@ -288,7 +293,8 @@ public:
                                     pid_t pid = -1,
                                     const audio_attributes_t* pAttributes = NULL,
                                     bool doNotReconnect = false,
-                                    float maxRequiredSpeed = 1.0f);
+                                    float maxRequiredSpeed = 1.0f,
+                                    const std::string& opPackageName = "");
 
     /* Terminates the AudioTrack and unregisters it from AudioFlinger.
      * Also destroys all resources associated with the AudioTrack.
@@ -322,6 +328,27 @@ public:
                             uint32_t sampleRate,
                             audio_format_t format,
                             audio_channel_mask_t channelMask,
+                            size_t frameCount   = 0,
+                            audio_output_flags_t flags = AUDIO_OUTPUT_FLAG_NONE,
+                            callback_t cbf      = NULL,
+                            void* user          = NULL,
+                            int32_t notificationFrames = 0,
+                            const sp<IMemory>& sharedBuffer = 0,
+                            bool threadCanCallJava = false,
+                            audio_session_t sessionId  = AUDIO_SESSION_ALLOCATE,
+                            transfer_type transferType = TRANSFER_DEFAULT,
+                            const audio_offload_info_t *offloadInfo = NULL,
+                            uid_t uid = AUDIO_UID_INVALID,
+                            pid_t pid = -1,
+                            const audio_attributes_t* pAttributes = NULL,
+                            bool doNotReconnect = false,
+                            float maxRequiredSpeed = 1.0f,
+                            audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE);
+    // FIXME(b/169889714): Vendor code depends on the old method signature at link time
+            status_t    set(audio_stream_type_t streamType,
+                            uint32_t sampleRate,
+                            audio_format_t format,
+                            uint32_t channelMask,
                             size_t frameCount   = 0,
                             audio_output_flags_t flags = AUDIO_OUTPUT_FLAG_NONE,
                             callback_t cbf      = NULL,
@@ -1237,6 +1264,7 @@ public:
 
     sp<media::VolumeHandler>       mVolumeHandler;
 
+    const std::string      mOpPackageName;
     int64_t                mPauseTimeRealUs;
 
 private:

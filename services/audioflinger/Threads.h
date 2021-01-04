@@ -349,7 +349,7 @@ public:
 
                 sp<EffectHandle> createEffect_l(
                                     const sp<AudioFlinger::Client>& client,
-                                    const sp<IEffectClient>& effectClient,
+                                    const sp<media::IEffectClient>& effectClient,
                                     int32_t priority,
                                     audio_session_t sessionId,
                                     effect_descriptor_t *desc,
@@ -885,7 +885,8 @@ public:
                                 uid_t uid,
                                 status_t *status /*non-NULL*/,
                                 audio_port_handle_t portId,
-                                const sp<media::IAudioTrackCallback>& callback);
+                                const sp<media::IAudioTrackCallback>& callback,
+                                const std::string& opPackageName);
 
                 AudioStreamOut* getOutput() const;
                 AudioStreamOut* clearOutput();
@@ -1219,7 +1220,7 @@ private:
 
     Mutex                                    mAudioTrackCbLock;
     // Record of IAudioTrackCallback
-    std::set<sp<media::IAudioTrackCallback>> mAudioTrackCallbacks;
+    std::map<sp<Track>, sp<media::IAudioTrackCallback>> mAudioTrackCallbacks;
 
 private:
     // The HAL output sink is treated as non-blocking, but current implementation is blocking
@@ -1832,6 +1833,7 @@ class MmapThread : public ThreadBase
                    audio_port_handle_t *handle);
     status_t stop(audio_port_handle_t handle);
     status_t standby();
+    virtual status_t getExternalPosition(uint64_t *position, int64_t *timeNaos) = 0;
 
     // RefBase
     virtual     void        onFirstRef();
@@ -1943,6 +1945,8 @@ public:
 
     virtual     void        toAudioPortConfig(struct audio_port_config *config);
 
+                status_t    getExternalPosition(uint64_t *position, int64_t *timeNanos) override;
+
 protected:
                 void        dumpInternals_l(int fd, const Vector<String16>& args) override;
 
@@ -1972,6 +1976,8 @@ public:
                                                  bool silenced) override;
 
     virtual     void           toAudioPortConfig(struct audio_port_config *config);
+
+                status_t       getExternalPosition(uint64_t *position, int64_t *timeNanos) override;
 
 protected:
 

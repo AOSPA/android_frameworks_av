@@ -65,6 +65,9 @@ public:
 
     bool supportsFormat(audio_format_t format);
 
+    void setDynamic() { mIsDynamic = true; }
+    bool isDynamic() const { return mIsDynamic; }
+
     // PolicyAudioPortConfig
     virtual sp<PolicyAudioPort> getPolicyAudioPort() const {
         return static_cast<PolicyAudioPort*>(const_cast<DeviceDescriptor*>(this));
@@ -97,6 +100,8 @@ private:
     std::string mTagName; // Unique human readable identifier for a device port found in conf file.
     FormatVector        mEncodedFormats;
     audio_format_t      mCurrentEncodedFormat;
+    bool                mIsDynamic = false;
+    const std::string   mDeclaredAddress; // Original device address
 };
 
 class DeviceVector : public SortedVector<sp<DeviceDescriptor> >
@@ -145,6 +150,15 @@ public:
     //     3) there are more than one device type for input case
     //     4) the combination of all devices is invalid for selection
     sp<DeviceDescriptor> getDeviceForOpening() const;
+
+    // Return the device descriptor that matches the given AudioDeviceTypeAddr
+    sp<DeviceDescriptor> getDeviceFromDeviceTypeAddr(
+            const AudioDeviceTypeAddr& deviceTypeAddr) const;
+
+    // Return the device vector that contains device descriptor whose AudioDeviceTypeAddr appears
+    // in the given AudioDeviceTypeAddrVector
+    DeviceVector getDevicesFromDeviceTypeAddrVec(
+            const AudioDeviceTypeAddrVector& deviceTypeAddrVector) const;
 
     // If there are devices with the given type and the devices to add is not empty,
     // remove all the devices with the given type and add all the devices to add.
@@ -248,7 +262,9 @@ public:
         return String8("");
     }
 
-    std::string toString() const;
+    // Return a string to describe the DeviceVector. The sensitive information will only be
+    // added to the string if `includeSensitiveInfo` is true.
+    std::string toString(bool includeSensitiveInfo = false) const;
 
     void dump(String8 *dst, const String8 &tag, int spaces = 0, bool verbose = true) const;
 

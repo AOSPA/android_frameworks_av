@@ -37,11 +37,14 @@ private:
     void setTo(const TranscodingRequestParcel& parcel) {
         sourceFilePath = parcel.sourceFilePath;
         destinationFilePath = parcel.destinationFilePath;
+        clientUid = parcel.clientUid;
+        clientPid = parcel.clientPid;
+        clientPackageName = parcel.clientPackageName;
         transcodingType = parcel.transcodingType;
         requestedVideoTrackFormat = parcel.requestedVideoTrackFormat;
         priority = parcel.priority;
         requestProgressUpdate = parcel.requestProgressUpdate;
-        requestJobEventUpdate = parcel.requestJobEventUpdate;
+        requestSessionEventUpdate = parcel.requestSessionEventUpdate;
         isForTesting = parcel.isForTesting;
         testConfig = parcel.testConfig;
     }

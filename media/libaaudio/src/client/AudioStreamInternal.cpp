@@ -34,7 +34,6 @@
 #include "AudioEndpointParcelable.h"
 #include "binding/AAudioStreamRequest.h"
 #include "binding/AAudioStreamConfiguration.h"
-#include "binding/IAAudioService.h"
 #include "binding/AAudioServiceMessage.h"
 #include "core/AudioGlobal.h"
 #include "core/AudioStreamBuilder.h"
@@ -76,6 +75,7 @@ AudioStreamInternal::AudioStreamInternal(AAudioServiceInterface  &serviceInterfa
 }
 
 AudioStreamInternal::~AudioStreamInternal() {
+    ALOGD("%s() %p called", __func__, this);
 }
 
 aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder) {
@@ -211,10 +211,10 @@ aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder) {
         result = AAUDIO_ERROR_OUT_OF_RANGE;
         goto error;
     }
-    mFramesPerBurst = framesPerBurst; // only save good value
+    setFramesPerBurst(framesPerBurst); // only save good value
 
     mBufferCapacityInFrames = mEndpointDescriptor.dataQueueDescriptor.capacityInFrames;
-    if (mBufferCapacityInFrames < mFramesPerBurst
+    if (mBufferCapacityInFrames < getFramesPerBurst()
             || mBufferCapacityInFrames > MAX_BUFFER_CAPACITY_IN_FRAMES) {
         ALOGE("%s - bufferCapacity out of range = %d", __func__, mBufferCapacityInFrames);
         result = AAUDIO_ERROR_OUT_OF_RANGE;
@@ -239,7 +239,7 @@ aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder) {
 
         }
         if (mCallbackFrames == AAUDIO_UNSPECIFIED) {
-            mCallbackFrames = mFramesPerBurst;
+            mCallbackFrames = getFramesPerBurst();
         }
 
         const int32_t callbackBufferSize = mCallbackFrames * getBytesPerFrame();
@@ -271,21 +271,21 @@ aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder) {
     return result;
 
 error:
-    releaseCloseFinal();
+    safeReleaseClose();
     return result;
 }
 
 // This must be called under mStreamLock.
 aaudio_result_t AudioStreamInternal::release_l() {
     aaudio_result_t result = AAUDIO_OK;
-    ALOGV("%s(): mServiceStreamHandle = 0x%08X", __func__, mServiceStreamHandle);
+    ALOGD("%s(): mServiceStreamHandle = 0x%08X", __func__, mServiceStreamHandle);
     if (mServiceStreamHandle != AAUDIO_HANDLE_INVALID) {
         aaudio_stream_state_t currentState = getState();
         // Don't release a stream while it is running. Stop it first.
         // If DISCONNECTED then we should still try to stop in case the
         // error callback is still running.
         if (isActive() || currentState == AAUDIO_STREAM_STATE_DISCONNECTED) {
-            requestStop();
+            requestStop_l();
         }
 
         logReleaseBufferState();
@@ -331,7 +331,7 @@ static void *aaudio_callback_thread_proc(void *context)
  * The processing code will then save the current offset
  * between client and server and apply that to any position given to the app.
  */
-aaudio_result_t AudioStreamInternal::requestStart()
+aaudio_result_t AudioStreamInternal::requestStart_l()
 {
     int64_t startTime;
     if (mServiceStreamHandle == AAUDIO_HANDLE_INVALID) {
@@ -374,7 +374,7 @@ aaudio_result_t AudioStreamInternal::requestStart()
                               * AAUDIO_NANOS_PER_SECOND
                               / getSampleRate();
         mCallbackEnabled.store(true);
-        result = createThread(periodNanos, aaudio_callback_thread_proc, this);
+        result = createThread_l(periodNanos, aaudio_callback_thread_proc, this);
     }
     if (result != AAUDIO_OK) {
         setState(originalState);
@@ -400,33 +400,36 @@ int64_t AudioStreamInternal::calculateReasonableTimeout() {
 }
 
 // This must be called under mStreamLock.
-aaudio_result_t AudioStreamInternal::stopCallback()
+aaudio_result_t AudioStreamInternal::stopCallback_l()
 {
     if (isDataCallbackSet()
             && (isActive() || getState() == AAUDIO_STREAM_STATE_DISCONNECTED)) {
         mCallbackEnabled.store(false);
-        aaudio_result_t result = joinThread(NULL); // may temporarily unlock mStreamLock
+        aaudio_result_t result = joinThread_l(NULL); // may temporarily unlock mStreamLock
         if (result == AAUDIO_ERROR_INVALID_HANDLE) {
             ALOGD("%s() INVALID_HANDLE, stream was probably stolen", __func__);
             result = AAUDIO_OK;
         }
         return result;
     } else {
+        ALOGD("%s() skipped, isDataCallbackSet() = %d, isActive() = %d, getState()  = %d", __func__,
+            isDataCallbackSet(), isActive(), getState());
         return AAUDIO_OK;
     }
 }
 
-// This must be called under mStreamLock.
-aaudio_result_t AudioStreamInternal::requestStop() {
-    aaudio_result_t result = stopCallback();
+aaudio_result_t AudioStreamInternal::requestStop_l() {
+    aaudio_result_t result = stopCallback_l();
     if (result != AAUDIO_OK) {
+        ALOGW("%s() stop callback returned %d, returning early", __func__, result);
         return result;
     }
     // The stream may have been unlocked temporarily to let a callback finish
     // and the callback may have stopped the stream.
     // Check to make sure the stream still needs to be stopped.
-    // See also AudioStream::safeStop().
+    // See also AudioStream::safeStop_l().
     if (!(isActive() || getState() == AAUDIO_STREAM_STATE_DISCONNECTED)) {
+        ALOGD("%s() returning early, not active or disconnected", __func__);
         return AAUDIO_OK;
     }
 
@@ -757,9 +760,9 @@ void AudioStreamInternal::processTimestamp(uint64_t position, int64_t time) {
 
 aaudio_result_t AudioStreamInternal::setBufferSize(int32_t requestedFrames) {
     int32_t adjustedFrames = requestedFrames;
-    const int32_t maximumSize = getBufferCapacity() - mFramesPerBurst;
+    const int32_t maximumSize = getBufferCapacity() - getFramesPerBurst();
     // Minimum size should be a multiple number of bursts.
-    const int32_t minimumSize = 1 * mFramesPerBurst;
+    const int32_t minimumSize = 1 * getFramesPerBurst();
 
     // Clip to minimum size so that rounding up will work better.
     adjustedFrames = std::max(minimumSize, adjustedFrames);
@@ -769,9 +772,9 @@ aaudio_result_t AudioStreamInternal::setBufferSize(int32_t requestedFrames) {
         adjustedFrames = maximumSize;
     } else {
         // Round to the next highest burst size.
-        int32_t numBursts = (adjustedFrames + mFramesPerBurst - 1) / mFramesPerBurst;
-        adjustedFrames = numBursts * mFramesPerBurst;
-        // Clip just in case maximumSize is not a multiple of mFramesPerBurst.
+        int32_t numBursts = (adjustedFrames + getFramesPerBurst() - 1) / getFramesPerBurst();
+        adjustedFrames = numBursts * getFramesPerBurst();
+        // Clip just in case maximumSize is not a multiple of getFramesPerBurst().
         adjustedFrames = std::min(maximumSize, adjustedFrames);
     }
 
@@ -804,15 +807,6 @@ int32_t AudioStreamInternal::getBufferSize() const {
 
 int32_t AudioStreamInternal::getBufferCapacity() const {
     return mBufferCapacityInFrames;
-}
-
-int32_t AudioStreamInternal::getFramesPerBurst() const {
-    return mFramesPerBurst;
-}
-
-// This must be called under mStreamLock.
-aaudio_result_t AudioStreamInternal::joinThread(void** returnArg) {
-    return AudioStream::joinThread(returnArg, calculateReasonableTimeout(getFramesPerBurst()));
 }
 
 bool AudioStreamInternal::isClockModelInControl() const {

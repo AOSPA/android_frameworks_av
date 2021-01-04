@@ -116,6 +116,8 @@ static inline T min(const T& a, const T& b)
 
 namespace android {
 
+using media::IEffectClient;
+
 // retry counts for buffer fill timeout
 // 50 * ~20msecs = 1 second
 static const int8_t kMaxTrackRetries = 50;
@@ -1918,9 +1920,8 @@ AudioFlinger::PlaybackThread::PlaybackThread(const sp<AudioFlinger>& audioFlinge
                                        : AUDIO_DEVICE_NONE));
     }
 
-    // ++ operator does not compile
-    for (audio_stream_type_t stream = AUDIO_STREAM_MIN; stream < AUDIO_STREAM_FOR_POLICY_CNT;
-            stream = (audio_stream_type_t) (stream + 1)) {
+    for (int i = AUDIO_STREAM_MIN; i < AUDIO_STREAM_FOR_POLICY_CNT; ++i) {
+        const audio_stream_type_t stream{static_cast<audio_stream_type_t>(i)};
         mStreamTypes[stream].volume = 0.0f;
         mStreamTypes[stream].mute = mAudioFlinger->streamMute_l(stream);
     }
@@ -1950,7 +1951,7 @@ void AudioFlinger::PlaybackThread::onFirstRef()
         // here instead of constructor of PlaybackThread so that the onFirstRef
         // callback would not be made on an incompletely constructed object.
         if (mOutput->stream->setEventCallback(this) != OK) {
-            ALOGE("Failed to add event callback");
+            ALOGD("Failed to add event callback");
         }
     }
     run(mThreadName, ANDROID_PRIORITY_URGENT_AUDIO);
@@ -2084,7 +2085,8 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         uid_t uid,
         status_t *status,
         audio_port_handle_t portId,
-        const sp<media::IAudioTrackCallback>& callback)
+        const sp<media::IAudioTrackCallback>& callback,
+        const std::string& opPackageName)
 {
     size_t frameCount = *pFrameCount;
     size_t notificationFrameCount = *pNotificationFrameCount;
@@ -2362,10 +2364,21 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
             }
         }
 
+        // Set DIRECT flag if current thread is DirectOutputThread. This can
+        // happen when the playback is rerouted to direct output thread by
+        // dynamic audio policy.
+        // Do NOT report the flag changes back to client, since the client
+        // doesn't explicitly request a direct flag.
+        audio_output_flags_t trackFlags = *flags;
+        if (mType == DIRECT) {
+            trackFlags = static_cast<audio_output_flags_t>(trackFlags | AUDIO_OUTPUT_FLAG_DIRECT);
+        }
+
         track = new Track(this, client, streamType, attr, sampleRate, format,
                           channelMask, frameCount,
                           nullptr /* buffer */, (size_t)0 /* bufferSize */, sharedBuffer,
-                          sessionId, creatorPid, uid, *flags, TrackBase::TYPE_DEFAULT, portId);
+                          sessionId, creatorPid, uid, trackFlags, TrackBase::TYPE_DEFAULT, portId,
+                          SIZE_MAX /*frameCountToBeReady*/, opPackageName);
 
         lStatus = track != 0 ? track->initCheck() : (status_t) NO_MEMORY;
         if (lStatus != NO_ERROR) {
@@ -2377,7 +2390,7 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         {
             Mutex::Autolock _atCbL(mAudioTrackCbLock);
             if (callback.get() != nullptr) {
-                mAudioTrackCallbacks.emplace(callback);
+                mAudioTrackCallbacks.emplace(track, callback);
             }
         }
 
@@ -2611,6 +2624,10 @@ void AudioFlinger::PlaybackThread::removeTrack_l(const sp<Track>& track)
     mLocalLog.log("removeTrack_l (%p) %s", track.get(), result.string());
 
     mTracks.remove(track);
+    {
+        Mutex::Autolock _atCbL(mAudioTrackCbLock);
+        mAudioTrackCallbacks.erase(track);
+    }
     if (track->isFastTrack()) {
         int index = track->mFastIndex;
         ALOG_ASSERT(0 < index && index < (int)FastMixerState::sMaxFastTracks);
@@ -2706,8 +2723,8 @@ void AudioFlinger::PlaybackThread::onCodecFormatChanged(
                     audio_utils::metadata::byteStringFromData(metadata);
             std::vector metadataVec(metaDataStr.begin(), metaDataStr.end());
             Mutex::Autolock _l(mAudioTrackCbLock);
-            for (const auto& callback : mAudioTrackCallbacks) {
-                callback->onCodecFormatChanged(metadataVec);
+            for (const auto& callbackPair : mAudioTrackCallbacks) {
+                callbackPair.second->onCodecFormatChanged(metadataVec);
             }
     }).detach();
 }
@@ -2885,8 +2902,8 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
         (void)posix_memalign(&mEffectBuffer, 32, mEffectBufferSize);
     }
 
-    mHapticChannelMask = mChannelMask & AUDIO_CHANNEL_HAPTIC_ALL;
-    mChannelMask &= ~mHapticChannelMask;
+    mHapticChannelMask = static_cast<audio_channel_mask_t>(mChannelMask & AUDIO_CHANNEL_HAPTIC_ALL);
+    mChannelMask = static_cast<audio_channel_mask_t>(mChannelMask & ~mHapticChannelMask);
     mHapticChannelCount = audio_channel_count_from_out_mask(mHapticChannelMask);
     mChannelCount -= mHapticChannelCount;
 
@@ -4261,7 +4278,7 @@ status_t AudioFlinger::PlaybackThread::createAudioPatch_l(const struct audio_pat
                             "Enumerated device type(%#x) must not be used "
                             "as it does not support audio patches",
                             patch->sinks[i].ext.device.type);
-        type |= patch->sinks[i].ext.device.type;
+        type = static_cast<audio_devices_t>(type | patch->sinks[i].ext.device.type);
         deviceTypeAddrs.push_back(AudioDeviceTypeAddr(patch->sinks[i].ext.device.type,
                 patch->sinks[i].ext.device.address));
     }
@@ -4511,8 +4528,9 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         // wrap the source side of the MonoPipe to make it an AudioBufferProvider
         fastTrack->mBufferProvider = new SourceAudioBufferProvider(new MonoPipeReader(monoPipe));
         fastTrack->mVolumeProvider = NULL;
-        fastTrack->mChannelMask = mChannelMask | mHapticChannelMask; // mPipeSink channel mask for
-                                                                     // audio to FastMixer
+        fastTrack->mChannelMask = static_cast<audio_channel_mask_t>(
+                mChannelMask | mHapticChannelMask); // mPipeSink channel mask for
+                                                    // audio to FastMixer
         fastTrack->mFormat = mFormat; // mPipeSink format for audio to FastMixer
         fastTrack->mHapticPlaybackEnabled = mHapticChannelMask != AUDIO_CHANNEL_NONE;
         fastTrack->mHapticIntensity = os::HapticScale::NONE;
@@ -4526,7 +4544,8 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
         // specify sink channel mask when haptic channel mask present as it can not
         // be calculated directly from channel count
         state->mSinkChannelMask = mHapticChannelMask == AUDIO_CHANNEL_NONE
-                ? AUDIO_CHANNEL_NONE : mChannelMask | mHapticChannelMask;
+                ? AUDIO_CHANNEL_NONE
+                : static_cast<audio_channel_mask_t>(mChannelMask | mHapticChannelMask);
         state->mCommand = FastMixerState::COLD_IDLE;
         // already done in constructor initialization list
         //mFastMixerFutex = 0;
@@ -7463,7 +7482,7 @@ reacquire_wakelock:
 
             const ssize_t availableToRead = mPipeSource->availableToRead();
             if (availableToRead >= 0) {
-                // PipeSource is the master clock.  It is up to the AudioRecord client to keep up.
+                // PipeSource is the primary clock.  It is up to the AudioRecord client to keep up.
                 LOG_ALWAYS_FATAL_IF((size_t)availableToRead > mPipeFramesP2,
                         "more frames to read than fifo size, %zd > %zu",
                         availableToRead, mPipeFramesP2);
@@ -7579,7 +7598,7 @@ reacquire_wakelock:
                         (framesRead - part1) * mFrameSize);
             }
         }
-        rear = mRsmpInRear += framesRead;
+        mRsmpInRear = audio_utils::safe_add_overflow(mRsmpInRear, (int32_t)framesRead);
 
         size = activeTracks.size();
 
@@ -8020,7 +8039,8 @@ status_t AudioFlinger::RecordThread::start(RecordThread::RecordTrack* recordTrac
         AutoMutex lock(mLock);
         if (recordTrack->isInvalid()) {
             recordTrack->clearSyncStartEvent();
-            return INVALID_OPERATION;
+            ALOGW("%s track %d: invalidated before startInput", __func__, recordTrack->portId());
+            return DEAD_OBJECT;
         }
         if (mActiveTracks.indexOf(recordTrack) >= 0) {
             if (recordTrack->mState == TrackBase::PAUSING) {
@@ -8050,7 +8070,8 @@ status_t AudioFlinger::RecordThread::start(RecordThread::RecordTrack* recordTrac
                     recordTrack->mState = TrackBase::STARTING_2;
                     // STARTING_2 forces destroy to call stopInput.
                 }
-                return INVALID_OPERATION;
+                ALOGW("%s track %d: invalidated after startInput", __func__, recordTrack->portId());
+                return DEAD_OBJECT;
             }
             if (recordTrack->mState != TrackBase::STARTING_1) {
                 ALOGW("%s(%d): unsynchronized mState:%d change",
@@ -8705,7 +8726,7 @@ status_t AudioFlinger::RecordThread::createAudioPatch_l(const struct audio_patch
 
     // store new device and send to effects
     mInDeviceTypeAddr.mType = patch->sources[0].ext.device.type;
-    mInDeviceTypeAddr.mAddress = patch->sources[0].ext.device.address;
+    mInDeviceTypeAddr.setAddress(patch->sources[0].ext.device.address);
     audio_port_handle_t deviceId = patch->sources[0].id;
     for (size_t i = 0; i < mEffectChains.size(); i++) {
         mEffectChains[i]->setInputDevice_l(inDeviceTypeAddr());
@@ -8847,6 +8868,11 @@ status_t AudioFlinger::MmapThreadHandle::getMmapPosition(struct audio_mmap_posit
     return mThread->getMmapPosition(position);
 }
 
+status_t AudioFlinger::MmapThreadHandle::getExternalPosition(uint64_t *position,
+                                                             int64_t *timeNanos) {
+    return mThread->getExternalPosition(position, timeNanos);
+}
+
 status_t AudioFlinger::MmapThreadHandle::start(const AudioClient& client,
         const audio_attributes_t *attr, audio_port_handle_t *handle)
 
@@ -8882,7 +8908,6 @@ AudioFlinger::MmapThread::MmapThread(
 
 AudioFlinger::MmapThread::~MmapThread()
 {
-    releaseWakeLock_l();
 }
 
 void AudioFlinger::MmapThread::onFirstRef()
@@ -8932,7 +8957,6 @@ status_t AudioFlinger::MmapThread::createMmapBuffer(int32_t minSizeFrames,
         return NO_INIT;
     }
     mStandby = true;
-    acquireWakeLock();
     return mHalStream->createMmapBuffer(minSizeFrames, info);
 }
 
@@ -8971,8 +8995,12 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
     status_t ret;
 
     if (*handle == mPortId) {
-        // for the first track, reuse portId and session allocated when the stream was opened
-        return exitStandby();
+        // For the first track, reuse portId and session allocated when the stream was opened.
+        ret = exitStandby();
+        if (ret == NO_ERROR) {
+            acquireWakeLock();
+        }
+        return ret;
     }
 
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
@@ -9093,6 +9121,7 @@ status_t AudioFlinger::MmapThread::stop(audio_port_handle_t handle)
 
     if (handle == mPortId) {
         mHalStream->stop();
+        releaseWakeLock();
         return NO_ERROR;
     }
 
@@ -9335,7 +9364,7 @@ status_t AudioFlinger::MmapThread::createAudioPatch_l(const struct audio_patch *
                                 "Enumerated device type(%#x) must not be used "
                                 "as it does not support audio patches",
                                 patch->sinks[i].ext.device.type);
-            type |= patch->sinks[i].ext.device.type;
+            type = static_cast<audio_devices_t>(type | patch->sinks[i].ext.device.type);
             sinkDeviceTypeAddrs.push_back(AudioDeviceTypeAddr(patch->sinks[i].ext.device.type,
                     patch->sinks[i].ext.device.address));
         }
@@ -9346,7 +9375,7 @@ status_t AudioFlinger::MmapThread::createAudioPatch_l(const struct audio_patch *
         deviceId = patch->sources[0].id;
         numDevices = mPatch.num_sources;
         sourceDeviceTypeAddr.mType = patch->sources[0].ext.device.type;
-        sourceDeviceTypeAddr.mAddress = patch->sources[0].ext.device.address;
+        sourceDeviceTypeAddr.setAddress(patch->sources[0].ext.device.address);
     }
 
     for (size_t i = 0; i < mEffectChains.size(); i++) {
@@ -9801,6 +9830,20 @@ void AudioFlinger::MmapPlaybackThread::toAudioPortConfig(struct audio_port_confi
     }
 }
 
+status_t AudioFlinger::MmapPlaybackThread::getExternalPosition(uint64_t *position,
+                                                               int64_t *timeNanos)
+{
+    if (mOutput == nullptr) {
+        return NO_INIT;
+    }
+    struct timespec timestamp;
+    status_t status = mOutput->getPresentationPosition(position, &timestamp);
+    if (status == NO_ERROR) {
+        *timeNanos = timestamp.tv_sec * NANOS_PER_SECOND + timestamp.tv_nsec;
+    }
+    return status;
+}
+
 void AudioFlinger::MmapPlaybackThread::dumpInternals_l(int fd, const Vector<String16>& args)
 {
     MmapThread::dumpInternals_l(fd, args);
@@ -9903,6 +9946,15 @@ void AudioFlinger::MmapCaptureThread::toAudioPortConfig(struct audio_port_config
         config->config_mask |= AUDIO_PORT_CONFIG_FLAGS;
         config->flags.input = mInput->flags;
     }
+}
+
+status_t AudioFlinger::MmapCaptureThread::getExternalPosition(
+        uint64_t *position, int64_t *timeNanos)
+{
+    if (mInput == nullptr) {
+        return NO_INIT;
+    }
+    return mInput->getCapturePosition((int64_t*)position, timeNanos);
 }
 
 } // namespace android

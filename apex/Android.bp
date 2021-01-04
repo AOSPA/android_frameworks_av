@@ -31,6 +31,8 @@ apex_defaults {
                 "libmpeg2extractor",
                 "liboggextractor",
                 "libwavextractor",
+                // JNI
+                "libmediaparser-jni"
             ],
         },
     },
@@ -59,6 +61,15 @@ apex {
     name: "com.android.media",
     manifest: "manifest.json",
     defaults: ["com.android.media-defaults"],
+    prebuilts: [
+        "media-linker-config",
+    ],
+}
+
+linker_config {
+    name: "media-linker-config",
+    src: "linker.config.json",
+    installable: false,
 }
 
 filegroup {

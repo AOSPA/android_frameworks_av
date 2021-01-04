@@ -102,6 +102,8 @@ struct NuPlayer : public AHandler {
 
     void updateInternalTimers();
 
+    void setTargetBitrate(int bitrate /* bps */);
+
 protected:
     virtual ~NuPlayer();
 
@@ -351,6 +353,9 @@ protected:
 
     status_t onPrepareDrm(const sp<AMessage> &msg);
     status_t onReleaseDrm();
+
+private:
+    bool mIsSeekPrerollMode;
 
     DISALLOW_EVIL_CONSTRUCTORS(NuPlayer);
 };

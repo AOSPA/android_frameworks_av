@@ -23,15 +23,23 @@
 #include <inttypes.h>
 #include <media/TranscodingClientManager.h>
 #include <media/TranscodingRequest.h>
+#include <media/TranscodingUidPolicy.h>
+#include <private/android_filesystem_config.h>
 #include <utils/Log.h>
+#include <utils/String16.h>
 namespace android {
 
 static_assert(sizeof(ClientIdType) == sizeof(void*), "ClientIdType should be pointer-sized");
 
+static constexpr const char* MEDIA_PROVIDER_PKG_NAMES[] = {
+        "com.android.providers.media.module",
+        "com.google.android.providers.media.module",
+};
+
 using ::aidl::android::media::BnTranscodingClient;
 using ::aidl::android::media::IMediaTranscodingService;  // For service error codes
-using ::aidl::android::media::TranscodingJobParcel;
 using ::aidl::android::media::TranscodingRequestParcel;
+using ::aidl::android::media::TranscodingSessionParcel;
 using Status = ::ndk::ScopedAStatus;
 using ::ndk::SpAIBinder;
 
@@ -43,6 +51,12 @@ std::mutex TranscodingClientManager::sCookie2ClientLock;
 std::map<ClientIdType, std::shared_ptr<TranscodingClientManager::ClientImpl>>
         TranscodingClientManager::sCookie2Client;
 ///////////////////////////////////////////////////////////////////////////////
+
+// Convenience methods for constructing binder::Status objects for error returns
+#define STATUS_ERROR_FMT(errorCode, errorString, ...) \
+    Status::fromServiceSpecificErrorWithMessage(      \
+            errorCode,                                \
+            String8::format("%s:%d: " errorString, __FUNCTION__, __LINE__, ##__VA_ARGS__))
 
 /**
  * ClientImpl implements a single client and contains all its information.
@@ -60,50 +74,46 @@ struct TranscodingClientManager::ClientImpl : public BnTranscodingClient {
      * (casted to int64t_t) as the client id.
      */
     ClientIdType mClientId;
-    pid_t mClientPid;
-    uid_t mClientUid;
     std::string mClientName;
     std::string mClientOpPackageName;
 
-    // Next jobId to assign.
-    std::atomic<int32_t> mNextJobId;
+    // Next sessionId to assign.
+    std::atomic<int32_t> mNextSessionId;
     // Whether this client has been unregistered already.
     std::atomic<bool> mAbandoned;
     // Weak pointer to the client manager for this client.
     std::weak_ptr<TranscodingClientManager> mOwner;
 
-    ClientImpl(const std::shared_ptr<ITranscodingClientCallback>& callback, pid_t pid, uid_t uid,
+    ClientImpl(const std::shared_ptr<ITranscodingClientCallback>& callback,
                const std::string& clientName, const std::string& opPackageName,
                const std::weak_ptr<TranscodingClientManager>& owner);
 
     Status submitRequest(const TranscodingRequestParcel& /*in_request*/,
-                         TranscodingJobParcel* /*out_job*/, bool* /*_aidl_return*/) override;
+                         TranscodingSessionParcel* /*out_session*/,
+                         bool* /*_aidl_return*/) override;
 
-    Status cancelJob(int32_t /*in_jobId*/, bool* /*_aidl_return*/) override;
+    Status cancelSession(int32_t /*in_sessionId*/, bool* /*_aidl_return*/) override;
 
-    Status getJobWithId(int32_t /*in_jobId*/, TranscodingJobParcel* /*out_job*/,
-                        bool* /*_aidl_return*/) override;
+    Status getSessionWithId(int32_t /*in_sessionId*/, TranscodingSessionParcel* /*out_session*/,
+                            bool* /*_aidl_return*/) override;
 
     Status unregister() override;
 };
 
 TranscodingClientManager::ClientImpl::ClientImpl(
-        const std::shared_ptr<ITranscodingClientCallback>& callback, pid_t pid, uid_t uid,
-        const std::string& clientName, const std::string& opPackageName,
-        const std::weak_ptr<TranscodingClientManager>& owner)
+        const std::shared_ptr<ITranscodingClientCallback>& callback, const std::string& clientName,
+        const std::string& opPackageName, const std::weak_ptr<TranscodingClientManager>& owner)
       : mClientBinder((callback != nullptr) ? callback->asBinder() : nullptr),
         mClientCallback(callback),
         mClientId(sCookieCounter.fetch_add(1, std::memory_order_relaxed)),
-        mClientPid(pid),
-        mClientUid(uid),
         mClientName(clientName),
         mClientOpPackageName(opPackageName),
-        mNextJobId(0),
+        mNextSessionId(0),
         mAbandoned(false),
         mOwner(owner) {}
 
 Status TranscodingClientManager::ClientImpl::submitRequest(
-        const TranscodingRequestParcel& in_request, TranscodingJobParcel* out_job,
+        const TranscodingRequestParcel& in_request, TranscodingSessionParcel* out_session,
         bool* _aidl_return) {
     *_aidl_return = false;
 
@@ -113,61 +123,101 @@ Status TranscodingClientManager::ClientImpl::submitRequest(
     }
 
     if (in_request.sourceFilePath.empty() || in_request.destinationFilePath.empty()) {
-        // This is the only error we check for now.
         return Status::ok();
     }
 
-    int32_t jobId = mNextJobId.fetch_add(1);
+    int32_t callingPid = AIBinder_getCallingPid();
+    int32_t callingUid = AIBinder_getCallingUid();
+    int32_t in_clientUid = in_request.clientUid;
+    int32_t in_clientPid = in_request.clientPid;
+
+    // Check if we can trust clientUid. Only privilege caller could forward the
+    // uid on app client's behalf.
+    if (in_clientUid == IMediaTranscodingService::USE_CALLING_UID) {
+        in_clientUid = callingUid;
+    } else if (in_clientUid < 0) {
+        return Status::ok();
+    } else if (in_clientUid != callingUid && !owner->isTrustedCallingUid(callingUid)) {
+        ALOGE("MediaTranscodingService::registerClient rejected (clientPid %d, clientUid %d) "
+              "(don't trust callingUid %d)",
+              in_clientPid, in_clientUid, callingUid);
+        return STATUS_ERROR_FMT(
+                IMediaTranscodingService::ERROR_PERMISSION_DENIED,
+                "MediaTranscodingService::registerClient rejected (clientPid %d, clientUid %d) "
+                "(don't trust callingUid %d)",
+                in_clientPid, in_clientUid, callingUid);
+    }
+
+    // Check if we can trust clientPid. Only privilege caller could forward the
+    // pid on app client's behalf.
+    if (in_clientPid == IMediaTranscodingService::USE_CALLING_PID) {
+        in_clientPid = callingPid;
+    } else if (in_clientPid < 0) {
+        return Status::ok();
+    } else if (in_clientPid != callingPid && !owner->isTrustedCallingUid(callingUid)) {
+        ALOGE("MediaTranscodingService::registerClient rejected (clientPid %d, clientUid %d) "
+              "(don't trust callingUid %d)",
+              in_clientPid, in_clientUid, callingUid);
+        return STATUS_ERROR_FMT(
+                IMediaTranscodingService::ERROR_PERMISSION_DENIED,
+                "MediaTranscodingService::registerClient rejected (clientPid %d, clientUid %d) "
+                "(don't trust callingUid %d)",
+                in_clientPid, in_clientUid, callingUid);
+    }
+
+    int32_t sessionId = mNextSessionId.fetch_add(1);
+
+    *_aidl_return = owner->mSessionController->submit(mClientId, sessionId, in_clientUid,
+                                                      in_request, mClientCallback);
+
+    if (*_aidl_return) {
+        out_session->sessionId = sessionId;
+
+        // TODO(chz): is some of this coming from SessionController?
+        *(TranscodingRequest*)&out_session->request = in_request;
+        out_session->awaitNumberOfSessions = 0;
+    }
+
+    return Status::ok();
+}
+
+Status TranscodingClientManager::ClientImpl::cancelSession(int32_t in_sessionId,
+                                                           bool* _aidl_return) {
+    *_aidl_return = false;
+
+    std::shared_ptr<TranscodingClientManager> owner;
+    if (mAbandoned || (owner = mOwner.lock()) == nullptr) {
+        return Status::fromServiceSpecificError(IMediaTranscodingService::ERROR_DISCONNECTED);
+    }
+
+    if (in_sessionId < 0) {
+        return Status::ok();
+    }
+
+    *_aidl_return = owner->mSessionController->cancel(mClientId, in_sessionId);
+    return Status::ok();
+}
+
+Status TranscodingClientManager::ClientImpl::getSessionWithId(int32_t in_sessionId,
+                                                              TranscodingSessionParcel* out_session,
+                                                              bool* _aidl_return) {
+    *_aidl_return = false;
+
+    std::shared_ptr<TranscodingClientManager> owner;
+    if (mAbandoned || (owner = mOwner.lock()) == nullptr) {
+        return Status::fromServiceSpecificError(IMediaTranscodingService::ERROR_DISCONNECTED);
+    }
+
+    if (in_sessionId < 0) {
+        return Status::ok();
+    }
 
     *_aidl_return =
-            owner->mJobScheduler->submit(mClientId, jobId, mClientUid, in_request, mClientCallback);
+            owner->mSessionController->getSession(mClientId, in_sessionId, &out_session->request);
 
     if (*_aidl_return) {
-        out_job->jobId = jobId;
-
-        // TODO(chz): is some of this coming from JobScheduler?
-        *(TranscodingRequest*)&out_job->request = in_request;
-        out_job->awaitNumberOfJobs = 0;
-    }
-
-    return Status::ok();
-}
-
-Status TranscodingClientManager::ClientImpl::cancelJob(int32_t in_jobId, bool* _aidl_return) {
-    *_aidl_return = false;
-
-    std::shared_ptr<TranscodingClientManager> owner;
-    if (mAbandoned || (owner = mOwner.lock()) == nullptr) {
-        return Status::fromServiceSpecificError(IMediaTranscodingService::ERROR_DISCONNECTED);
-    }
-
-    if (in_jobId < 0) {
-        return Status::ok();
-    }
-
-    *_aidl_return = owner->mJobScheduler->cancel(mClientId, in_jobId);
-    return Status::ok();
-}
-
-Status TranscodingClientManager::ClientImpl::getJobWithId(int32_t in_jobId,
-                                                          TranscodingJobParcel* out_job,
-                                                          bool* _aidl_return) {
-    *_aidl_return = false;
-
-    std::shared_ptr<TranscodingClientManager> owner;
-    if (mAbandoned || (owner = mOwner.lock()) == nullptr) {
-        return Status::fromServiceSpecificError(IMediaTranscodingService::ERROR_DISCONNECTED);
-    }
-
-    if (in_jobId < 0) {
-        return Status::ok();
-    }
-
-    *_aidl_return = owner->mJobScheduler->getJob(mClientId, in_jobId, &out_job->request);
-
-    if (*_aidl_return) {
-        out_job->jobId = in_jobId;
-        out_job->awaitNumberOfJobs = 0;
+        out_session->sessionId = in_sessionId;
+        out_session->awaitNumberOfSessions = 0;
     }
     return Status::ok();
 }
@@ -180,8 +230,8 @@ Status TranscodingClientManager::ClientImpl::unregister() {
         return Status::fromServiceSpecificError(IMediaTranscodingService::ERROR_DISCONNECTED);
     }
 
-    // Use jobId == -1 to cancel all realtime jobs for this client with the scheduler.
-    owner->mJobScheduler->cancel(mClientId, -1);
+    // Use sessionId == -1 to cancel all realtime sessions for this client with the controller.
+    owner->mSessionController->cancel(mClientId, -1);
     owner->removeClient(mClientId);
 
     return Status::ok();
@@ -212,9 +262,19 @@ void TranscodingClientManager::BinderDiedCallback(void* cookie) {
 }
 
 TranscodingClientManager::TranscodingClientManager(
-        const std::shared_ptr<SchedulerClientInterface>& scheduler)
-      : mDeathRecipient(AIBinder_DeathRecipient_new(BinderDiedCallback)), mJobScheduler(scheduler) {
+        const std::shared_ptr<ControllerClientInterface>& controller)
+      : mDeathRecipient(AIBinder_DeathRecipient_new(BinderDiedCallback)),
+        mSessionController(controller) {
     ALOGD("TranscodingClientManager started");
+    uid_t mpuid;
+    for (const char* pkgName : MEDIA_PROVIDER_PKG_NAMES) {
+        if (TranscodingUidPolicy::getUidForPackage(String16(pkgName), mpuid) == NO_ERROR) {
+            ALOGI("Found %s's uid: %d", pkgName, mpuid);
+            mMediaProviderUid.insert(mpuid);
+        } else {
+            ALOGW("Couldn't get uid for %s.", pkgName);
+        }
+    }
 }
 
 TranscodingClientManager::~TranscodingClientManager() {
@@ -228,16 +288,16 @@ void TranscodingClientManager::dumpAllClients(int fd, const Vector<String16>& ar
     char buffer[SIZE];
     std::scoped_lock lock{mLock};
 
-    snprintf(buffer, SIZE, "    Total num of Clients: %zu\n", mClientIdToClientMap.size());
-    result.append(buffer);
-
     if (mClientIdToClientMap.size() > 0) {
-        snprintf(buffer, SIZE, "========== Dumping all clients =========\n");
+        snprintf(buffer, SIZE, "\n========== Dumping all clients =========\n");
         result.append(buffer);
     }
 
+    snprintf(buffer, SIZE, "  Total num of Clients: %zu\n", mClientIdToClientMap.size());
+    result.append(buffer);
+
     for (const auto& iter : mClientIdToClientMap) {
-        snprintf(buffer, SIZE, "    -- Client id: %lld  name: %s\n", (long long)iter.first,
+        snprintf(buffer, SIZE, "    Client %lld:  pkg: %s\n", (long long)iter.first,
                  iter.second->mClientName.c_str());
         result.append(buffer);
     }
@@ -245,12 +305,27 @@ void TranscodingClientManager::dumpAllClients(int fd, const Vector<String16>& ar
     write(fd, result.string(), result.size());
 }
 
+bool TranscodingClientManager::isTrustedCallingUid(uid_t uid) {
+    if (uid > 0 && mMediaProviderUid.count(uid) > 0) {
+        return true;
+    }
+
+    switch (uid) {
+    case AID_ROOT:  // root user
+    case AID_SYSTEM:
+    case AID_SHELL:
+    case AID_MEDIA:  // mediaserver
+        return true;
+    default:
+        return false;
+    }
+}
+
 status_t TranscodingClientManager::addClient(
-        const std::shared_ptr<ITranscodingClientCallback>& callback, pid_t pid, uid_t uid,
-        const std::string& clientName, const std::string& opPackageName,
-        std::shared_ptr<ITranscodingClient>* outClient) {
+        const std::shared_ptr<ITranscodingClientCallback>& callback, const std::string& clientName,
+        const std::string& opPackageName, std::shared_ptr<ITranscodingClient>* outClient) {
     // Validate the client.
-    if (callback == nullptr || pid < 0 || clientName.empty() || opPackageName.empty()) {
+    if (callback == nullptr || clientName.empty() || opPackageName.empty()) {
         ALOGE("Invalid client");
         return IMediaTranscodingService::ERROR_ILLEGAL_ARGUMENT;
     }
@@ -264,12 +339,11 @@ status_t TranscodingClientManager::addClient(
         return IMediaTranscodingService::ERROR_ALREADY_EXISTS;
     }
 
-    // Creates the client and uses its process id as client id.
+    // Creates the client (with the id assigned by ClientImpl).
     std::shared_ptr<ClientImpl> client = ::ndk::SharedRefBase::make<ClientImpl>(
-            callback, pid, uid, clientName, opPackageName, shared_from_this());
+            callback, clientName, opPackageName, shared_from_this());
 
-    ALOGD("Adding client id %lld, pid %d, uid %d, name %s, package %s",
-          (long long)client->mClientId, client->mClientPid, client->mClientUid,
+    ALOGD("Adding client id %lld, name %s, package %s", (long long)client->mClientId,
           client->mClientName.c_str(), client->mClientOpPackageName.c_str());
 
     {

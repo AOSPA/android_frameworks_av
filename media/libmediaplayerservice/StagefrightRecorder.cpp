@@ -17,6 +17,9 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "StagefrightRecorder"
 #include <inttypes.h>
+// TODO/workaround: including base logging now as it conflicts with ADebug.h
+// and it must be included first.
+#include <android-base/logging.h>
 #include <utils/Log.h>
 
 #include <cutils/properties.h>
@@ -581,12 +584,14 @@ status_t StagefrightRecorder::setParamVideoEncodingBitRate(int32_t bitRate) {
     mVideoBitRate = bitRate;
 
     // A new bitrate(TMMBR) should be applied on runtime as well if OutputFormat is RTP_AVP
-    if (mOutputFormat == OUTPUT_FORMAT_RTP_AVP && mStarted && mPauseStartTimeUs == 0) {
+    if (mOutputFormat == OUTPUT_FORMAT_RTP_AVP) {
         // Regular I frames may overload the network so we reduce the bitrate to allow
         // margins for the I frame overruns.
         // Still send requested bitrate (TMMBR) in the reply (TMMBN).
         const float coefficient = 0.8f;
         mVideoBitRate = (bitRate * coefficient) / 1000 * 1000;
+    }
+    if (mOutputFormat == OUTPUT_FORMAT_RTP_AVP && mStarted && mPauseStartTimeUs == 0) {
         mVideoEncoderSource->setEncodingBitrate(mVideoBitRate);
         ARTPWriter* rtpWriter  = static_cast<ARTPWriter*>(mWriter.get());
         rtpWriter->setTMMBNInfo(mOpponentID, bitRate);
@@ -1326,7 +1331,7 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
     if (mPrivacySensitive == PRIVACY_SENSITIVE_DEFAULT) {
         if (attr.source == AUDIO_SOURCE_VOICE_COMMUNICATION
                 || attr.source == AUDIO_SOURCE_CAMCORDER) {
-            attr.flags |= AUDIO_FLAG_CAPTURE_PRIVATE;
+            attr.flags = static_cast<audio_flags_mask_t>(attr.flags | AUDIO_FLAG_CAPTURE_PRIVATE);
             mPrivacySensitive = PRIVACY_SENSITIVE_ENABLED;
         } else {
             mPrivacySensitive = PRIVACY_SENSITIVE_DISABLED;
@@ -1342,7 +1347,7 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
             return NULL;
         }
         if (mPrivacySensitive == PRIVACY_SENSITIVE_ENABLED) {
-            attr.flags |= AUDIO_FLAG_CAPTURE_PRIVATE;
+            attr.flags = static_cast<audio_flags_mask_t>(attr.flags | AUDIO_FLAG_CAPTURE_PRIVATE);
         }
     }
 
@@ -1994,10 +1999,6 @@ status_t StagefrightRecorder::setupVideoEncoder(
         format->setInt32("stride", stride);
         format->setInt32("slice-height", sliceHeight);
         format->setInt32("color-format", colorFormat);
-        if (mOutputFormat == OUTPUT_FORMAT_RTP_AVP) {
-            // This indicates that a raw image provided to encoder needs to be rotated.
-            format->setInt32("rotation-degrees", mRotationDegrees);
-        }
     } else {
         format->setInt32("width", mVideoWidth);
         format->setInt32("height", mVideoHeight);
@@ -2016,6 +2017,11 @@ status_t StagefrightRecorder::setupVideoEncoder(
     }
 
     setupCustomVideoEncoderParams(cameraSource, format);
+    if (mOutputFormat == OUTPUT_FORMAT_RTP_AVP) {
+        // This indicates that a raw image provided to encoder needs to be rotated.
+        format->setInt32("rotation-degrees", mRotationDegrees);
+    }
+
     format->setInt32("bitrate", mVideoBitRate);
     format->setInt32("bitrate-mode", mVideoBitRateMode);
     format->setInt32("frame-rate", mFrameRate);

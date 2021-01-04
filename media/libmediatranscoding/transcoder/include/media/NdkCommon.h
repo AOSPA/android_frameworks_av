@@ -46,6 +46,7 @@ static constexpr int COLOR_FormatYUV420Flexible = 0x7F420888;
 static constexpr int COLOR_FormatSurface = 0x7f000789;
 
 // constants not defined in NDK
+extern const char* TBD_AMEDIACODEC_PARAMETER_KEY_ALLOW_FRAME_DROP;
 extern const char* TBD_AMEDIACODEC_PARAMETER_KEY_REQUEST_SYNC_FRAME;
 extern const char* TBD_AMEDIACODEC_PARAMETER_KEY_VIDEO_BITRATE;
 extern const char* TBD_AMEDIACODEC_PARAMETER_KEY_MAX_B_FRAMES;
@@ -53,4 +54,32 @@ static constexpr int TBD_AMEDIACODEC_BUFFER_FLAG_KEY_FRAME = 0x1;
 
 static constexpr int kBitrateModeConstant = 2;
 
+namespace AMediaFormatUtils {
+
+typedef struct {
+    const char* key;
+    bool (*copy)(const char* key, AMediaFormat* from, AMediaFormat* to);
+    bool (*copy2)(const char* key, AMediaFormat* from, AMediaFormat* to);
+} EntryCopier;
+
+#define ENTRY_COPIER(keyName, typeName) \
+    { keyName, AMediaFormatUtils::CopyFormatEntry##typeName, nullptr }
+#define ENTRY_COPIER2(keyName, typeName, typeName2)            \
+    {                                                          \
+        keyName, AMediaFormatUtils::CopyFormatEntry##typeName, \
+                AMediaFormatUtils::CopyFormatEntry##typeName2  \
+    }
+
+bool CopyFormatEntryString(const char* key, AMediaFormat* from, AMediaFormat* to);
+bool CopyFormatEntryInt64(const char* key, AMediaFormat* from, AMediaFormat* to);
+bool CopyFormatEntryInt32(const char* key, AMediaFormat* from, AMediaFormat* to);
+bool CopyFormatEntryFloat(const char* key, AMediaFormat* from, AMediaFormat* to);
+
+void CopyFormatEntries(AMediaFormat* from, AMediaFormat* to, const EntryCopier* entries,
+                       size_t entryCount);
+
+bool SetDefaultFormatValueFloat(const char* key, AMediaFormat* format, float value);
+bool SetDefaultFormatValueInt32(const char* key, AMediaFormat* format, int32_t value);
+
+}  // namespace AMediaFormatUtils
 #endif  // ANDROID_MEDIA_TRANSCODING_NDK_COMMON_H

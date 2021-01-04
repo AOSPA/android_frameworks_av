@@ -279,6 +279,8 @@ void C2SoftVorbisDec::process(
         // skip 7 <type + "vorbis"> bytes
         makeBitReader((const uint8_t *)data + 7, inSize - 7, &buf, &ref, &bits);
         if (data[0] == 1) {
+            // release any memory that vorbis_info_init will blindly overwrite
+            vorbis_info_clear(mVi);
             vorbis_info_init(mVi);
             if (0 != _vorbis_unpack_info(mVi, &bits)) {
                 ALOGE("Encountered error while unpacking info");
@@ -323,6 +325,8 @@ void C2SoftVorbisDec::process(
                 work->result = C2_CORRUPTED;
                 return;
             }
+            // release any memory that vorbis_dsp_init will blindly overwrite
+            vorbis_dsp_clear(mState);
             if (0 != vorbis_dsp_init(mState, mVi)) {
                 ALOGE("Encountered error while dsp init");
                 mSignalledError = true;
@@ -355,6 +359,10 @@ void C2SoftVorbisDec::process(
     }
     memcpy(&numPageFrames, data + inSize - sizeof(numPageFrames), sizeof(numPageFrames));
     inSize -= sizeof(numPageFrames);
+    if (inSize == 0) {
+        // empty buffer, ignore
+        return;
+    }
     if (numPageFrames >= 0) {
         mNumFramesLeftOnPage = numPageFrames;
     }
@@ -405,7 +413,7 @@ void C2SoftVorbisDec::process(
                 mState,  reinterpret_cast<int16_t *> (wView.data()),
                 kMaxNumSamplesPerChannel);
         if (numFrames < 0) {
-            ALOGD("vorbis_dsp_pcmout returned %d", numFrames);
+            ALOGD("vorbis_dsp_pcmout returned %d frames", numFrames);
             numFrames = 0;
         }
     }

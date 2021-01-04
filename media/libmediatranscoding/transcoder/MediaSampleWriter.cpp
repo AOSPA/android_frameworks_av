@@ -72,6 +72,11 @@ private:
     AMediaMuxer* mMuxer;
 };
 
+// static
+std::shared_ptr<MediaSampleWriter> MediaSampleWriter::Create() {
+    return std::shared_ptr<MediaSampleWriter>(new MediaSampleWriter());
+}
+
 MediaSampleWriter::~MediaSampleWriter() {
     if (mState == STARTED) {
         stop();  // Join thread.
@@ -92,7 +97,7 @@ bool MediaSampleWriter::init(const std::shared_ptr<MediaSampleWriterMuxerInterfa
         return false;
     }
 
-    std::scoped_lock lock(mStateMutex);
+    std::scoped_lock lock(mMutex);
     if (mState != UNINITIALIZED) {
         LOG(ERROR) << "Sample writer is already initialized";
         return false;
@@ -104,39 +109,56 @@ bool MediaSampleWriter::init(const std::shared_ptr<MediaSampleWriterMuxerInterfa
     return true;
 }
 
-bool MediaSampleWriter::addTrack(const std::shared_ptr<MediaSampleQueue>& sampleQueue,
-                                 const std::shared_ptr<AMediaFormat>& trackFormat) {
-    if (sampleQueue == nullptr || trackFormat == nullptr) {
-        LOG(ERROR) << "Sample queue and track format must be non-null";
-        return false;
+MediaSampleWriter::MediaSampleConsumerFunction MediaSampleWriter::addTrack(
+        const std::shared_ptr<AMediaFormat>& trackFormat) {
+    if (trackFormat == nullptr) {
+        LOG(ERROR) << "Track format must be non-null";
+        return nullptr;
     }
 
-    std::scoped_lock lock(mStateMutex);
+    std::scoped_lock lock(mMutex);
     if (mState != INITIALIZED) {
         LOG(ERROR) << "Muxer needs to be initialized when adding tracks.";
-        return false;
+        return nullptr;
     }
-    ssize_t trackIndex = mMuxer->addTrack(trackFormat.get());
-    if (trackIndex < 0) {
-        LOG(ERROR) << "Failed to add media track to muxer: " << trackIndex;
-        return false;
+    ssize_t trackIndexOrError = mMuxer->addTrack(trackFormat.get());
+    if (trackIndexOrError < 0) {
+        LOG(ERROR) << "Failed to add media track to muxer: " << trackIndexOrError;
+        return nullptr;
     }
+    const size_t trackIndex = static_cast<size_t>(trackIndexOrError);
 
     int64_t durationUs;
     if (!AMediaFormat_getInt64(trackFormat.get(), AMEDIAFORMAT_KEY_DURATION, &durationUs)) {
         durationUs = 0;
     }
 
-    const char* mime = nullptr;
-    const bool isVideo = AMediaFormat_getString(trackFormat.get(), AMEDIAFORMAT_KEY_MIME, &mime) &&
-                         (strncmp(mime, "video/", 6) == 0);
+    mTracks.emplace(trackIndex, durationUs);
+    std::shared_ptr<MediaSampleWriter> thisWriter = shared_from_this();
 
-    mTracks.emplace_back(sampleQueue, static_cast<size_t>(trackIndex), durationUs, isVideo);
-    return true;
+    return [self = shared_from_this(), trackIndex](const std::shared_ptr<MediaSample>& sample) {
+        self->addSampleToTrack(trackIndex, sample);
+    };
+}
+
+void MediaSampleWriter::addSampleToTrack(size_t trackIndex,
+                                         const std::shared_ptr<MediaSample>& sample) {
+    if (sample == nullptr) return;
+
+    bool wasEmpty;
+    {
+        std::scoped_lock lock(mMutex);
+        wasEmpty = mSampleQueue.empty();
+        mSampleQueue.push(std::make_pair(trackIndex, sample));
+    }
+
+    if (wasEmpty) {
+        mSampleSignal.notify_one();
+    }
 }
 
 bool MediaSampleWriter::start() {
-    std::scoped_lock lock(mStateMutex);
+    std::scoped_lock lock(mMutex);
 
     if (mTracks.size() == 0) {
         LOG(ERROR) << "No tracks to write.";
@@ -146,30 +168,28 @@ bool MediaSampleWriter::start() {
         return false;
     }
 
+    mState = STARTED;
     mThread = std::thread([this] {
         media_status_t status = writeSamples();
         if (auto callbacks = mCallbacks.lock()) {
             callbacks->onFinished(this, status);
         }
     });
-    mState = STARTED;
     return true;
 }
 
 bool MediaSampleWriter::stop() {
-    std::scoped_lock lock(mStateMutex);
-
-    if (mState != STARTED) {
-        LOG(ERROR) << "Sample writer is not started.";
-        return false;
+    {
+        std::scoped_lock lock(mMutex);
+        if (mState != STARTED) {
+            LOG(ERROR) << "Sample writer is not started.";
+            return false;
+        }
+        mState = STOPPED;
     }
 
-    // Stop the sources, and wait for thread to join.
-    for (auto& track : mTracks) {
-        track.mSampleQueue->abort();
-    }
+    mSampleSignal.notify_all();
     mThread.join();
-    mState = STOPPED;
     return true;
 }
 
@@ -193,74 +213,85 @@ media_status_t MediaSampleWriter::writeSamples() {
     return writeStatus != AMEDIA_OK ? writeStatus : muxerStatus;
 }
 
-media_status_t MediaSampleWriter::runWriterLoop() {
+media_status_t MediaSampleWriter::runWriterLoop() NO_THREAD_SAFETY_ANALYSIS {
     AMediaCodecBufferInfo bufferInfo;
-    uint32_t segmentEndTimeUs = mTrackSegmentLengthUs;
-    bool samplesLeft = true;
     int32_t lastProgressUpdate = 0;
+    int trackEosCount = 0;
 
     // Set the "primary" track that will be used to determine progress to the track with longest
     // duration.
     int primaryTrackIndex = -1;
     int64_t longestDurationUs = 0;
-    for (int trackIndex = 0; trackIndex < mTracks.size(); ++trackIndex) {
-        if (mTracks[trackIndex].mDurationUs > longestDurationUs) {
-            primaryTrackIndex = trackIndex;
-            longestDurationUs = mTracks[trackIndex].mDurationUs;
+    for (auto it = mTracks.begin(); it != mTracks.end(); ++it) {
+        if (it->second.mDurationUs > longestDurationUs) {
+            primaryTrackIndex = it->first;
+            longestDurationUs = it->second.mDurationUs;
         }
     }
 
-    while (samplesLeft) {
-        samplesLeft = false;
-        for (auto& track : mTracks) {
-            if (track.mReachedEos) continue;
-
-            std::shared_ptr<MediaSample> sample;
-            do {
-                if (track.mSampleQueue->dequeue(&sample)) {
-                    // Track queue was aborted.
-                    return AMEDIA_ERROR_UNKNOWN;  // TODO(lnilsson): Custom error code.
-                } else if (sample->info.flags & SAMPLE_FLAG_END_OF_STREAM) {
-                    // Track reached end of stream.
-                    track.mReachedEos = true;
-
-                    // Preserve source track duration by setting the appropriate timestamp on the
-                    // empty End-Of-Stream sample.
-                    if (track.mDurationUs > 0 && track.mFirstSampleTimeSet) {
-                        sample->info.presentationTimeUs =
-                                track.mDurationUs + track.mFirstSampleTimeUs;
-                    }
-                } else {
-                    samplesLeft = true;
-                }
-
-                track.mPrevSampleTimeUs = sample->info.presentationTimeUs;
-                if (!track.mFirstSampleTimeSet) {
-                    // Record the first sample's timestamp in order to translate duration to EOS
-                    // time for tracks that does not start at 0.
-                    track.mFirstSampleTimeUs = sample->info.presentationTimeUs;
-                    track.mFirstSampleTimeSet = true;
-                }
-
-                bufferInfo.offset = sample->dataOffset;
-                bufferInfo.size = sample->info.size;
-                bufferInfo.flags = sample->info.flags;
-                bufferInfo.presentationTimeUs = sample->info.presentationTimeUs;
-
-                media_status_t status =
-                        mMuxer->writeSampleData(track.mTrackIndex, sample->buffer, &bufferInfo);
-                if (status != AMEDIA_OK) {
-                    LOG(ERROR) << "writeSampleData returned " << status;
-                    return status;
-                }
-
-            } while (sample->info.presentationTimeUs < segmentEndTimeUs && !track.mReachedEos);
+    while (true) {
+        if (trackEosCount >= mTracks.size()) {
+            break;
         }
 
-        // TODO(lnilsson): Add option to toggle progress reporting on/off.
-        if (primaryTrackIndex >= 0) {
-            const TrackRecord& track = mTracks[primaryTrackIndex];
+        size_t trackIndex;
+        std::shared_ptr<MediaSample> sample;
+        {
+            std::unique_lock lock(mMutex);
+            while (mSampleQueue.empty() && mState == STARTED) {
+                mSampleSignal.wait(lock);
+            }
 
+            if (mState != STARTED) {
+                return AMEDIA_ERROR_UNKNOWN;  // TODO(lnilsson): Custom error code.
+            }
+
+            auto& topEntry = mSampleQueue.top();
+            trackIndex = topEntry.first;
+            sample = topEntry.second;
+            mSampleQueue.pop();
+        }
+
+        TrackRecord& track = mTracks[trackIndex];
+
+        if (sample->info.flags & SAMPLE_FLAG_END_OF_STREAM) {
+            if (track.mReachedEos) {
+                continue;
+            }
+
+            // Track reached end of stream.
+            track.mReachedEos = true;
+            trackEosCount++;
+
+            // Preserve source track duration by setting the appropriate timestamp on the
+            // empty End-Of-Stream sample.
+            if (track.mDurationUs > 0 && track.mFirstSampleTimeSet) {
+                sample->info.presentationTimeUs = track.mDurationUs + track.mFirstSampleTimeUs;
+            }
+        }
+
+        track.mPrevSampleTimeUs = sample->info.presentationTimeUs;
+        if (!track.mFirstSampleTimeSet) {
+            // Record the first sample's timestamp in order to translate duration to EOS
+            // time for tracks that does not start at 0.
+            track.mFirstSampleTimeUs = sample->info.presentationTimeUs;
+            track.mFirstSampleTimeSet = true;
+        }
+
+        bufferInfo.offset = sample->dataOffset;
+        bufferInfo.size = sample->info.size;
+        bufferInfo.flags = sample->info.flags;
+        bufferInfo.presentationTimeUs = sample->info.presentationTimeUs;
+
+        media_status_t status = mMuxer->writeSampleData(trackIndex, sample->buffer, &bufferInfo);
+        if (status != AMEDIA_OK) {
+            LOG(ERROR) << "writeSampleData returned " << status;
+            return status;
+        }
+        sample.reset();
+
+        // TODO(lnilsson): Add option to toggle progress reporting on/off.
+        if (trackIndex == primaryTrackIndex) {
             const int64_t elapsed = track.mPrevSampleTimeUs - track.mFirstSampleTimeUs;
             int32_t progress = (elapsed * 100) / track.mDurationUs;
             progress = std::clamp(progress, 0, 100);
@@ -272,8 +303,6 @@ media_status_t MediaSampleWriter::runWriterLoop() {
                 lastProgressUpdate = progress;
             }
         }
-
-        segmentEndTimeUs += mTrackSegmentLengthUs;
     }
 
     return AMEDIA_OK;

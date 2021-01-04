@@ -474,7 +474,7 @@ class Camera3Device :
     int                        mNextStreamId;
     bool                       mNeedConfig;
 
-    int                        mDummyStreamId;
+    int                        mFakeStreamId;
 
     // Whether to send state updates upstream
     // Pause when doing transparent reconfiguration
@@ -517,6 +517,19 @@ class Camera3Device :
         // overriding of ROTATE_AND_CROP value and adjustment of coordinates
         // in several other controls in both the request and the result
         bool                                mRotateAndCropAuto;
+        // Whether this capture request has its zoom ratio set to 1.0x before
+        // the framework overrides it for camera HAL consumption.
+        bool                                mZoomRatioIs1x;
+
+
+        // Whether this capture request's distortion correction update has
+        // been done.
+        bool                                mDistortionCorrectionUpdated = false;
+        // Whether this capture request's rotation and crop update has been
+        // done.
+        bool                                mRotationAndCropUpdated = false;
+        // Whether this capture request's zoom ratio update has been done.
+        bool                                mZoomRatioUpdated = false;
     };
     typedef List<sp<CaptureRequest> > RequestList;
 
@@ -668,15 +681,15 @@ class Camera3Device :
     void               cancelStreamsConfigurationLocked();
 
     /**
-     * Add a dummy stream to the current stream set as a workaround for
+     * Add a fake stream to the current stream set as a workaround for
      * not allowing 0 streams in the camera HAL spec.
      */
-    status_t           addDummyStreamLocked();
+    status_t           addFakeStreamLocked();
 
     /**
-     * Remove a dummy stream if the current config includes real streams.
+     * Remove a fake stream if the current config includes real streams.
      */
-    status_t           tryRemoveDummyStreamLocked();
+    status_t           tryRemoveFakeStreamLocked();
 
     /**
      * Set device into an error state due to some fatal failure, and set an
@@ -861,7 +874,7 @@ class Camera3Device :
 
         // HAL workaround: Make sure a trigger ID always exists if
         // a trigger does
-        status_t           addDummyTriggerIds(const sp<CaptureRequest> &request);
+        status_t           addFakeTriggerIds(const sp<CaptureRequest> &request);
 
         // Override rotate_and_crop control if needed; returns true if the current value was changed
         bool               overrideAutoRotateAndCrop(const sp<CaptureRequest> &request);

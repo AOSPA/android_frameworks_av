@@ -50,7 +50,7 @@ public:
 
     aaudio_result_t open(const aaudio::AAudioStreamRequest &request) override;
 
-    aaudio_result_t close() override;
+    void close() override;
 
     aaudio_result_t startStream(android::sp<AAudioServiceStreamBase> stream,
                                 audio_port_handle_t *clientHandle) override;
@@ -85,6 +85,8 @@ public:
         return mHardwareTimeOffsetNanos;
     }
 
+    aaudio_result_t getExternalPosition(uint64_t *positionFrames, int64_t *timeNanos);
+
 private:
     MonotonicCounter                          mFramesTransferred;
 
@@ -100,6 +102,8 @@ private:
     android::base::unique_fd                  mAudioDataFileDescriptor;
 
     int64_t                                   mHardwareTimeOffsetNanos = 0; // TODO get from HAL
+
+    bool                                      mExternalPositionSupported = true;
 
 };
 

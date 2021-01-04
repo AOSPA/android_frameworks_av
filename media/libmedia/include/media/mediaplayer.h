@@ -33,6 +33,8 @@
 #include <utils/KeyedVector.h>
 #include <utils/String8.h>
 
+#include <string>
+
 struct ANativeWindow;
 
 namespace android {
@@ -178,7 +180,10 @@ enum media_parameter_keys {
     KEY_PARAMETER_PLAYBACK_RATE_PERMILLE = 1300,                // set only
 
     // Set a Parcel containing the value of a parcelled Java AudioAttribute instance
-    KEY_PARAMETER_AUDIO_ATTRIBUTES = 1400                       // set only
+    KEY_PARAMETER_AUDIO_ATTRIBUTES = 1400,                       // set only
+
+    // Set a Parcel containing the values of RTP attribute
+    KEY_PARAMETER_RTP_ATTRIBUTES = 2000                       // set only
 };
 
 // Keep INVOKE_ID_* in sync with MediaPlayer.java.
@@ -206,7 +211,7 @@ class MediaPlayer : public BnMediaPlayerClient,
                     public virtual IMediaDeathNotifier
 {
 public:
-    MediaPlayer();
+    MediaPlayer(const std::string opPackageName = "");
     ~MediaPlayer();
             void            died();
             void            disconnect();
@@ -310,6 +315,7 @@ private:
     float                       mSendLevel;
     struct sockaddr_in          mRetransmitEndpoint;
     bool                        mRetransmitEndpointValid;
+    const std::string           mOpPackageName;
 };
 
 }; // namespace android

@@ -18,28 +18,16 @@
 #define LOG_TAG "MediaTranscoder"
 
 #include <android-base/logging.h>
-#include <binder/Parcel.h>
 #include <fcntl.h>
 #include <media/MediaSampleReaderNDK.h>
 #include <media/MediaSampleWriter.h>
 #include <media/MediaTranscoder.h>
+#include <media/NdkCommon.h>
 #include <media/PassthroughTrackTranscoder.h>
 #include <media/VideoTrackTranscoder.h>
 #include <unistd.h>
 
 namespace android {
-
-#define DEFINE_FORMAT_VALUE_COPY_FUNC(_type, _typeName)                                  \
-    static void copy##_typeName(const char* key, AMediaFormat* to, AMediaFormat* from) { \
-        _type value;                                                                     \
-        if (AMediaFormat_get##_typeName(from, key, &value)) {                            \
-            AMediaFormat_set##_typeName(to, key, value);                                 \
-        }                                                                                \
-    }
-
-DEFINE_FORMAT_VALUE_COPY_FUNC(const char*, String);
-DEFINE_FORMAT_VALUE_COPY_FUNC(int64_t, Int64);
-DEFINE_FORMAT_VALUE_COPY_FUNC(int32_t, Int32);
 
 static AMediaFormat* mergeMediaFormats(AMediaFormat* base, AMediaFormat* overlay) {
     if (base == nullptr || overlay == nullptr) {
@@ -58,29 +46,26 @@ static AMediaFormat* mergeMediaFormats(AMediaFormat* base, AMediaFormat* overlay
     // along with their value types and copy the ones that are present. A better solution would be
     // to either implement required functions in NDK or to parse the overlay format's string
     // representation and copy all existing keys.
-    static const struct {
-        const char* key;
-        void (*copyValue)(const char* key, AMediaFormat* to, AMediaFormat* from);
-    } kSupportedConfigs[] = {
-            {AMEDIAFORMAT_KEY_MIME, copyString},
-            {AMEDIAFORMAT_KEY_DURATION, copyInt64},
-            {AMEDIAFORMAT_KEY_WIDTH, copyInt32},
-            {AMEDIAFORMAT_KEY_HEIGHT, copyInt32},
-            {AMEDIAFORMAT_KEY_BIT_RATE, copyInt32},
-            {AMEDIAFORMAT_KEY_PROFILE, copyInt32},
-            {AMEDIAFORMAT_KEY_LEVEL, copyInt32},
-            {AMEDIAFORMAT_KEY_COLOR_FORMAT, copyInt32},
-            {AMEDIAFORMAT_KEY_COLOR_RANGE, copyInt32},
-            {AMEDIAFORMAT_KEY_COLOR_STANDARD, copyInt32},
-            {AMEDIAFORMAT_KEY_COLOR_TRANSFER, copyInt32},
-            {AMEDIAFORMAT_KEY_FRAME_RATE, copyInt32},
-            {AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, copyInt32},
+    static const AMediaFormatUtils::EntryCopier kSupportedFormatEntries[] = {
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_MIME, String),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_DURATION, Int64),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_WIDTH, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_HEIGHT, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_BIT_RATE, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_PROFILE, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_LEVEL, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_COLOR_FORMAT, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_COLOR_RANGE, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_COLOR_STANDARD, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_COLOR_TRANSFER, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_FRAME_RATE, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, Int32),
+            ENTRY_COPIER(AMEDIAFORMAT_KEY_PRIORITY, Int32),
+            ENTRY_COPIER2(AMEDIAFORMAT_KEY_OPERATING_RATE, Float, Int32),
     };
+    const size_t entryCount = sizeof(kSupportedFormatEntries) / sizeof(kSupportedFormatEntries[0]);
 
-    for (int i = 0; i < (sizeof(kSupportedConfigs) / sizeof(kSupportedConfigs[0])); ++i) {
-        kSupportedConfigs[i].copyValue(kSupportedConfigs[i].key, format, overlay);
-    }
-
+    AMediaFormatUtils::CopyFormatEntries(overlay, format, kSupportedFormatEntries, entryCount);
     return format;
 }
 
@@ -123,16 +108,24 @@ void MediaTranscoder::onTrackFormatAvailable(const MediaTrackTranscoder* transco
     }
 
     // Add track to the writer.
-    const bool ok =
-            mSampleWriter->addTrack(transcoder->getOutputQueue(), transcoder->getOutputFormat());
-    if (!ok) {
+    auto consumer = mSampleWriter->addTrack(transcoder->getOutputFormat());
+    if (consumer == nullptr) {
         LOG(ERROR) << "Unable to add track to sample writer.";
         sendCallback(AMEDIA_ERROR_UNKNOWN);
         return;
     }
 
+    MediaTrackTranscoder* mutableTranscoder = const_cast<MediaTrackTranscoder*>(transcoder);
+    mutableTranscoder->setSampleConsumer(consumer);
+
     mTracksAdded.insert(transcoder);
     if (mTracksAdded.size() == mTrackTranscoders.size()) {
+        // Enable sequential access mode on the sample reader to achieve optimal read performance.
+        // This has to wait until all tracks have delivered their output formats and the sample
+        // writer is started. Otherwise the tracks will not get their output sample queues drained
+        // and the transcoder could hang due to one track running out of buffers and blocking the
+        // other tracks from reading source samples before they could output their formats.
+        mSampleReader->setEnforceSequentialAccess(true);
         LOG(INFO) << "Starting sample writer.";
         bool started = mSampleWriter->start();
         if (!started) {
@@ -147,7 +140,7 @@ void MediaTranscoder::onTrackFinished(const MediaTrackTranscoder* transcoder) {
 }
 
 void MediaTranscoder::onTrackError(const MediaTrackTranscoder* transcoder, media_status_t status) {
-    LOG(DEBUG) << "TrackTranscoder " << transcoder << " returned error " << status;
+    LOG(ERROR) << "TrackTranscoder " << transcoder << " returned error " << status;
     sendCallback(status);
 }
 
@@ -166,7 +159,7 @@ MediaTranscoder::MediaTranscoder(const std::shared_ptr<CallbackInterface>& callb
 
 std::shared_ptr<MediaTranscoder> MediaTranscoder::create(
         const std::shared_ptr<CallbackInterface>& callbacks,
-        const std::shared_ptr<const Parcel>& pausedState) {
+        const std::shared_ptr<ndk::ScopedAParcel>& pausedState) {
     if (pausedState != nullptr) {
         LOG(INFO) << "Initializing from paused state.";
     }
@@ -229,6 +222,12 @@ media_status_t MediaTranscoder::configureTrackFormat(size_t trackIndex, AMediaFo
         return AMEDIA_ERROR_INVALID_PARAMETER;
     }
 
+    media_status_t status = mSampleReader->selectTrack(trackIndex);
+    if (status != AMEDIA_OK) {
+        LOG(ERROR) << "Unable to select track " << trackIndex;
+        return status;
+    }
+
     std::shared_ptr<MediaTrackTranscoder> transcoder;
     std::shared_ptr<AMediaFormat> format;
 
@@ -270,7 +269,7 @@ media_status_t MediaTranscoder::configureTrackFormat(size_t trackIndex, AMediaFo
         format = std::shared_ptr<AMediaFormat>(mergedFormat, &AMediaFormat_delete);
     }
 
-    media_status_t status = transcoder->configure(mSampleReader, trackIndex, format);
+    status = transcoder->configure(mSampleReader, trackIndex, format);
     if (status != AMEDIA_OK) {
         LOG(ERROR) << "Configure track transcoder for track #" << trackIndex << " returned error "
                    << status;
@@ -292,7 +291,7 @@ media_status_t MediaTranscoder::configureDestination(int fd) {
         return AMEDIA_ERROR_INVALID_OPERATION;
     }
 
-    mSampleWriter = std::make_unique<MediaSampleWriter>();
+    mSampleWriter = MediaSampleWriter::Create();
     const bool initOk = mSampleWriter->init(fd, shared_from_this());
 
     if (!initOk) {
@@ -325,9 +324,9 @@ media_status_t MediaTranscoder::start() {
     return AMEDIA_OK;
 }
 
-media_status_t MediaTranscoder::pause(std::shared_ptr<const Parcel>* pausedState) {
+media_status_t MediaTranscoder::pause(std::shared_ptr<ndk::ScopedAParcel>* pausedState) {
     // TODO: write internal states to parcel.
-    *pausedState = std::make_shared<Parcel>();
+    *pausedState = std::shared_ptr<::ndk::ScopedAParcel>(new ::ndk::ScopedAParcel());
     return cancel();
 }
 
@@ -344,6 +343,7 @@ media_status_t MediaTranscoder::cancel() {
     }
 
     mSampleWriter->stop();
+    mSampleReader->setEnforceSequentialAccess(false);
     for (auto& transcoder : mTrackTranscoders) {
         transcoder->stop();
     }

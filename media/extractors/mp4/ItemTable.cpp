@@ -76,6 +76,7 @@ struct ImageItem {
     size_t size;
     sp<ABuffer> hvcc;
     sp<ABuffer> icc;
+    sp<ABuffer> av1c;
 
     Vector<uint32_t> thumbnails;
     Vector<uint32_t> dimgRefs;
@@ -546,11 +547,11 @@ void ItemReference::apply(
                 continue;
             }
             ALOGV("Image item id %d uses thumbnail item id %d", mRefs[i], mItemId);
-            ImageItem &masterImage = itemIdToItemMap.editValueAt(itemIndex);
-            if (!masterImage.thumbnails.empty()) {
+            ImageItem &imageItem = itemIdToItemMap.editValueAt(itemIndex);
+            if (!imageItem.thumbnails.empty()) {
                 ALOGW("already has thumbnails!");
             }
-            masterImage.thumbnails.push_back(mItemId);
+            imageItem.thumbnails.push_back(mItemId);
         }
         break;
     }
@@ -764,6 +765,39 @@ status_t HvccBox::parse(off64_t offset, size_t size) {
     return OK;
 }
 
+struct Av1cBox : public Box, public ItemProperty {
+    Av1cBox(DataSourceHelper *source) :
+        Box(source, FOURCC("av1C")) {}
+
+    status_t parse(off64_t offset, size_t size) override;
+
+    void attachTo(ImageItem &image) const override {
+        image.av1c = mAv1c;
+    }
+
+private:
+    sp<ABuffer> mAv1c;
+};
+
+status_t Av1cBox::parse(off64_t offset, size_t size) {
+    ALOGV("%s: offset %lld, size %zu", __FUNCTION__, (long long)offset, size);
+
+    mAv1c = new ABuffer(size);
+
+    if (mAv1c->data() == NULL) {
+        ALOGE("b/28471206");
+        return NO_MEMORY;
+    }
+
+    if (source()->readAt(offset, mAv1c->data(), size) < (ssize_t)size) {
+        return ERROR_IO;
+    }
+
+    ALOGV("property av1C");
+
+    return OK;
+}
+
 struct IrotBox : public Box, public ItemProperty {
     IrotBox(DataSourceHelper *source) :
         Box(source, FOURCC("irot")), mAngle(0) {}
@@ -929,7 +963,7 @@ private:
 
 status_t IpcoBox::parse(off64_t offset, size_t size) {
     ALOGV("%s: offset %lld, size %zu", __FUNCTION__, (long long)offset, size);
-    // push dummy as the index is 1-based
+    // push a placeholder as the index is 1-based
     mItemProperties->push_back(new ItemProperty());
     return parseChunks(offset, size);
 }
@@ -955,6 +989,11 @@ status_t IpcoBox::onChunkData(uint32_t type, off64_t offset, size_t size) {
         case FOURCC("colr"):
         {
             itemProperty = new ColrBox(source());
+            break;
+        }
+        case FOURCC("av1C"):
+        {
+            itemProperty = new Av1cBox(source());
             break;
         }
         default:
@@ -1203,8 +1242,9 @@ status_t IinfBox::onChunkData(uint32_t type, off64_t offset, size_t size) {
 
 //////////////////////////////////////////////////////////////////
 
-ItemTable::ItemTable(DataSourceHelper *source)
+ItemTable::ItemTable(DataSourceHelper *source, bool isHeif)
     : mDataSource(source),
+      mIsHeif(isHeif),
       mPrimaryItemId(0),
       mIdatOffset(0),
       mIdatSize(0),
@@ -1363,7 +1403,8 @@ status_t ItemTable::buildImageItemsIfPossible(uint32_t type) {
         //   'Exif': EXIF metadata
         if (info.itemType != FOURCC("grid") &&
             info.itemType != FOURCC("hvc1") &&
-            info.itemType != FOURCC("Exif")) {
+            info.itemType != FOURCC("Exif") &&
+            info.itemType != FOURCC("av01")) {
             continue;
         }
 
@@ -1509,7 +1550,9 @@ AMediaFormat *ItemTable::getImageMeta(const uint32_t imageIndex) {
     }
 
     AMediaFormat *meta = AMediaFormat_new();
-    AMediaFormat_setString(meta, AMEDIAFORMAT_KEY_MIME, MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC);
+    AMediaFormat_setString(
+        meta, AMEDIAFORMAT_KEY_MIME,
+        mIsHeif ? MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC : MEDIA_MIMETYPE_IMAGE_AVIF);
 
     if (image->itemId == mPrimaryItemId) {
         AMediaFormat_setInt32(meta, AMEDIAFORMAT_KEY_IS_DEFAULT, 1);
@@ -1539,15 +1582,24 @@ AMediaFormat *ItemTable::getImageMeta(const uint32_t imageIndex) {
         ssize_t thumbItemIndex = mItemIdToItemMap.indexOfKey(image->thumbnails[0]);
         if (thumbItemIndex >= 0) {
             const ImageItem &thumbnail = mItemIdToItemMap[thumbItemIndex];
-
-            if (thumbnail.hvcc != NULL) {
+            if (thumbnail.hvcc != NULL || thumbnail.av1c != NULL) {
                 AMediaFormat_setInt32(meta,
                         AMEDIAFORMAT_KEY_THUMBNAIL_WIDTH, thumbnail.width);
                 AMediaFormat_setInt32(meta,
                         AMEDIAFORMAT_KEY_THUMBNAIL_HEIGHT, thumbnail.height);
-                AMediaFormat_setBuffer(meta,
-                        AMEDIAFORMAT_KEY_THUMBNAIL_CSD_HEVC,
-                        thumbnail.hvcc->data(), thumbnail.hvcc->size());
+                if (thumbnail.hvcc != NULL) {
+                    AMediaFormat_setBuffer(meta,
+                            AMEDIAFORMAT_KEY_THUMBNAIL_CSD_HEVC,
+                            thumbnail.hvcc->data(), thumbnail.hvcc->size());
+                } else {
+                    // We use a hard-coded string here instead of
+                    // AMEDIAFORMAT_KEY_THUMBNAIL_CSD_AV1C. The key is available only from SDK 31.
+                    // The mp4 extractor is part of mainline and builds against SDK 29 as of
+                    // writing. This hard-coded string can be replaced with the named constant once
+                    // the mp4 extractor is built against SDK >= 31.
+                    AMediaFormat_setBuffer(meta,
+                            "thumbnail-csd-av1c", thumbnail.av1c->data(), thumbnail.av1c->size());
+                }
                 ALOGV("image[%u]: thumbnail: size %dx%d, item index %zd",
                         imageIndex, thumbnail.width, thumbnail.height, thumbItemIndex);
             } else {
@@ -1574,12 +1626,21 @@ AMediaFormat *ItemTable::getImageMeta(const uint32_t imageIndex) {
                 AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, image->width * image->height * 3 / 2);
     }
 
-    if (image->hvcc == NULL) {
-        ALOGE("%s: hvcc is missing for image[%u]!", __FUNCTION__, imageIndex);
-        return NULL;
+    if (mIsHeif) {
+        if (image->hvcc == NULL) {
+            ALOGE("%s: hvcc is missing for image[%u]!", __FUNCTION__, imageIndex);
+            return NULL;
+        }
+        AMediaFormat_setBuffer(meta,
+                AMEDIAFORMAT_KEY_CSD_HEVC, image->hvcc->data(), image->hvcc->size());
+    } else {
+        if (image->av1c == NULL) {
+            ALOGE("%s: av1c is missing for image[%u]!", __FUNCTION__, imageIndex);
+            return NULL;
+        }
+        AMediaFormat_setBuffer(meta,
+                AMEDIAFORMAT_KEY_CSD_0, image->av1c->data(), image->av1c->size());
     }
-    AMediaFormat_setBuffer(meta,
-            AMEDIAFORMAT_KEY_CSD_HEVC, image->hvcc->data(), image->hvcc->size());
 
     if (image->icc != NULL) {
         AMediaFormat_setBuffer(meta,
@@ -1614,17 +1675,17 @@ status_t ItemTable::findThumbnailItem(const uint32_t imageIndex, uint32_t *itemI
         return BAD_VALUE;
     }
 
-    uint32_t masterItemIndex = mDisplayables[imageIndex];
+    uint32_t imageItemIndex = mDisplayables[imageIndex];
 
-    const ImageItem &masterImage = mItemIdToItemMap[masterItemIndex];
-    if (masterImage.thumbnails.empty()) {
-        *itemIndex = masterItemIndex;
+    const ImageItem &imageItem = mItemIdToItemMap[imageItemIndex];
+    if (imageItem.thumbnails.empty()) {
+        *itemIndex = imageItemIndex;
         return OK;
     }
 
-    ssize_t thumbItemIndex = mItemIdToItemMap.indexOfKey(masterImage.thumbnails[0]);
+    ssize_t thumbItemIndex = mItemIdToItemMap.indexOfKey(imageItem.thumbnails[0]);
     if (thumbItemIndex < 0) {
-        // Do not return the master image in this case, fail it so that the
+        // Do not return the image item in this case, fail it so that the
         // thumbnail extraction code knows we really don't have it.
         return INVALID_OPERATION;
     }

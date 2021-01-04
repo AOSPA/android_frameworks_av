@@ -25,13 +25,13 @@ import android.media.TranscodingVideoCodecType;
  * aidl_interface
  *
  * Note that TranscodingVideoTrackFormat is used in TranscodingRequestParcel for the  client to
- * specify the desired transcoded video format, and is also used in TranscodingJobParcel for the
+ * specify the desired transcoded video format, and is also used in TranscodingSessionParcel for the
  * service to notify client of the final video format for transcoding.
  * When used as input in TranscodingRequestParcel, the client only needs to specify the config that
  * they want to change, e.g. codec or resolution, and all the missing configs will be extracted
  * from the source video and applied to the destination video.
- * When used as output in TranscodingJobParcel, all the configs will be populated to indicate the
- * final encoder configs used for transcoding.
+ * When used as output in TranscodingSessionParcel, all the configs will be populated to indicate
+ * the final encoder configs used for transcoding.
  *
  * {@hide}
  */
@@ -67,4 +67,18 @@ parcelable TranscodingVideoTrackFormat {
      * -1 means unavailable.
      */
     int level = -1;
+
+    /**
+     * Decoder operating rate. This is used to work around the fact that vendor does not boost the
+     * hardware to maximum speed in transcoding usage case. This operating rate will be applied
+     * to decoder inside MediaTranscoder. -1 means unavailable.
+     */
+    int decoderOperatingRate = -1;
+
+    /**
+     * Encoder operating rate. This is used to work around the fact that vendor does not boost the
+     * hardware to maximum speed in transcoding usage case. This operating rate will be applied
+     * to encoder inside MediaTranscoder. -1 means unavailable.
+     */
+    int encoderOperatingRate = -1;
 }

@@ -20,13 +20,15 @@
 #include <assert.h>
 #include <mutex>
 
+#include <android-base/thread_annotations.h>
 #include <media/AudioClient.h>
 #include <utils/RefBase.h>
 
 #include "fifo/FifoBuffer.h"
-#include "binding/IAAudioService.h"
 #include "binding/AudioEndpointParcelable.h"
 #include "binding/AAudioServiceMessage.h"
+#include "binding/AAudioStreamRequest.h"
+#include "core/AAudioStreamParameters.h"
 #include "utility/AAudioUtilities.h"
 #include "utility/AudioClock.h"
 
@@ -208,25 +210,6 @@ public:
         return mSuspended;
     }
 
-    /**
-     * Atomically increment the number of active references to the stream by AAudioService.
-     *
-     * This is called under a global lock in AAudioStreamTracker.
-     *
-     * @return value after the increment
-     */
-    int32_t incrementServiceReferenceCount_l();
-
-    /**
-     * Atomically decrement the number of active references to the stream by AAudioService.
-     * This should only be called after incrementServiceReferenceCount_l().
-     *
-     * This is called under a global lock in AAudioStreamTracker.
-     *
-     * @return value after the decrement
-     */
-    int32_t decrementServiceReferenceCount_l();
-
     bool isCloseNeeded() const {
         return mCloseNeeded.load();
     }
@@ -249,11 +232,10 @@ protected:
     aaudio_result_t open(const aaudio::AAudioStreamRequest &request,
                          aaudio_sharing_mode_t sharingMode);
 
-    // These must be called under mLock
-    virtual aaudio_result_t close_l();
-    virtual aaudio_result_t pause_l();
-    virtual aaudio_result_t stop_l();
-    void disconnect_l();
+    virtual aaudio_result_t close_l() REQUIRES(mLock);
+    virtual aaudio_result_t pause_l() REQUIRES(mLock);
+    virtual aaudio_result_t stop_l() REQUIRES(mLock);
+    void disconnect_l() REQUIRES(mLock);
 
     void setState(aaudio_stream_state_t state);
 
@@ -284,8 +266,8 @@ protected:
 
     pid_t                   mRegisteredClientThread = ILLEGAL_THREAD_ID;
 
-    SharedRingBuffer*       mUpMessageQueue;
     std::mutex              mUpMessageQueueLock;
+    std::shared_ptr<SharedRingBuffer> mUpMessageQueue;
 
     AAudioThread            mTimestampThread;
     // This is used by one thread to tell another thread to exit. So it must be atomic.
@@ -331,18 +313,17 @@ private:
     aaudio_handle_t         mHandle = -1;
     bool                    mFlowing = false;
 
-    // This is modified under a global lock in AAudioStreamTracker.
-    int32_t                 mCallingCount = 0;
-
-    // This indicates that a stream that is being referenced by a binder call needs to closed.
-    std::atomic<bool>       mCloseNeeded{false};
+    // This indicates that a stream that is being referenced by a binder call
+    // and needs to closed.
+    std::atomic<bool>       mCloseNeeded{false}; // TODO remove
 
     // This indicate that a running stream should not be processed because of an error,
     // for example a full message queue. Note that this atomic is unrelated to mCloseNeeded.
     std::atomic<bool>       mSuspended{false};
 
+protected:
     // Locking order is important.
-    // Always acquire mLock before acquiring AAudioServiceEndpoint::mLockStreams
+    // Acquire mLock before acquiring AAudioServiceEndpoint::mLockStreams
     std::mutex              mLock; // Prevent start/stop/close etcetera from colliding
 };
 

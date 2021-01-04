@@ -30,7 +30,6 @@ cc_library_static {
         "Bundle/src/LVM_Control.cpp",
         "SpectrumAnalyzer/src/LVPSA_Control.cpp",
         "SpectrumAnalyzer/src/LVPSA_Init.cpp",
-        "SpectrumAnalyzer/src/LVPSA_Memory.cpp",
         "SpectrumAnalyzer/src/LVPSA_Process.cpp",
         "SpectrumAnalyzer/src/LVPSA_QPD_Init.cpp",
         "SpectrumAnalyzer/src/LVPSA_QPD_Process.cpp",
@@ -133,11 +132,10 @@ cc_library_static {
         "liblog",
     ],
     header_libs: [
-        "libhardware_headers"
+        "libhardware_headers",
     ],
     cppflags: [
         "-fvisibility=hidden",
-        "-DSUPPORT_MC",
 
         "-Wall",
         "-Werror",

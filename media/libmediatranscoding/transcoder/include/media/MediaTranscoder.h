@@ -17,8 +17,7 @@
 #ifndef ANDROID_MEDIA_TRANSCODER_H
 #define ANDROID_MEDIA_TRANSCODER_H
 
-#include <binder/Parcel.h>
-#include <binder/Parcelable.h>
+#include <android/binder_auto_utils.h>
 #include <media/MediaSampleWriter.h>
 #include <media/MediaTrackTranscoderCallback.h>
 #include <media/NdkMediaError.h>
@@ -33,7 +32,6 @@
 namespace android {
 
 class MediaSampleReader;
-class Parcel;
 
 class MediaTranscoder : public std::enable_shared_from_this<MediaTranscoder>,
                         public MediaTrackTranscoderCallback,
@@ -58,8 +56,9 @@ public:
          *   2) Creating a new MediaTranscoding instance with the paused state and then calling
          *      resume.
          */
-        virtual void onCodecResourceLost(const MediaTranscoder* transcoder,
-                                         const std::shared_ptr<const Parcel>& pausedState) = 0;
+        virtual void onCodecResourceLost(
+                const MediaTranscoder* transcoder,
+                const std::shared_ptr<ndk::ScopedAParcel>& pausedState) = 0;
 
         virtual ~CallbackInterface() = default;
     };
@@ -71,7 +70,7 @@ public:
      */
     static std::shared_ptr<MediaTranscoder> create(
             const std::shared_ptr<CallbackInterface>& callbacks,
-            const std::shared_ptr<const Parcel>& pausedState = nullptr);
+            const std::shared_ptr<ndk::ScopedAParcel>& pausedState = nullptr);
 
     /** Configures source from path fd. */
     media_status_t configureSource(int fd);
@@ -104,12 +103,8 @@ public:
      * release the transcoder instance, clear the paused state and delete the partial destination
      * file. The caller can optionally call cancel to let the transcoder clean up the partial
      * destination file.
-     *
-     * TODO: use NDK AParcel instead
-     * libbinder shouldn't be used by mainline modules. When transcoding goes mainline
-     * it needs to be replaced by stable AParcel.
      */
-    media_status_t pause(std::shared_ptr<const Parcel>* pausedState);
+    media_status_t pause(std::shared_ptr<ndk::ScopedAParcel>* pausedState);
 
     /** Resumes a paused transcoding. */
     media_status_t resume();
@@ -140,7 +135,7 @@ private:
 
     std::shared_ptr<CallbackInterface> mCallbacks;
     std::shared_ptr<MediaSampleReader> mSampleReader;
-    std::unique_ptr<MediaSampleWriter> mSampleWriter;
+    std::shared_ptr<MediaSampleWriter> mSampleWriter;
     std::vector<std::shared_ptr<AMediaFormat>> mSourceTrackFormats;
     std::vector<std::shared_ptr<MediaTrackTranscoder>> mTrackTranscoders;
     std::mutex mTracksAddedMutex;

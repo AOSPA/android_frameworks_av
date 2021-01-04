@@ -43,7 +43,7 @@ AAudioEndpointManager::AAudioEndpointManager()
         , mExclusiveStreams() {
 }
 
-std::string AAudioEndpointManager::dump() const {
+std::string AAudioEndpointManager::dump() const NO_THREAD_SAFETY_ANALYSIS {
     std::stringstream result;
     int index = 0;
 
@@ -306,6 +306,7 @@ void AAudioEndpointManager::closeSharedEndpoint(sp<AAudioServiceEndpoint> servic
                 mSharedStreams.end());
 
         serviceEndpoint->close();
+
         mSharedCloseCount++;
         ALOGV("%s(%p) closed for device %d",
               __func__, serviceEndpoint.get(), serviceEndpoint->getDeviceId());
