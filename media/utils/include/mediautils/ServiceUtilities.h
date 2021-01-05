@@ -24,6 +24,7 @@
 #include <binder/PermissionController.h>
 #include <cutils/multiuser.h>
 #include <private/android_filesystem_config.h>
+#include <system/audio-hal-enums.h>
 
 #include <map>
 #include <optional>
@@ -79,10 +80,11 @@ static inline bool isAudioServerOrMediaServerUid(uid_t uid) {
 }
 
 bool recordingAllowed(const String16& opPackageName, pid_t pid, uid_t uid);
-bool startRecording(const String16& opPackageName, pid_t pid, uid_t uid);
-void finishRecording(const String16& opPackageName, uid_t uid);
+bool startRecording(const String16& opPackageName, pid_t pid, uid_t uid, audio_source_t source);
+void finishRecording(const String16& opPackageName, uid_t uid, audio_source_t source);
 bool captureAudioOutputAllowed(pid_t pid, uid_t uid);
 bool captureMediaOutputAllowed(pid_t pid, uid_t uid);
+bool captureTunerAudioInputAllowed(pid_t pid, uid_t uid);
 bool captureVoiceCommunicationOutputAllowed(pid_t pid, uid_t uid);
 bool captureHotwordAllowed(const String16& opPackageName, pid_t pid, uid_t uid);
 bool settingsAllowed();
@@ -110,7 +112,7 @@ public:
 private:
     static constexpr const char* nativePackageManagerName = "package_native";
     std::optional<bool> doIsAllowed(uid_t uid);
-    sp<content::pm::IPackageManagerNative> retreivePackageManager();
+    sp<content::pm::IPackageManagerNative> retrievePackageManager();
     sp<content::pm::IPackageManagerNative> mPackageManager; // To check apps manifest
     uint_t mPackageManagerErrors = 0;
     struct Package {

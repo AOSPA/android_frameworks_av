@@ -192,16 +192,16 @@ public:
     virtual status_t setVoiceVolume(float volume, int delayMs = 0);
     status_t setSupportedSystemUsages(const std::vector<audio_usage_t>& systemUsages);
     status_t setAllowedCapturePolicy(uint_t uid, audio_flags_mask_t capturePolicy) override;
-    virtual bool isOffloadSupported(const audio_offload_info_t &config);
+    virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t &config);
     virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                          const audio_attributes_t& attributes);
 
     virtual status_t listAudioPorts(audio_port_role_t role,
                                     audio_port_type_t type,
                                     unsigned int *num_ports,
-                                    struct audio_port *ports,
+                                    struct audio_port_v7 *ports,
                                     unsigned int *generation);
-    virtual status_t getAudioPort(struct audio_port *port);
+    virtual status_t getAudioPort(struct audio_port_v7 *port);
     virtual status_t createAudioPatch(const struct audio_patch *patch,
                                        audio_patch_handle_t *handle);
     virtual status_t releaseAudioPatch(audio_patch_handle_t handle);
@@ -210,7 +210,7 @@ public:
                                       unsigned int *generation);
     virtual status_t setAudioPortConfig(const struct audio_port_config *config);
 
-    virtual void registerClient(const sp<IAudioPolicyServiceClient>& client);
+    virtual void registerClient(const sp<media::IAudioPolicyServiceClient>& client);
 
     virtual void setAudioPortCallbacksEnabled(bool enabled);
 
@@ -346,6 +346,10 @@ public:
 
             void onAudioVolumeGroupChanged(volume_group_t group, int flags);
             void doOnAudioVolumeGroupChanged(volume_group_t group, int flags);
+
+            void onRoutingUpdated();
+            void doOnRoutingUpdated();
+
             void setEffectSuspended(int effectId,
                                     audio_session_t sessionId,
                                     bool suspended);
@@ -499,6 +503,7 @@ private:
             RECORDING_CONFIGURATION_UPDATE,
             SET_EFFECT_SUSPENDED,
             AUDIO_MODULES_UPDATE,
+            ROUTING_UPDATED,
         };
 
         AudioCommandThread (String8 name, const wp<AudioPolicyService>& service);
@@ -546,6 +551,7 @@ private:
                                                           audio_session_t sessionId,
                                                           bool suspended);
                     void        audioModulesUpdateCommand();
+                    void        routingChangedCommand();
                     void        insertCommand_l(AudioCommand *command, int delayMs = 0);
     private:
         class AudioCommandData;
@@ -769,6 +775,8 @@ private:
 
         virtual void onAudioVolumeGroupChanged(volume_group_t group, int flags);
 
+        virtual void onRoutingUpdated();
+
         virtual audio_unique_id_t newAudioUniqueId(audio_unique_id_use_t use);
 
         void setSoundTriggerCaptureState(bool active) override;
@@ -783,7 +791,7 @@ private:
     class NotificationClient : public IBinder::DeathRecipient {
     public:
                             NotificationClient(const sp<AudioPolicyService>& service,
-                                                const sp<IAudioPolicyServiceClient>& client,
+                                                const sp<media::IAudioPolicyServiceClient>& client,
                                                 uid_t uid, pid_t pid);
         virtual             ~NotificationClient();
 
@@ -801,6 +809,7 @@ private:
                                                     std::vector<effect_descriptor_t> effects,
                                                     audio_patch_handle_t patchHandle,
                                                     audio_source_t source);
+                            void      onRoutingUpdated();
                             void      setAudioPortCallbacksEnabled(bool enabled);
                             void setAudioVolumeGroupCallbacksEnabled(bool enabled);
 
@@ -815,12 +824,12 @@ private:
                             NotificationClient(const NotificationClient&);
                             NotificationClient& operator = (const NotificationClient&);
 
-        const wp<AudioPolicyService>        mService;
-        const uid_t                         mUid;
-        const pid_t                         mPid;
-        const sp<IAudioPolicyServiceClient> mAudioPolicyServiceClient;
-              bool                          mAudioPortCallbacksEnabled;
-              bool                          mAudioVolumeGroupCallbacksEnabled;
+        const wp<AudioPolicyService>               mService;
+        const uid_t                                mUid;
+        const pid_t                                mPid;
+        const sp<media::IAudioPolicyServiceClient> mAudioPolicyServiceClient;
+              bool                                 mAudioPortCallbacksEnabled;
+              bool                                 mAudioVolumeGroupCallbacksEnabled;
     };
 
     class AudioClient : public virtual RefBase {

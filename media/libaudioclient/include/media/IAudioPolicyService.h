@@ -20,14 +20,15 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utils/RefBase.h>
-#include <utils/Errors.h>
+
+#include <android/media/IAudioPolicyServiceClient.h>
 #include <binder/IInterface.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioSystem.h>
 #include <media/AudioPolicy.h>
-#include <media/IAudioPolicyServiceClient.h>
 #include <system/audio_policy.h>
+#include <utils/Errors.h>
+#include <utils/RefBase.h>
 #include <vector>
 
 namespace android {
@@ -150,7 +151,7 @@ public:
     virtual status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t flags) = 0;
    // Check if offload is possible for given format, stream type, sample rate,
     // bit rate, duration, video and streaming or offload property is enabled
-    virtual bool isOffloadSupported(const audio_offload_info_t& info) = 0;
+    virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& info) = 0;
 
     // Check if direct playback is possible for given format, sample rate, channel mask and flags.
     virtual bool isDirectOutputSupported(const audio_config_base_t& config,
@@ -160,11 +161,11 @@ public:
     virtual status_t listAudioPorts(audio_port_role_t role,
                                     audio_port_type_t type,
                                     unsigned int *num_ports,
-                                    struct audio_port *ports,
+                                    struct audio_port_v7 *ports,
                                     unsigned int *generation) = 0;
 
     /* Get attributes for a given audio port */
-    virtual status_t getAudioPort(struct audio_port *port) = 0;
+    virtual status_t getAudioPort(struct audio_port_v7 *port) = 0;
 
     /* Create an audio patch between several source and sink ports */
     virtual status_t createAudioPatch(const struct audio_patch *patch,
@@ -180,7 +181,7 @@ public:
     /* Set audio port configuration */
     virtual status_t setAudioPortConfig(const struct audio_port_config *config) = 0;
 
-    virtual void registerClient(const sp<IAudioPolicyServiceClient>& client) = 0;
+    virtual void registerClient(const sp<media::IAudioPolicyServiceClient>& client) = 0;
 
     virtual void setAudioPortCallbacksEnabled(bool enabled) = 0;
 

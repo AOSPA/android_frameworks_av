@@ -23,7 +23,7 @@ testdir="/data/local/tmp/revTest"
 echo "========================================"
 echo "testing reverb"
 adb shell mkdir -p $testdir
-adb push $ANDROID_BUILD_TOP/cts/tests/tests/media/res/raw/sinesweepraw.raw $testdir
+adb push $ANDROID_BUILD_TOP/frameworks/av/media/libeffects/res/raw/sinesweepraw.raw $testdir
 
 E_VAL=1
 cmds="adb push $OUT/testcases/reverb_test/arm/reverb_test $testdir"
@@ -61,7 +61,7 @@ do
             do
                 for chMask in {0..22}
                 do
-                    adb shell LD_LIBRARY_PATH=/system/vendor/lib/soundfx $testdir/reverb_test \
+                    adb shell $testdir/reverb_test \
                         --input $testdir/sinesweepraw.raw \
                         --output $testdir/sinesweep_$((chMask))_$((fs)).raw \
                         --chMask $chMask $flags --fs $fs --preset $preset_val
