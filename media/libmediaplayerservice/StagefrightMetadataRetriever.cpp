@@ -537,6 +537,15 @@ void StagefrightMetadataRetriever::parseMetaData() {
         mMetaData.add(METADATA_KEY_EXIF_LENGTH, String8(tmp));
     }
 
+    int64_t xmpOffset, xmpSize;
+    if (meta->findInt64(kKeyXmpOffset, &xmpOffset)
+     && meta->findInt64(kKeyXmpSize, &xmpSize)) {
+        sprintf(tmp, "%lld", (long long)xmpOffset);
+        mMetaData.add(METADATA_KEY_XMP_OFFSET, String8(tmp));
+        sprintf(tmp, "%lld", (long long)xmpSize);
+        mMetaData.add(METADATA_KEY_XMP_LENGTH, String8(tmp));
+    }
+
     bool hasAudio = false;
     bool hasVideo = false;
     int32_t videoWidth = -1;
@@ -641,7 +650,8 @@ void StagefrightMetadataRetriever::parseMetaData() {
     }
 
     // The duration value is a string representing the duration in ms.
-    snprintf(tmp, tmpSize, "%" PRId64, (maxDurationUs + 500) / 1000);
+    snprintf(tmp, tmpSize, "%" PRId64,
+            (maxDurationUs > (INT64_MAX - 500) ? INT64_MAX : (maxDurationUs + 500)) / 1000);
     mMetaData.add(METADATA_KEY_DURATION, String8(tmp));
 
     if (hasAudio) {

@@ -209,6 +209,9 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
             // Reset active device codec
             device->setEncodedFormat(AUDIO_FORMAT_DEFAULT);
 
+            // remove device from mReportedFormatsMap cache
+            mReportedFormatsMap.erase(device);
+
             } break;
 
         default:
@@ -337,6 +340,9 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
             mAvailableInputDevices.remove(device);
 
             checkInputsForDevice(device, state);
+
+            // remove device from mReportedFormatsMap cache
+            mReportedFormatsMap.erase(device);
         } break;
 
         default:
@@ -811,16 +817,7 @@ void AudioPolicyManager::setForceUse(audio_policy_force_use_t usage,
     }
 
     updateCallAndOutputRouting(forceVolumeReeval, delayMs);
-
-    for (const auto& activeDesc : mInputs.getActiveInputs()) {
-        auto newDevice = getNewInputDevice(activeDesc);
-        // Force new input selection if the new device can not be reached via current input
-        if (activeDesc->mProfile->getSupportedDevices().contains(newDevice)) {
-            setInputDevice(activeDesc->mIoHandle, newDevice);
-        } else {
-            closeInput(activeDesc->mIoHandle);
-        }
-    }
+    updateInputRouting();
 }
 
 void AudioPolicyManager::setSystemProperty(const char* property, const char* value)
@@ -3200,6 +3197,7 @@ status_t AudioPolicyManager::removeUidDeviceAffinities(uid_t uid) {
     return res;
 }
 
+
 status_t AudioPolicyManager::setDevicesRoleForStrategy(product_strategy_t strategy,
                                                        device_role_t role,
                                                        const AudioDeviceTypeAddrVector &devices) {
@@ -3217,7 +3215,17 @@ status_t AudioPolicyManager::setDevicesRoleForStrategy(product_strategy_t strate
     }
 
     checkForDeviceAndOutputChanges();
-    updateCallAndOutputRouting();
+
+    bool forceVolumeReeval = false;
+    // FIXME: workaround for truncated touch sounds
+    // to be removed when the problem is handled by system UI
+    uint32_t delayMs = 0;
+    if (strategy == mCommunnicationStrategy) {
+        forceVolumeReeval = true;
+        delayMs = TOUCH_SOUND_FIXED_DELAY_MS;
+        updateInputRouting();
+    }
+    updateCallAndOutputRouting(forceVolumeReeval, delayMs);
 
     return NO_ERROR;
 }
@@ -3248,6 +3256,18 @@ void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint
     }
 }
 
+void AudioPolicyManager::updateInputRouting() {
+    for (const auto& activeDesc : mInputs.getActiveInputs()) {
+        auto newDevice = getNewInputDevice(activeDesc);
+        // Force new input selection if the new device can not be reached via current input
+        if (activeDesc->mProfile->getSupportedDevices().contains(newDevice)) {
+            setInputDevice(activeDesc->mIoHandle, newDevice);
+        } else {
+            closeInput(activeDesc->mIoHandle);
+        }
+    }
+}
+
 status_t AudioPolicyManager::removeDevicesRoleForStrategy(product_strategy_t strategy,
                                                           device_role_t role)
 {
@@ -3255,12 +3275,23 @@ status_t AudioPolicyManager::removeDevicesRoleForStrategy(product_strategy_t str
 
     status_t status = mEngine->removeDevicesRoleForStrategy(strategy, role);
     if (status != NO_ERROR) {
-        ALOGW("Engine could not remove preferred device for strategy %d", strategy);
+        ALOGV("Engine could not remove preferred device for strategy %d status %d",
+                strategy, status);
         return status;
     }
 
     checkForDeviceAndOutputChanges();
-    updateCallAndOutputRouting();
+
+    bool forceVolumeReeval = false;
+    // FIXME: workaround for truncated touch sounds
+    // to be removed when the problem is handled by system UI
+    uint32_t delayMs = 0;
+    if (strategy == mCommunnicationStrategy) {
+        forceVolumeReeval = true;
+        delayMs = TOUCH_SOUND_FIXED_DELAY_MS;
+        updateInputRouting();
+    }
+    updateCallAndOutputRouting(forceVolumeReeval, delayMs);
 
     return NO_ERROR;
 }
@@ -3300,6 +3331,7 @@ status_t AudioPolicyManager::addDevicesRoleForCapturePreset(
             "Engine could not add preferred devices %s for audio source %d role %d",
             dumpAudioDeviceTypeAddrVector(devices).c_str(), audioSource, role);
 
+    updateInputRouting();
     return status;
 }
 
@@ -3318,6 +3350,7 @@ status_t AudioPolicyManager::removeDevicesRoleForCapturePreset(
     ALOGW_IF(status != NO_ERROR,
             "Engine could not remove devices role (%d) for capture preset %d", role, audioSource);
 
+    updateInputRouting();
     return status;
 }
 
@@ -3329,6 +3362,7 @@ status_t AudioPolicyManager::clearDevicesRoleForCapturePreset(audio_source_t aud
     ALOGW_IF(status != NO_ERROR,
             "Engine could not clear devices role (%d) for capture preset %d", role, audioSource);
 
+    updateInputRouting();
     return status;
 }
 
@@ -3398,7 +3432,9 @@ void AudioPolicyManager::dump(String8 *dst) const
     }
     dst->appendFormat(" TTS output %savailable\n", mTtsOutputAvailable ? "" : "not ");
     dst->appendFormat(" Master mono: %s\n", mMasterMono ? "on" : "off");
+    dst->appendFormat(" Communnication Strategy: %d\n", mCommunnicationStrategy);
     dst->appendFormat(" Config source: %s\n", mConfig.getSource().c_str()); // getConfig not const
+
     mAvailableOutputDevices.dump(dst, String8("Available output"));
     mAvailableInputDevices.dump(dst, String8("Available input"));
     mHwModulesAll.dump(dst);
@@ -3435,38 +3471,38 @@ status_t AudioPolicyManager::setAllowedCapturePolicy(uid_t uid, audio_flags_mask
 // This function checks for the parameters which can be offloaded.
 // This can be enhanced depending on the capability of the DSP and policy
 // of the system.
-bool AudioPolicyManager::isOffloadSupported(const audio_offload_info_t& offloadInfo)
+audio_offload_mode_t AudioPolicyManager::getOffloadSupport(const audio_offload_info_t& offloadInfo)
 {
-    ALOGV("isOffloadSupported: SR=%u, CM=0x%x, Format=0x%x, StreamType=%d,"
+    ALOGV("%s: SR=%u, CM=0x%x, Format=0x%x, StreamType=%d,"
      " BitRate=%u, duration=%" PRId64 " us, has_video=%d",
-     offloadInfo.sample_rate, offloadInfo.channel_mask,
+     __func__, offloadInfo.sample_rate, offloadInfo.channel_mask,
      offloadInfo.format,
      offloadInfo.stream_type, offloadInfo.bit_rate, offloadInfo.duration_us,
      offloadInfo.has_video);
 
     if (mMasterMono) {
-        return false; // no offloading if mono is set.
+        return AUDIO_OFFLOAD_NOT_SUPPORTED; // no offloading if mono is set.
     }
 
     // Check if offload has been disabled
     if (property_get_bool("audio.offload.disable", false /* default_value */)) {
-        ALOGV("offload disabled by audio.offload.disable");
-        return false;
+        ALOGV("%s: offload disabled by audio.offload.disable", __func__);
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
     // Check if stream type is music, then only allow offload as of now.
     if (offloadInfo.stream_type != AUDIO_STREAM_MUSIC)
     {
-        ALOGV("isOffloadSupported: stream_type != MUSIC, returning false");
-        return false;
+        ALOGV("%s: stream_type != MUSIC, returning false", __func__);
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
     //TODO: enable audio offloading with video when ready
     const bool allowOffloadWithVideo =
             property_get_bool("audio.offload.video", false /* default_value */);
     if (offloadInfo.has_video && !allowOffloadWithVideo) {
-        ALOGV("isOffloadSupported: has_video == true, returning false");
-        return false;
+        ALOGV("%s: has_video == true, returning false", __func__);
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
     //If duration is less than minimum value defined in property, return false
@@ -3474,13 +3510,14 @@ bool AudioPolicyManager::isOffloadSupported(const audio_offload_info_t& offloadI
             "audio.offload.min.duration.secs", -1 /* default_value */);
     if (min_duration_secs >= 0) {
         if (offloadInfo.duration_us < min_duration_secs * 1000000LL) {
-            ALOGV("Offload denied by duration < audio.offload.min.duration.secs(=%d)",
-                    min_duration_secs);
-            return false;
+            ALOGV("%s: Offload denied by duration < audio.offload.min.duration.secs(=%d)",
+                    __func__, min_duration_secs);
+            return AUDIO_OFFLOAD_NOT_SUPPORTED;
         }
     } else if (offloadInfo.duration_us < OFFLOAD_DEFAULT_MIN_DURATION_SECS * 1000000) {
-        ALOGV("Offload denied by duration < default min(=%u)", OFFLOAD_DEFAULT_MIN_DURATION_SECS);
-        return false;
+        ALOGV("%s: Offload denied by duration < default min(=%u)",
+                __func__, OFFLOAD_DEFAULT_MIN_DURATION_SECS);
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
     // Do not allow offloading if one non offloadable effect is enabled. This prevents from
@@ -3490,7 +3527,7 @@ bool AudioPolicyManager::isOffloadSupported(const audio_offload_info_t& offloadI
     // This may prevent offloading in rare situations where effects are left active by apps
     // in the background.
     if (mEffects.isNonOffloadableEffectEnabled()) {
-        return false;
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
     // See if there is a profile to support this.
@@ -3501,8 +3538,14 @@ bool AudioPolicyManager::isOffloadSupported(const audio_offload_info_t& offloadI
                                             offloadInfo.channel_mask,
                                             AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD,
                                             true /* directOnly */);
-    ALOGV("isOffloadSupported() profile %sfound", profile != 0 ? "" : "NOT ");
-    return (profile != 0);
+    ALOGV("%s: profile %sfound", __func__, profile != 0 ? "" : "NOT ");
+    if (profile == nullptr) {
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
+    }
+    if ((profile->getFlags() & AUDIO_OUTPUT_FLAG_GAPLESS_OFFLOAD) != 0) {
+        return AUDIO_OFFLOAD_GAPLESS_SUPPORTED;
+    }
+    return AUDIO_OFFLOAD_SUPPORTED;
 }
 
 bool AudioPolicyManager::isDirectOutputSupported(const audio_config_base_t& config,
@@ -3526,15 +3569,15 @@ bool AudioPolicyManager::isDirectOutputSupported(const audio_config_base_t& conf
 status_t AudioPolicyManager::listAudioPorts(audio_port_role_t role,
                                             audio_port_type_t type,
                                             unsigned int *num_ports,
-                                            struct audio_port *ports,
+                                            struct audio_port_v7 *ports,
                                             unsigned int *generation)
 {
-    if (num_ports == NULL || (*num_ports != 0 && ports == NULL) ||
-            generation == NULL) {
+    if (num_ports == nullptr || (*num_ports != 0 && ports == nullptr) ||
+            generation == nullptr) {
         return BAD_VALUE;
     }
     ALOGV("listAudioPorts() role %d type %d num_ports %d ports %p", role, type, *num_ports, ports);
-    if (ports == NULL) {
+    if (ports == nullptr) {
         *num_ports = 0;
     }
 
@@ -3592,7 +3635,7 @@ status_t AudioPolicyManager::listAudioPorts(audio_port_role_t role,
     return NO_ERROR;
 }
 
-status_t AudioPolicyManager::getAudioPort(struct audio_port *port)
+status_t AudioPolicyManager::getAudioPort(struct audio_port_v7 *port)
 {
     if (port == nullptr || port->id == AUDIO_PORT_HANDLE_NONE) {
         return BAD_VALUE;
@@ -4375,14 +4418,28 @@ status_t AudioPolicyManager::getSurroundFormats(unsigned int *numSurroundFormats
         // checkOutputsForDevice().
         for (size_t i = 0; i < mAvailableOutputDevices.size(); i++) {
             sp<DeviceDescriptor> device = mAvailableOutputDevices[i];
-            FormatVector supportedFormats =
-                    device->getAudioPort()->getAudioProfiles().getSupportedFormats();
-            for (size_t j = 0; j < supportedFormats.size(); j++) {
-                if (mConfig.getSurroundFormats().count(supportedFormats[j]) != 0) {
-                    formats.insert(supportedFormats[j]);
+            audio_devices_t deviceType = device->type();
+            // Enabling/disabling formats are applied to only HDMI devices. So, this function
+            // returns formats reported by HDMI devices.
+            if (deviceType != AUDIO_DEVICE_OUT_HDMI) {
+                continue;
+            }
+            // Formats reported by sink devices
+            std::unordered_set<audio_format_t> formatset;
+            if (auto it = mReportedFormatsMap.find(device); it != mReportedFormatsMap.end()) {
+                formatset.insert(it->second.begin(), it->second.end());
+            }
+
+            // Formats hard-coded in the in policy configuration file (if any).
+            FormatVector encodedFormats = device->encodedFormats();
+            formatset.insert(encodedFormats.begin(), encodedFormats.end());
+            // Filter the formats which are supported by the vendor hardware.
+            for (auto it = formatset.begin(); it != formatset.end(); ++it) {
+                if (mConfig.getSurroundFormats().count(*it) != 0) {
+                    formats.insert(*it);
                 } else {
                     for (const auto& pair : mConfig.getSurroundFormats()) {
-                        if (pair.second.count(supportedFormats[j]) != 0) {
+                        if (pair.second.count(*it) != 0) {
                             formats.insert(pair.first);
                             break;
                         }
@@ -4672,6 +4729,9 @@ status_t AudioPolicyManager::initialize() {
 
     // Silence ALOGV statements
     property_set("log.tag." LOG_TAG, "D");
+
+    mCommunnicationStrategy = mEngine->getProductStrategyForAttributes(
+            mEngine->getAttributesForStreamType(AUDIO_STREAM_VOICE_CALL));
 
     updateDevicesAndOutputs();
     return status;
@@ -5345,6 +5405,8 @@ void AudioPolicyManager::checkForDeviceAndOutputChanges(std::function<bool()> on
     if (mHwModules.getModuleFromName(AUDIO_HARDWARE_MODULE_ID_MSD) != 0) {
         setMsdPatch();
     }
+    // an event that changed routing likely occurred, inform upper layers
+    mpClientInterface->onRoutingUpdated();
 }
 
 bool AudioPolicyManager::followsSameRouting(const audio_attributes_t &lAttr,
@@ -5515,6 +5577,17 @@ void AudioPolicyManager::checkSecondaryOutputs() {
     }
 }
 
+bool AudioPolicyManager::isScoRequestedForComm() const {
+    AudioDeviceTypeAddrVector devices;
+    mEngine->getDevicesForRoleAndStrategy(mCommunnicationStrategy, DEVICE_ROLE_PREFERRED, devices);
+    for (const auto &device : devices) {
+        if (audio_is_bluetooth_out_sco_device(device.mType)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void AudioPolicyManager::checkA2dpSuspend()
 {
     audio_io_handle_t a2dpOutput = mOutputs.getA2dpOutput();
@@ -5527,25 +5600,23 @@ void AudioPolicyManager::checkA2dpSuspend()
     bool isScoConnected =
             (mAvailableInputDevices.types().count(AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET) != 0 ||
              !Intersection(mAvailableOutputDevices.types(), getAudioDeviceOutAllScoSet()).empty());
+    bool isScoRequested = isScoRequestedForComm();
 
     // if suspended, restore A2DP output if:
     //      (A2DP output is present and not on primary output) &&
     //      ((SCO device is NOT connected) ||
-    //       ((forced usage communication is NOT SCO) && (forced usage for record is NOT SCO) &&
+    //       ((SCO is not requested) &&
     //        (phone state is NOT in call) && (phone state is NOT ringing)))
     //
     // if not suspended, suspend A2DP output if:
     //      (A2DP output is present and not on primary output) &&
     //      (SCO device is connected) &&
-    //       ((forced usage for communication is SCO) || (forced usage for record is SCO) ||
+    //       ((SCO is requested) ||
     //       ((phone state is in call) || (phone state is ringing)))
     //
     if (mA2dpSuspended) {
         if (!isScoConnected ||
-             ((mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_COMMUNICATION) !=
-                     AUDIO_POLICY_FORCE_BT_SCO) &&
-              (mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_RECORD) !=
-                      AUDIO_POLICY_FORCE_BT_SCO) &&
+             (!isScoRequested &&
               (mEngine->getPhoneState() != AUDIO_MODE_IN_CALL) &&
               (mEngine->getPhoneState() != AUDIO_MODE_RINGTONE))) {
                 mpClientInterface->restoreOutput(a2dpOutput);
@@ -5553,10 +5624,7 @@ void AudioPolicyManager::checkA2dpSuspend()
         }
     } else {
         if (isScoConnected &&
-             ((mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_COMMUNICATION) ==
-                     AUDIO_POLICY_FORCE_BT_SCO) ||
-              (mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_RECORD) ==
-                      AUDIO_POLICY_FORCE_BT_SCO) ||
+             (isScoRequested ||
               (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL) ||
               (mEngine->getPhoneState() == AUDIO_MODE_RINGTONE))) {
                 mpClientInterface->suspendOutput(a2dpOutput);
@@ -6313,15 +6381,14 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
     bool isVoiceVolSrc = callVolSrc == volumeSource;
     bool isBtScoVolSrc = btScoVolSrc == volumeSource;
 
-    audio_policy_forced_cfg_t forceUseForComm =
-            mEngine->getForceUse(AUDIO_POLICY_FORCE_FOR_COMMUNICATION);
+    bool isScoRequested = isScoRequestedForComm();
     // do not change in call volume if bluetooth is connected and vice versa
     // if sco and call follow same curves, bypass forceUseForComm
     if ((callVolSrc != btScoVolSrc) &&
-            ((isVoiceVolSrc && forceUseForComm == AUDIO_POLICY_FORCE_BT_SCO) ||
-             (isBtScoVolSrc && forceUseForComm != AUDIO_POLICY_FORCE_BT_SCO))) {
-        ALOGV("%s cannot set volume group %d volume with force use = %d for comm", __func__,
-             volumeSource, forceUseForComm);
+            ((isVoiceVolSrc && isScoRequested) ||
+             (isBtScoVolSrc && !isScoRequested))) {
+        ALOGV("%s cannot set volume group %d volume when is%srequested for comm", __func__,
+             volumeSource, isScoRequested ? " " : "n ot ");
         // Do not return an error here as AudioService will always set both voice call
         // and bluetooth SCO volumes due to stream aliasing.
         return NO_ERROR;
@@ -6635,6 +6702,7 @@ void AudioPolicyManager::updateAudioProfiles(const sp<DeviceDescriptor>& devDesc
             return;
         }
         FormatVector formats = formatsFromString(reply.string());
+        mReportedFormatsMap[devDesc] = formats;
         if (device == AUDIO_DEVICE_OUT_HDMI
                 || isDeviceOfModule(devDesc, AUDIO_HARDWARE_MODULE_ID_MSD)) {
             modifySurroundFormats(devDesc, &formats);
