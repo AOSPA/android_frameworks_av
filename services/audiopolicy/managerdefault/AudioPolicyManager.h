@@ -226,6 +226,7 @@ public:
 
         status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t capturePolicy) override;
         virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& offloadInfo);
+        bool isOffloadSupportedInternal(const audio_offload_info_t& offloadInfo);
 
         virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                              const audio_attributes_t& attributes);
