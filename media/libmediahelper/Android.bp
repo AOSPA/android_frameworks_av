@@ -9,6 +9,12 @@ cc_library_headers {
             enabled: false,
         },
     },
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.bluetooth.updatable",
+        "com.android.media",
+        "com.android.media.swcodec",
+    ],
 }
 
 cc_defaults {
@@ -16,7 +22,7 @@ cc_defaults {
     double_loadable: true,
     srcs: [
         "AudioParameter.cpp",
-        "AudioSanitizer.cpp",
+        "AudioValidator.cpp",
         "TypeConverter.cpp",
     ],
     cflags: [

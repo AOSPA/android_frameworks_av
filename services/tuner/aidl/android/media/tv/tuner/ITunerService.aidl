@@ -16,6 +16,9 @@
 
 package android.media.tv.tuner;
 
+import android.media.tv.tuner.ITunerFrontend;
+import android.media.tv.tuner.TunerServiceFrontendInfo;
+
 /**
  * TunerService interface handles tuner related operations.
  *
@@ -29,4 +32,20 @@ interface ITunerService {
      * @return the result code of the operation.
      */
     int getFrontendIds(out int[] ids);
+
+    /**
+     * Retrieve the frontend's information.
+     *
+     * @param frontendHandle the handle of the frontend granted by TRM.
+     * @return the information of the frontend.
+     */
+    TunerServiceFrontendInfo getFrontendInfo(in int frontendHandle);
+
+    /**
+     * Open a Tuner Frontend interface.
+     *
+     * @param frontendHandle the handle of the frontend granted by TRM.
+     * @return the aidl interface of the frontend.
+     */
+    ITunerFrontend openFrontend(in int frontendHandle);
 }

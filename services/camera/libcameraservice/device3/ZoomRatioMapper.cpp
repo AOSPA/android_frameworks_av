@@ -25,6 +25,19 @@ namespace android {
 
 namespace camera3 {
 
+void ZoomRatioMapper::initRemappedKeys() {
+    mRemappedKeys.insert(
+            kMeteringRegionsToCorrect.begin(),
+            kMeteringRegionsToCorrect.end());
+    mRemappedKeys.insert(
+            kRectsToCorrect.begin(),
+            kRectsToCorrect.end());
+    mRemappedKeys.insert(
+            kResultPointsToCorrectNoClamp.begin(),
+            kResultPointsToCorrectNoClamp.end());
+
+    mRemappedKeys.insert(ANDROID_CONTROL_ZOOM_RATIO);
+}
 
 status_t ZoomRatioMapper::initZoomRatioInTemplate(CameraMetadata *request) {
     camera_metadata_entry_t entry;
@@ -117,6 +130,8 @@ status_t ZoomRatioMapper::overrideZoomRatioTags(
 
 ZoomRatioMapper::ZoomRatioMapper(const CameraMetadata* deviceInfo,
         bool supportNativeZoomRatio, bool usePrecorrectArray) {
+    initRemappedKeys();
+
     camera_metadata_ro_entry_t entry;
 
     entry = deviceInfo->find(ANDROID_SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE);
@@ -153,6 +168,19 @@ status_t ZoomRatioMapper::updateCaptureRequest(CameraMetadata* request) {
     entry = request->find(ANDROID_CONTROL_ZOOM_RATIO);
     if (entry.count == 1 && entry.data.f[0] != 1.0f) {
         zoomRatioIs1 = false;
+
+        // If cropRegion is windowboxing, override it with activeArray
+        camera_metadata_entry_t cropRegionEntry = request->find(ANDROID_SCALER_CROP_REGION);
+        if (cropRegionEntry.count == 4) {
+            int cropWidth = cropRegionEntry.data.i32[2];
+            int cropHeight = cropRegionEntry.data.i32[3];
+            if (cropWidth < mArrayWidth && cropHeight < mArrayHeight) {
+                cropRegionEntry.data.i32[0] = 0;
+                cropRegionEntry.data.i32[1] = 0;
+                cropRegionEntry.data.i32[2] = mArrayWidth;
+                cropRegionEntry.data.i32[3] = mArrayHeight;
+            }
+        }
     }
 
     if (mHalSupportsZoomRatio && zoomRatioIs1) {

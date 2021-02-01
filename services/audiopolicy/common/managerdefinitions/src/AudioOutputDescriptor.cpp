@@ -125,8 +125,8 @@ void AudioOutputDescriptor::setClientActive(const sp<TrackClientDescriptor>& cli
 
 bool AudioOutputDescriptor::isClientActive(const sp<TrackClientDescriptor>& client)
 {
-    auto clientIter = std::find(begin(mActiveClients), end(mActiveClients), client);
-    return (clientIter != end(mActiveClients));
+    return client != nullptr &&
+            std::find(begin(mActiveClients), end(mActiveClients), client) != end(mActiveClients);
 }
 
 bool AudioOutputDescriptor::isActive(VolumeSource vs, uint32_t inPastMs, nsecs_t sysTime) const

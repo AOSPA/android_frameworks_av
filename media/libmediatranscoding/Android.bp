@@ -60,12 +60,12 @@ cc_library_shared {
     ],
 
     shared_libs: [
+        "libandroid",
         "libbinder_ndk",
         "libcutils",
         "liblog",
         "libutils",
         "libmediatranscoder",
-        "libbinder",
         "libmediandk",
     ],
     export_shared_lib_headers: [
@@ -76,7 +76,6 @@ cc_library_shared {
 
     static_libs: [
         "mediatranscoding_aidl_interface-ndk_platform",
-        "resourcemanager_aidl_interface-ndk_platform",
         "resourceobserver_aidl_interface-ndk_platform",
     ],
 

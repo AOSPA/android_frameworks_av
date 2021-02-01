@@ -22,18 +22,16 @@
 #include <media/UidPolicyInterface.h>
 #include <sys/types.h>
 #include <utils/Condition.h>
-#include <utils/RefBase.h>
-#include <utils/String8.h>
-#include <utils/Vector.h>
 
 #include <map>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
+struct AActivityManager_UidImportanceListener;
+
 namespace android {
 
-class ActivityManager;
 // Observer for UID lifecycle and provide information about the uid's app
 // priority used by the session controller.
 class TranscodingUidPolicy : public UidPolicyInterface {
@@ -49,28 +47,24 @@ public:
     void setCallback(const std::shared_ptr<UidPolicyCallbackInterface>& cb) override;
     // ~UidPolicyInterface
 
-    static status_t getUidForPackage(String16 packageName, /*inout*/ uid_t& uid);
-
 private:
     void onUidStateChanged(uid_t uid, int32_t procState);
-    void setUidObserverRegistered(bool registerd);
     void registerSelf();
     void unregisterSelf();
-    void setProcessInfoOverride();
     int32_t getProcState_l(uid_t uid) NO_THREAD_SAFETY_ANALYSIS;
     void updateTopUid_l() NO_THREAD_SAFETY_ANALYSIS;
 
-    struct UidObserver;
+    static void OnUidImportance(uid_t uid, int32_t uidImportance, void* cookie);
+
     struct ResourceManagerClient;
     mutable Mutex mUidLock;
-    std::shared_ptr<ActivityManager> mAm;
-    sp<UidObserver> mUidObserver;
+    AActivityManager_UidImportanceListener* mUidObserver;
+
     bool mRegistered GUARDED_BY(mUidLock);
     int32_t mTopUidState GUARDED_BY(mUidLock);
     std::unordered_map<uid_t, int32_t> mUidStateMap GUARDED_BY(mUidLock);
     std::map<int32_t, std::unordered_set<uid_t>> mStateUidMap GUARDED_BY(mUidLock);
     std::weak_ptr<UidPolicyCallbackInterface> mUidPolicyCallback;
-    std::shared_ptr<ResourceManagerClient> mProcInfoOverrideClient;
 };  // class TranscodingUidPolicy
 
 }  // namespace android

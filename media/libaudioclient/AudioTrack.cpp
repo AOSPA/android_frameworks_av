@@ -848,7 +848,7 @@ status_t AudioTrack::start()
     int32_t flags = android_atomic_and(~(CBLK_STREAM_END_DONE | CBLK_DISABLED), &mCblk->mFlags);
 
     if (!(flags & CBLK_INVALID)) {
-        status = mAudioTrack->start();
+        mAudioTrack->start(&status);
         if (status == DEAD_OBJECT) {
             flags |= CBLK_INVALID;
         }
@@ -1552,7 +1552,8 @@ audio_port_handle_t AudioTrack::getRoutedDeviceId() {
 status_t AudioTrack::attachAuxEffect(int effectId)
 {
     AutoMutex lock(mLock);
-    status_t status = mAudioTrack->attachAuxEffect(effectId);
+    status_t status;
+    mAudioTrack->attachAuxEffect(effectId, &status);
     if (status == NO_ERROR) {
         mAuxEffectId = effectId;
     }
@@ -1688,9 +1689,7 @@ status_t AudioTrack::createTrack_l()
     input.opPackageName = mOpPackageName;
 
     media::CreateTrackResponse response;
-    sp<IAudioTrack> track = audioFlinger->createTrack(VALUE_OR_FATAL(input.toAidl()),
-                                                      response,
-                                                      &status);
+    status = audioFlinger->createTrack(VALUE_OR_FATAL(input.toAidl()), response);
     IAudioFlinger::CreateTrackOutput output = VALUE_OR_FATAL(
             IAudioFlinger::CreateTrackOutput::fromAidl(
                     response));
@@ -1703,7 +1702,7 @@ status_t AudioTrack::createTrack_l()
         }
         goto exit;
     }
-    ALOG_ASSERT(track != 0);
+    ALOG_ASSERT(output.audioTrack != 0);
 
     mTrackOffloaded = AVMediaUtils::get()->AudioTrackIsTrackOffloaded(output.outputId);
     mFrameCount = output.frameCount;
@@ -1726,7 +1725,9 @@ status_t AudioTrack::createTrack_l()
     // so we are no longer responsible for releasing it.
 
     // FIXME compare to AudioRecord
-    sp<IMemory> iMem = track->getCblk();
+    std::optional<media::SharedFileRegion> sfr;
+    output.audioTrack->getCblk(&sfr);
+    sp<IMemory> iMem = VALUE_OR_FATAL(aidl2legacy_NullableSharedFileRegion_IMemory(sfr));
     if (iMem == 0) {
         ALOGE("%s(%d): Could not get control block", __func__, mPortId);
         status = NO_INIT;
@@ -1747,7 +1748,7 @@ status_t AudioTrack::createTrack_l()
         IInterface::asBinder(mAudioTrack)->unlinkToDeath(mDeathNotifier, this);
         mDeathNotifier.clear();
     }
-    mAudioTrack = track;
+    mAudioTrack = output.audioTrack;
     mCblkMemory = iMem;
     IPCThreadState::self()->flushCommands();
 
@@ -1803,7 +1804,7 @@ status_t AudioTrack::createTrack_l()
         }
     }
 
-    mAudioTrack->attachAuxEffect(mAuxEffectId);
+    mAudioTrack->attachAuxEffect(mAuxEffectId, &status);
 
     // If IAudioTrack is re-created, don't let the requested frameCount
     // decrease.  This can confuse clients that cache frameCount().
@@ -2047,7 +2048,8 @@ void AudioTrack::restartIfDisabled()
         ALOGW("%s(%d): releaseBuffer() track %p disabled due to previous underrun, restarting",
                 __func__, mPortId, this);
         // FIXME ignoring status
-        mAudioTrack->start();
+        status_t status;
+        mAudioTrack->start(&status);
     }
 }
 
@@ -2663,11 +2665,17 @@ retry:
             if (shaper.isStarted()) {
                 operationToEnd->setNormalizedTime(1.f);
             }
-            return mAudioTrack->applyVolumeShaper(shaper.mConfiguration, operationToEnd);
+            media::VolumeShaperConfiguration config;
+            shaper.mConfiguration->writeToParcelable(&config);
+            media::VolumeShaperOperation operation;
+            operationToEnd->writeToParcelable(&operation);
+            status_t status;
+            mAudioTrack->applyVolumeShaper(config, operation, &status);
+            return status;
         });
 
         if (mState == STATE_ACTIVE) {
-            result = mAudioTrack->start();
+            mAudioTrack->start(&result);
         }
         // server resets to zero so we offset
         mFramesWrittenServerOffset =
@@ -2737,7 +2745,9 @@ bool AudioTrack::isSampleRateSpeedAllowed_l(uint32_t sampleRate, float speed)
 status_t AudioTrack::setParameters(const String8& keyValuePairs)
 {
     AutoMutex lock(mLock);
-    return mAudioTrack->setParameters(keyValuePairs);
+    status_t status;
+    mAudioTrack->setParameters(keyValuePairs.c_str(), &status);
+    return status;
 }
 
 status_t AudioTrack::selectPresentation(int presentationId, int programId)
@@ -2749,7 +2759,9 @@ status_t AudioTrack::selectPresentation(int presentationId, int programId)
     ALOGV("%s(%d): PresentationId/ProgramId[%s]",
             __func__, mPortId, param.toString().string());
 
-    return mAudioTrack->setParameters(param.toString());
+    status_t status;
+    mAudioTrack->setParameters(param.toString().c_str(), &status);
+    return status;
 }
 
 VolumeShaper::Status AudioTrack::applyVolumeShaper(
@@ -2758,11 +2770,16 @@ VolumeShaper::Status AudioTrack::applyVolumeShaper(
 {
     AutoMutex lock(mLock);
     mVolumeHandler->setIdIfNecessary(configuration);
-    VolumeShaper::Status status = mAudioTrack->applyVolumeShaper(configuration, operation);
+    media::VolumeShaperConfiguration config;
+    configuration->writeToParcelable(&config);
+    media::VolumeShaperOperation op;
+    operation->writeToParcelable(&op);
+    VolumeShaper::Status status;
+    mAudioTrack->applyVolumeShaper(config, op, &status);
 
     if (status == DEAD_OBJECT) {
         if (restoreTrack_l("applyVolumeShaper") == OK) {
-            status = mAudioTrack->applyVolumeShaper(configuration, operation);
+            mAudioTrack->applyVolumeShaper(config, op, &status);
         }
     }
     if (status >= 0) {
@@ -2782,10 +2799,20 @@ VolumeShaper::Status AudioTrack::applyVolumeShaper(
 sp<VolumeShaper::State> AudioTrack::getVolumeShaperState(int id)
 {
     AutoMutex lock(mLock);
-    sp<VolumeShaper::State> state = mAudioTrack->getVolumeShaperState(id);
+    std::optional<media::VolumeShaperState> vss;
+    mAudioTrack->getVolumeShaperState(id, &vss);
+    sp<VolumeShaper::State> state;
+    if (vss.has_value()) {
+        state = new VolumeShaper::State();
+        state->readFromParcelable(vss.value());
+    }
     if (state.get() == nullptr && (mCblk->mFlags & CBLK_INVALID) != 0) {
         if (restoreTrack_l("getVolumeShaperState") == OK) {
-            state = mAudioTrack->getVolumeShaperState(id);
+            mAudioTrack->getVolumeShaperState(id, &vss);
+            if (vss.has_value()) {
+                state = new VolumeShaper::State();
+                state->readFromParcelable(vss.value());
+            }
         }
     }
     return state;
@@ -2879,7 +2906,11 @@ status_t AudioTrack::getTimestamp_l(AudioTimestamp& timestamp)
     status_t status;
     if (isOffloadedOrDirect_l() || mTrackOffloaded) {
         // use Binder to get timestamp
-        status = mAudioTrack->getTimestamp(timestamp);
+        media::AudioTimestampInternal ts;
+        mAudioTrack->getTimestamp(&ts, &status);
+        if (status == OK) {
+            timestamp = VALUE_OR_FATAL(aidl2legacy_AudioTimestamp(ts));
+        }
     } else {
         // read timestamp from shared memory
         ExtendedTimestamp ets;

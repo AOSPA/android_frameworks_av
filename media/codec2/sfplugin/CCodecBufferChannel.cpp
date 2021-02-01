@@ -1544,6 +1544,7 @@ bool CCodecBufferChannel::handleWork(
     }
 
     std::optional<uint32_t> newInputDelay, newPipelineDelay;
+    bool needMaxDequeueBufferCountUpdate = false;
     while (!worklet->output.configUpdate.empty()) {
         std::unique_ptr<C2Param> param;
         worklet->output.configUpdate.back().swap(param);
@@ -1552,24 +1553,10 @@ bool CCodecBufferChannel::handleWork(
             case C2PortReorderBufferDepthTuning::CORE_INDEX: {
                 C2PortReorderBufferDepthTuning::output reorderDepth;
                 if (reorderDepth.updateFrom(*param)) {
-                    bool secure = mComponent->getName().find(".secure") !=
-                                  std::string::npos;
-                    mOutput.lock()->buffers->setReorderDepth(
-                            reorderDepth.value);
                     ALOGV("[%s] onWorkDone: updated reorder depth to %u",
                           mName, reorderDepth.value);
-                    size_t numOutputSlots = mOutput.lock()->numSlots;
-                    size_t numInputSlots = mInput.lock()->numSlots;
-                    Mutexed<OutputSurface>::Locked output(mOutputSurface);
-                    output->maxDequeueBuffers = numOutputSlots +
-                            reorderDepth.value + kRenderingDepth;
-                    if (!secure) {
-                        output->maxDequeueBuffers += numInputSlots;
-                    }
-                    if (output->surface) {
-                        output->surface->setMaxDequeuedBufferCount(
-                                output->maxDequeueBuffers);
-                    }
+                    mOutput.lock()->buffers->setReorderDepth(reorderDepth.value);
+                    needMaxDequeueBufferCountUpdate = true;
                 } else {
                     ALOGD("[%s] onWorkDone: failed to read reorder depth",
                           mName);
@@ -1613,13 +1600,12 @@ bool CCodecBufferChannel::handleWork(
                     if (outputDelay.updateFrom(*param)) {
                         ALOGD("[%s] onWorkDone: updating output delay %u",
                               mName, outputDelay.value);
-                        (void)mPipelineWatcher.lock()->outputDelay(
-                                outputDelay.value);
+                        (void)mPipelineWatcher.lock()->outputDelay(outputDelay.value);
+                        needMaxDequeueBufferCountUpdate = true;
 
                         bool outputBuffersChanged = false;
                         size_t numOutputSlots = 0;
                         bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
-                        size_t numInputSlots = mInput.lock()->numSlots;
                         {
                             Mutexed<Output>::Locked output(mOutput);
                             if (!output->buffers) {
@@ -1659,18 +1645,6 @@ bool CCodecBufferChannel::handleWork(
                         if (outputBuffersChanged) {
                             mCCodecCallback->onOutputBuffersChanged();
                         }
-
-                        uint32_t depth = mOutput.lock()->buffers->getReorderDepth();
-                        Mutexed<OutputSurface>::Locked output(mOutputSurface);
-                        output->maxDequeueBuffers = numOutputSlots + depth + kRenderingDepth;
-                        if (!isHW) {
-                            output->maxDequeueBuffers += numInputSlots;
-                        }
-                        if (output->surface) {
-                            ALOGI("[%s] onWorkDone: updating max output delay %u",
-                                    mName, output->maxDequeueBuffers);
-                            output->surface->setMaxDequeuedBufferCount(output->maxDequeueBuffers);
-                        }
                     }
                 }
                 break;
@@ -1697,6 +1671,22 @@ bool CCodecBufferChannel::handleWork(
                   mName, input->numExtraSlots);
         } else {
             input->numSlots = newNumSlots;
+        }
+    }
+    if (needMaxDequeueBufferCountUpdate) {
+        uint32_t depth = mOutput.lock()->buffers->getReorderDepth();
+        Mutexed<OutputSurface>::Locked output(mOutputSurface);
+        size_t numOutputSlots = 0;
+        bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
+        size_t numInputSlots = mInput.lock()->numSlots;
+        output->maxDequeueBuffers = numOutputSlots + depth + kRenderingDepth;
+        if (!isHW) {
+            output->maxDequeueBuffers += numInputSlots;
+        }
+        if (output->surface) {
+            ALOGI("[%s] onWorkDone: updating max output delay %u",
+                    mName, output->maxDequeueBuffers);
+            output->surface->setMaxDequeuedBufferCount(output->maxDequeueBuffers);
         }
     }
 
@@ -1742,7 +1732,10 @@ bool CCodecBufferChannel::handleWork(
             outBuffer->meta()->setInt64("timeUs", timestamp.peek());
             outBuffer->meta()->setInt32("flags", MediaCodec::BUFFER_FLAG_CODECCONFIG);
             ALOGV("[%s] onWorkDone: csd index = %zu [%p]", mName, index, outBuffer.get());
-
+            if (outputFormat) {
+                ALOGD("[%s] sending CSD : output format changed to %s",
+                      mName, outputFormat->debugString().c_str());
+            }
             output.unlock();
             mCallback->onOutputBufferAvailable(index, outBuffer);
         } else {
@@ -1790,7 +1783,7 @@ bool CCodecBufferChannel::handleWork(
                 notifyClient,
                 timestamp.peek(),
                 flags,
-                outputFormat,
+                (initData == nullptr ? outputFormat : nullptr),
                 worklet->output.ordinal);
     }
     sendOutputBuffers();
