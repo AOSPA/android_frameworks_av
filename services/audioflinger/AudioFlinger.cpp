@@ -128,9 +128,6 @@ uint32_t AudioFlinger::mScreenState;
 // we define a minimum time during which a global effect is considered enabled.
 static const nsecs_t kMinGlobalEffectEnabletimeNs = seconds(7200);
 
-Mutex gLock;
-wp<AudioFlinger> gAudioFlinger;
-
 // Keep a strong reference to media.log service around forever.
 // The service is within our parent process so it can never die in a way that we could observe.
 // These two variables are const after initialization.
@@ -268,7 +265,7 @@ void AudioFlinger::onFirstRef()
 
     mMode = AUDIO_MODE_NORMAL;
 
-    gAudioFlinger = this;
+    gAudioFlinger = this;  // we are already refcounted, store into atomic pointer.
 
     mDevicesFactoryHalCallback = new DevicesFactoryHalCallbackImpl;
     mDevicesFactoryHal->setCallbackOnce(mDevicesFactoryHalCallback);
@@ -325,11 +322,9 @@ status_t MmapStreamInterface::openMmapStream(MmapStreamInterface::stream_directi
                                              sp<MmapStreamInterface>& interface,
                                              audio_port_handle_t *handle)
 {
-    sp<AudioFlinger> af;
-    {
-        Mutex::Autolock _l(gLock);
-        af = gAudioFlinger.promote();
-    }
+    // TODO: Use ServiceManager to get IAudioFlinger instead of by atomic pointer.
+    // This allows moving oboeservice (AAudio) to a separate process in the future.
+    sp<AudioFlinger> af = AudioFlinger::gAudioFlinger.load();  // either nullptr or singleton AF.
     status_t ret = NO_INIT;
     if (af != 0) {
         ret = af->openMmapStream(
@@ -1492,6 +1487,20 @@ void AudioFlinger::forwardParametersToDownstreamPatches_l(
     }
 }
 
+// Update downstream patches for all playback threads attached to an MSD module
+void AudioFlinger::updateDownStreamPatches_l(const struct audio_patch *patch,
+                                             const std::set<audio_io_handle_t> streams)
+{
+    for (const audio_io_handle_t stream : streams) {
+        PlaybackThread *playbackThread = checkPlaybackThread_l(stream);
+        if (playbackThread == nullptr || !playbackThread->isMsdDevice()) {
+            continue;
+        }
+        playbackThread->setDownStreamPatch(patch);
+        playbackThread->sendIoConfigEvent(AUDIO_OUTPUT_CONFIG_CHANGED);
+    }
+}
+
 // Filter reserved keys from setParameters() before forwarding to audio HAL or acting upon.
 // Some keys are used for audio routing and audio path configuration and should be reserved for use
 // by audio policy and audio flinger for functional, privacy and security reasons.
@@ -2576,7 +2585,11 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
                       *output, thread.get());
             }
             mPlaybackThreads.add(*output, thread);
-            mPatchPanel.notifyStreamOpened(outHwDev, *output);
+            struct audio_patch patch;
+            mPatchPanel.notifyStreamOpened(outHwDev, *output, &patch);
+            if (thread->isMsdDevice()) {
+                thread->setDownStreamPatch(&patch);
+            }
             return thread;
         }
     }
