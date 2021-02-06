@@ -1,5 +1,5 @@
 /**
- * Copyright 2020, The Android Open Source Project
+ * Copyright 2021, The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,25 @@
 
 package android.media.tv.tuner;
 
+import android.media.tv.tuner.ITunerFilter;
+import android.media.tv.tuner.ITunerFilterCallback;
+import android.media.tv.tuner.ITunerFrontend;
+
 /**
- * Atsc3 Frontend Physical Layer Pipe Info.
+ * Tuner Demux interface handles tuner related operations.
  *
  * {@hide}
  */
-parcelable TunerAtsc3PlpInfo {
-    int plpId;
+interface ITunerDemux {
 
-    boolean llsFlag;
+    /**
+     * Set a frontend resource as data input of the demux
+     */
+    void setFrontendDataSource(in ITunerFrontend frontend);
+
+    /**
+     * Open a new filter in the demux
+     */
+    ITunerFilter openFilter(
+        in int mainType, in int subtype, in int bufferSize, in ITunerFilterCallback cb);
 }
