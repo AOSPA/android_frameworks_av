@@ -2197,7 +2197,16 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
     sp<AudioInputDescriptor> inputDesc;
     sp<RecordClientDescriptor> clientDesc;
     audio_port_handle_t requestedDeviceId = *selectedDeviceId;
-    bool isSoundTrigger;
+    bool isSoundTrigger = attributes.source == AUDIO_SOURCE_HOTWORD &&
+                                mSoundTriggerSessions.indexOfKey(session) >= 0;
+    DeviceVector usbDevices;
+
+    if (isSoundTrigger) {
+        usbDevices = mAvailableInputDevices.getDevicesFromType(AUDIO_DEVICE_IN_USB_HEADSET);
+        for (size_t i = 0; i < usbDevices.size(); i++) {
+            mAvailableInputDevices.remove(usbDevices[i]);
+        }
+    }
 
     // The supplied portId must be AUDIO_PORT_HANDLE_NONE
     if (*portId != AUDIO_PORT_HANDLE_NONE) {
@@ -2325,8 +2334,6 @@ exit:
     *selectedDeviceId = mAvailableInputDevices.contains(device) ?
                 device->getId() : AUDIO_PORT_HANDLE_NONE;
 
-    isSoundTrigger = attributes.source == AUDIO_SOURCE_HOTWORD &&
-        mSoundTriggerSessions.indexOfKey(session) >= 0;
     *portId = PolicyAudioPort::getNextUniqueId();
 
     clientDesc = new RecordClientDescriptor(*portId, riid, uid, session, attributes, *config,
@@ -2338,9 +2345,14 @@ exit:
     ALOGV("getInputForAttr() returns input %d type %d selectedDeviceId %d for port ID %d",
             *input, *inputType, *selectedDeviceId, *portId);
 
-    return NO_ERROR;
+    status = NO_ERROR;
 
 error:
+    if (isSoundTrigger) {
+        for (size_t i = 0; i < usbDevices.size(); i++) {
+            mAvailableInputDevices.add(usbDevices[i]);
+        }
+    }
     return status;
 }
 
