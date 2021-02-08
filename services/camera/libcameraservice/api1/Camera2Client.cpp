@@ -935,6 +935,7 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
         return res;
     }
 
+    mCallbackProcessor->unpauseCallback();
     params.state = Parameters::PREVIEW;
     return OK;
 }
@@ -969,6 +970,7 @@ void Camera2Client::stopPreviewL() {
             FALLTHROUGH_INTENDED;
         case Parameters::RECORD:
         case Parameters::PREVIEW:
+            mCallbackProcessor->pauseCallback();
             syncWithDevice();
             // Due to flush a camera device sync is not a sufficient
             // guarantee that the current client parameters are
@@ -2294,6 +2296,14 @@ status_t Camera2Client::setRotateAndCropOverride(uint8_t rotateAndCrop) {
 
     return mDevice->setRotateAndCropAutoBehavior(
         static_cast<camera_metadata_enum_android_scaler_rotate_and_crop_t>(rotateAndCrop));
+}
+
+bool Camera2Client::supportsCameraMute() {
+    return mDevice->supportsCameraMute();
+}
+
+status_t Camera2Client::setCameraMute(bool enabled) {
+    return mDevice->setCameraMute(enabled);
 }
 
 status_t Camera2Client::waitUntilCurrentRequestIdLocked() {

@@ -278,6 +278,12 @@ public:
         // Override rotate-and-crop AUTO behavior
         virtual status_t setRotateAndCropOverride(uint8_t rotateAndCrop) = 0;
 
+        // Whether the client supports camera muting (black only output)
+        virtual bool supportsCameraMute() = 0;
+
+        // Set/reset camera mute
+        virtual status_t setCameraMute(bool enabled) = 0;
+
     protected:
         BasicClient(const sp<CameraService>& cameraService,
                 const sp<IBinder>& remoteCallback,
@@ -631,9 +637,11 @@ private:
             public virtual IBinder::DeathRecipient {
         public:
             explicit SensorPrivacyPolicy(wp<CameraService> service)
-                    : mService(service), mSensorPrivacyEnabled(false), mRegistered(false) {}
+                    : mService(service), mSensorPrivacyEnabled(false), mRegistered(false),
+                      mIsIndividual(false), mUserId(0) {}
 
             void registerSelf();
+            status_t registerSelfForIndividual(int userId);
             void unregisterSelf();
 
             bool isSensorPrivacyEnabled();
@@ -649,6 +657,8 @@ private:
             Mutex mSensorPrivacyLock;
             bool mSensorPrivacyEnabled;
             bool mRegistered;
+            bool mIsIndividual;
+            userid_t mUserId;
     };
 
     sp<UidPolicy> mUidPolicy;
@@ -1023,6 +1033,9 @@ private:
     // Blocks all active clients.
     void blockAllClients();
 
+    // Mutes all active clients for a user.
+    void setMuteForAllClients(userid_t userId, bool enabled);
+
     // Overrides the UID state as if it is idle
     status_t handleSetUidState(const Vector<String16>& args, int err);
 
@@ -1043,6 +1056,9 @@ private:
 
     // Get the mask for image dump to disk
     status_t handleGetImageDumpMask(int out);
+
+    // Set the camera mute state
+    status_t handleSetCameraMute(const Vector<String16>& args);
 
     // Prints the shell command help
     status_t printHelp(int out);
@@ -1088,6 +1104,15 @@ private:
 
     // Current image dump mask
     uint8_t mImageDumpMask = 0;
+
+    // Current camera mute mode
+    bool mOverrideCameraMuteMode = false;
+
+    // Map from user to sensor privacy policy
+    std::map<userid_t, sp<SensorPrivacyPolicy>> mCameraSensorPrivacyPolicies;
+
+    // Checks if the sensor privacy is enabled for the uid
+    bool isUserSensorPrivacyEnabledForUid(uid_t uid);
 };
 
 } // namespace android

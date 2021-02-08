@@ -32,9 +32,7 @@ constexpr static uid_t OFFLINE_UID = -1;
 constexpr static int32_t IMPORTANCE_UNKNOWN = INT32_MAX;
 
 TranscodingUidPolicy::TranscodingUidPolicy()
-      : mUidObserver(nullptr),
-        mRegistered(false),
-        mTopUidState(IMPORTANCE_UNKNOWN) {
+      : mUidObserver(nullptr), mRegistered(false), mTopUidState(IMPORTANCE_UNKNOWN) {
     registerSelf();
 }
 
@@ -48,7 +46,7 @@ void TranscodingUidPolicy::OnUidImportance(uid_t uid, int32_t uidImportance, voi
 }
 
 void TranscodingUidPolicy::registerSelf() {
-    if (__builtin_available(android 31, *)) {
+    if (__builtin_available(android __TRANSCODING_MIN_API__, *)) {
         mUidObserver = AActivityManager_addUidImportanceListener(&OnUidImportance, -1, (void*)this);
     }
 
@@ -63,7 +61,7 @@ void TranscodingUidPolicy::registerSelf() {
 }
 
 void TranscodingUidPolicy::unregisterSelf() {
-    if (__builtin_available(android 31, *)) {
+    if (__builtin_available(android __TRANSCODING_MIN_API__, *)) {
         AActivityManager_removeUidImportanceListener(mUidObserver);
         mUidObserver = nullptr;
 
@@ -91,7 +89,7 @@ void TranscodingUidPolicy::registerMonitorUid(uid_t uid) {
     }
 
     int32_t state = IMPORTANCE_UNKNOWN;
-    if (__builtin_available(android 31, *)) {
+    if (__builtin_available(android __TRANSCODING_MIN_API__, *)) {
         if (mRegistered && AActivityManager_isUidActive(uid)) {
             state = AActivityManager_getUidImportance(uid);
         }
@@ -129,8 +127,7 @@ void TranscodingUidPolicy::unregisterMonitorUid(uid_t uid) {
 bool TranscodingUidPolicy::isUidOnTop(uid_t uid) {
     Mutex::Autolock _l(mUidLock);
 
-    return mTopUidState != IMPORTANCE_UNKNOWN &&
-           mTopUidState == getProcState_l(uid);
+    return mTopUidState != IMPORTANCE_UNKNOWN && mTopUidState == getProcState_l(uid);
 }
 
 std::unordered_set<uid_t> TranscodingUidPolicy::getTopUids() const {
@@ -155,12 +152,10 @@ void TranscodingUidPolicy::onUidStateChanged(uid_t uid, int32_t procState) {
             // Top set changed if 1) the uid is in the current top uid set, or 2) the
             // new procState is at least the same priority as the current top uid state.
             bool isUidCurrentTop =
-                    mTopUidState != IMPORTANCE_UNKNOWN &&
-                    mStateUidMap[mTopUidState].count(uid) > 0;
+                    mTopUidState != IMPORTANCE_UNKNOWN && mStateUidMap[mTopUidState].count(uid) > 0;
             bool isNewStateHigherThanTop =
                     procState != IMPORTANCE_UNKNOWN &&
-                    (procState <= mTopUidState ||
-                     mTopUidState == IMPORTANCE_UNKNOWN);
+                    (procState <= mTopUidState || mTopUidState == IMPORTANCE_UNKNOWN);
             topUidSetChanged = (isUidCurrentTop || isNewStateHigherThanTop);
 
             // Move uid to the new procState.
@@ -192,8 +187,7 @@ void TranscodingUidPolicy::updateTopUid_l() {
 
     // Find the lowest uid state (ignoring PROCESS_STATE_UNKNOWN) with some monitored uids.
     for (auto stateIt = mStateUidMap.begin(); stateIt != mStateUidMap.end(); stateIt++) {
-        if (stateIt->first != IMPORTANCE_UNKNOWN &&
-            !stateIt->second.empty()) {
+        if (stateIt->first != IMPORTANCE_UNKNOWN && !stateIt->second.empty()) {
             mTopUidState = stateIt->first;
             break;
         }

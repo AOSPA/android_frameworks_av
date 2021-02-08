@@ -180,7 +180,7 @@ public:
                                 const DeviceTypeSet& deviceTypes) const;
 
         // return the strategy corresponding to a given stream type
-        virtual uint32_t getStrategyForStream(audio_stream_type_t stream)
+        virtual product_strategy_t getStrategyForStream(audio_stream_type_t stream)
         {
             return streamToStrategy(stream);
         }
@@ -200,7 +200,7 @@ public:
         virtual audio_io_handle_t getOutputForEffect(const effect_descriptor_t *desc = NULL);
         virtual status_t registerEffect(const effect_descriptor_t *desc,
                                         audio_io_handle_t io,
-                                        uint32_t strategy,
+                                        product_strategy_t strategy,
                                         int session,
                                         int id);
         virtual status_t unregisterEffect(int id);
@@ -865,7 +865,8 @@ protected:
                                            audio_port_config *sourceConfig,
                                            audio_port_config *sinkConfig) const;
         PatchBuilder buildMsdPatch(const sp<DeviceDescriptor> &outputDevice) const;
-        status_t setMsdPatch(const sp<DeviceDescriptor> &outputDevice = nullptr);
+        status_t setMsdPatches(const DeviceVector *outputDevices = nullptr);
+        void releaseMsdPatches(const DeviceVector& devices);
 
         // If any, resolve any "dynamic" fields of an Audio Profiles collection
         void updateAudioProfiles(const sp<DeviceDescriptor>& devDesc, audio_io_handle_t ioHandle,

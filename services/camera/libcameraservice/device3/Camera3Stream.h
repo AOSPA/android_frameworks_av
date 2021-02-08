@@ -223,6 +223,11 @@ class Camera3Stream :
     bool             isUnpreparable();
 
     /**
+     * Mark the stream as unpreparable.
+     */
+    void             markUnpreparable() override;
+
+    /**
      * Start stream preparation. May only be called in the CONFIGURED state,
      * when no valid buffers have yet been returned to this stream. Prepares
      * up to maxCount buffers, or the maximum number of buffers needed by the
@@ -320,6 +325,12 @@ class Camera3Stream :
     status_t         getBuffer(camera_stream_buffer *buffer,
             nsecs_t waitBufferTimeout,
             const std::vector<size_t>& surface_ids = std::vector<size_t>());
+
+    /**
+     * Similar to getBuffer() except this method fills multiple buffers.
+     */
+    status_t         getBuffers(std::vector<OutstandingBuffer>* buffers,
+            nsecs_t waitBufferTimeout);
 
     /**
      * Return a buffer to the stream after use by the HAL.
@@ -495,7 +506,11 @@ class Camera3Stream :
     virtual status_t returnBufferLocked(const camera_stream_buffer &buffer,
             nsecs_t timestamp,
             const std::vector<size_t>& surface_ids = std::vector<size_t>());
+
+    virtual status_t getBuffersLocked(std::vector<OutstandingBuffer>*);
+
     virtual status_t getInputBufferLocked(camera_stream_buffer *buffer);
+
     virtual status_t returnInputBufferLocked(
             const camera_stream_buffer &buffer);
     virtual bool     hasOutstandingBuffersLocked() const = 0;
