@@ -220,16 +220,16 @@ public:
     virtual status_t    dump(int fd) = 0;
 
     virtual status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t flags) = 0;
-    virtual bool isOffloadSupported(const audio_offload_info_t& offloadInfo) = 0;
+    virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& offloadInfo) = 0;
     virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                          const audio_attributes_t& attributes) = 0;
 
     virtual status_t listAudioPorts(audio_port_role_t role,
                                     audio_port_type_t type,
                                     unsigned int *num_ports,
-                                    struct audio_port *ports,
+                                    struct audio_port_v7 *ports,
                                     unsigned int *generation) = 0;
-    virtual status_t getAudioPort(struct audio_port *port) = 0;
+    virtual status_t getAudioPort(struct audio_port_v7 *port) = 0;
     virtual status_t createAudioPatch(const struct audio_patch *patch,
                                        audio_patch_handle_t *handle,
                                        uid_t uid) = 0;
@@ -438,6 +438,8 @@ public:
                                                 std::vector<effect_descriptor_t> effects,
                                                 audio_patch_handle_t patchHandle,
                                                 audio_source_t source) = 0;
+
+    virtual void onRoutingUpdated() = 0;
 
     // Used to notify the sound trigger module that an audio capture is about to
     // take place. This should typically result in any active recognition

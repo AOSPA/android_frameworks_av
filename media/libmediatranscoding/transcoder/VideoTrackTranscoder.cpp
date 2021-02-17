@@ -18,6 +18,7 @@
 #define LOG_TAG "VideoTrackTranscoder"
 
 #include <android-base/logging.h>
+#include <android-base/properties.h>
 #include <media/NdkCommon.h>
 #include <media/VideoTrackTranscoder.h>
 #include <utils/AndroidThreads.h>
@@ -39,11 +40,16 @@ static constexpr int32_t kColorFormatSurface = 0x7f000789;
 // Default key frame interval in seconds.
 static constexpr float kDefaultKeyFrameIntervalSeconds = 1.0f;
 // Default codec operating rate.
-static constexpr int32_t kDefaultCodecOperatingRate = 240;
+static int32_t kDefaultCodecOperatingRate720P = base::GetIntProperty(
+        "debug.media.transcoding.codec_max_operating_rate_720P", /*default*/ 480);
+static int32_t kDefaultCodecOperatingRate1080P = base::GetIntProperty(
+        "debug.media.transcoding.codec_max_operating_rate_1080P", /*default*/ 240);
 // Default codec priority.
 static constexpr int32_t kDefaultCodecPriority = 1;
 // Default bitrate, in case source estimation fails.
 static constexpr int32_t kDefaultBitrateMbps = 10 * 1000 * 1000;
+// Default frame rate.
+static constexpr int32_t kDefaultFrameRate = 30;
 
 template <typename T>
 void VideoTrackTranscoder::BlockingQueue<T>::push(T const& value, bool front) {
@@ -179,6 +185,25 @@ VideoTrackTranscoder::~VideoTrackTranscoder() {
     }
 }
 
+// Search the default operating rate based on resolution.
+static int32_t getDefaultOperatingRate(AMediaFormat* encoderFormat) {
+    int32_t width, height;
+    if (AMediaFormat_getInt32(encoderFormat, AMEDIAFORMAT_KEY_WIDTH, &width) && (width > 0) &&
+        AMediaFormat_getInt32(encoderFormat, AMEDIAFORMAT_KEY_HEIGHT, &height) && (height > 0)) {
+        if ((width == 1280 && height == 720) || (width == 720 && height == 1280)) {
+            return kDefaultCodecOperatingRate720P;
+        } else if ((width == 1920 && height == 1080) || (width == 1080 && height == 1920)) {
+            return kDefaultCodecOperatingRate1080P;
+        } else {
+            LOG(WARNING) << "Could not find default operating rate: " << width << " " << height;
+            // Don't set operating rate if the correct dimensions are not found.
+        }
+    } else {
+        LOG(ERROR) << "Failed to get default operating rate due to missing resolution";
+    }
+    return -1;
+}
+
 // Creates and configures the codecs.
 media_status_t VideoTrackTranscoder::configureDestinationFormat(
         const std::shared_ptr<AMediaFormat>& destinationFormat) {
@@ -209,10 +234,15 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
 
     SetDefaultFormatValueFloat(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, encoderFormat,
                                kDefaultKeyFrameIntervalSeconds);
-    SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_OPERATING_RATE, encoderFormat,
-                               kDefaultCodecOperatingRate);
-    SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_PRIORITY, encoderFormat, kDefaultCodecPriority);
 
+    int32_t operatingRate = getDefaultOperatingRate(encoderFormat);
+
+    if (operatingRate != -1) {
+        SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_OPERATING_RATE, encoderFormat, operatingRate);
+    }
+
+    SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_PRIORITY, encoderFormat, kDefaultCodecPriority);
+    SetDefaultFormatValueInt32(AMEDIAFORMAT_KEY_FRAME_RATE, encoderFormat, kDefaultFrameRate);
     AMediaFormat_setInt32(encoderFormat, AMEDIAFORMAT_KEY_COLOR_FORMAT, kColorFormatSurface);
 
     // Always encode without rotation. The rotation degree will be transferred directly to
@@ -237,6 +267,7 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
     }
     mEncoder = std::make_shared<CodecWrapper>(encoder, shared_from_this());
 
+    LOG(DEBUG) << "Configuring encoder with: " << AMediaFormat_toString(mDestinationFormat.get());
     status = AMediaCodec_configure(mEncoder->getCodec(), mDestinationFormat.get(),
                                    NULL /* surface */, NULL /* crypto */,
                                    AMEDIACODEC_CONFIGURE_FLAG_ENCODE);
@@ -284,6 +315,7 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
     CopyFormatEntries(mDestinationFormat.get(), decoderFormat.get(), kEncoderEntriesToCopy,
                       entryCount);
 
+    LOG(DEBUG) << "Configuring decoder with: " << AMediaFormat_toString(decoderFormat.get());
     status = AMediaCodec_configure(mDecoder, decoderFormat.get(), mSurface, NULL /* crypto */,
                                    0 /* flags */);
     if (status != AMEDIA_OK) {

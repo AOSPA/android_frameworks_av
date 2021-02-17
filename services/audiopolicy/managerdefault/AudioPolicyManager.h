@@ -225,7 +225,7 @@ public:
         status_t dump(int fd) override;
 
         status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t capturePolicy) override;
-        virtual bool isOffloadSupported(const audio_offload_info_t& offloadInfo);
+        virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& offloadInfo);
 
         virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                              const audio_attributes_t& attributes);
@@ -233,9 +233,9 @@ public:
         virtual status_t listAudioPorts(audio_port_role_t role,
                                         audio_port_type_t type,
                                         unsigned int *num_ports,
-                                        struct audio_port *ports,
+                                        struct audio_port_v7 *ports,
                                         unsigned int *generation);
-        virtual status_t getAudioPort(struct audio_port *port);
+        virtual status_t getAudioPort(struct audio_port_v7 *port);
         virtual status_t createAudioPatch(const struct audio_patch *patch,
                                            audio_patch_handle_t *handle,
                                            uid_t uid) {
@@ -557,6 +557,11 @@ protected:
         void updateCallAndOutputRouting(bool forceVolumeReeval = true, uint32_t delayMs = 0);
 
         /**
+         * @brief updates routing for all inputs.
+         */
+        void updateInputRouting();
+
+        /**
          * @brief checkOutputForAttributes checks and if necessary changes outputs used for the
          * given audio attributes.
          * must be called every time a condition that affects the output choice for a given
@@ -813,6 +818,13 @@ protected:
         std::unordered_set<audio_format_t> mManualSurroundFormats;
 
         std::unordered_map<uid_t, audio_flags_mask_t> mAllowedCapturePolicies;
+
+        // The map of device descriptor and formats reported by the device.
+        std::map<wp<DeviceDescriptor>, FormatVector> mReportedFormatsMap;
+
+        // Cached product strategy ID corresponding to legacy strategy STRATEGY_PHONE
+        product_strategy_t mCommunnicationStrategy;
+
 private:
         void onNewAudioModulesAvailableInt(DeviceVector *newDevices);
 
@@ -969,6 +981,7 @@ protected:
                 std::function<bool(audio_devices_t)> predicate,
                 const char* context);
 
+        bool isScoRequestedForComm() const;
 };
 
 };

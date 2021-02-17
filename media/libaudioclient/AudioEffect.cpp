@@ -30,7 +30,7 @@
 #include <utils/Log.h>
 
 namespace android {
-
+using aidl_utils::statusTFromBinderStatus;
 using binder::Status;
 
 namespace {
@@ -268,7 +268,7 @@ status_t AudioEffect::setEnabled(bool enabled)
             bs = mIEffect->disable(&status);
         }
         if (!bs.isOk()) {
-            status = bs.transactionError();
+            status = statusTFromBinderStatus(bs);
         }
         if (status == NO_ERROR) {
             mEnabled = enabled;
@@ -309,7 +309,7 @@ status_t AudioEffect::command(uint32_t cmdCode,
 
     Status bs = mIEffect->command(cmdCode, data, *replySize, &response, &status);
     if (!bs.isOk()) {
-        status = bs.transactionError();
+        status = statusTFromBinderStatus(bs);
     }
     if (status == NO_ERROR) {
         memcpy(replyData, response.data(), response.size());
@@ -357,7 +357,7 @@ status_t AudioEffect::setParameter(effect_param_t *param)
                                   &response,
                                   &status);
     if (!bs.isOk()) {
-        status = bs.transactionError();
+        status = statusTFromBinderStatus(bs);
         return status;
     }
     assert(response.size() == sizeof(int));
@@ -416,7 +416,7 @@ status_t AudioEffect::setParameterCommit()
                                   &response,
                                   &status);
     if (!bs.isOk()) {
-        status = bs.transactionError();
+        status = statusTFromBinderStatus(bs);
     }
     return status;
 }
@@ -447,7 +447,7 @@ status_t AudioEffect::getParameter(effect_param_t *param)
 
     Status bs = mIEffect->command(EFFECT_CMD_GET_PARAM, cmd, psize, &response, &status);
     if (!bs.isOk()) {
-        status = bs.transactionError();
+        status = statusTFromBinderStatus(bs);
         return status;
     }
     memcpy(param, response.data(), response.size());

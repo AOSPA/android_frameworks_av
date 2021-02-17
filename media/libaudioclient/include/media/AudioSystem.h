@@ -20,12 +20,13 @@
 #include <sys/types.h>
 
 #include <android/media/BnAudioFlingerClient.h>
+#include <android/media/BnAudioPolicyServiceClient.h>
+#include <media/AidlConversionUtil.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioPolicy.h>
 #include <media/AudioProductStrategy.h>
 #include <media/AudioVolumeGroup.h>
 #include <media/AudioIoDescriptor.h>
-#include <media/IAudioPolicyServiceClient.h>
 #include <media/MicrophoneInfo.h>
 #include <set>
 #include <system/audio.h>
@@ -37,6 +38,23 @@
 
 namespace android {
 
+struct record_client_info {
+    audio_unique_id_t riid;
+    uid_t uid;
+    audio_session_t session;
+    audio_source_t source;
+    audio_port_handle_t port_id;
+    bool silenced;
+};
+
+typedef struct record_client_info record_client_info_t;
+
+// AIDL conversion functions.
+ConversionResult<record_client_info_t>
+aidl2legacy_RecordClientInfo_record_client_info_t(const media::RecordClientInfo& aidl);
+ConversionResult<media::RecordClientInfo>
+legacy2aidl_record_client_info_t_RecordClientInfo(const record_client_info_t& legacy);
+
 typedef void (*audio_error_callback)(status_t err);
 typedef void (*dynamic_policy_callback)(int event, String8 regId, int val);
 typedef void (*record_config_callback)(int event,
@@ -47,6 +65,7 @@ typedef void (*record_config_callback)(int event,
                                        std::vector<effect_descriptor_t> effects,
                                        audio_patch_handle_t patchHandle,
                                        audio_source_t source);
+typedef void (*routing_callback)();
 
 class IAudioFlinger;
 class IAudioPolicyService;
@@ -120,6 +139,7 @@ public:
 
     static void setDynPolicyCallback(dynamic_policy_callback cb);
     static void setRecordConfigCallback(record_config_callback);
+    static void setRoutingCallback(routing_callback cb);
 
     // helper function to obtain AudioFlinger service handle
     static const sp<IAudioFlinger> get_audio_flinger();
@@ -319,9 +339,10 @@ public:
 
     static status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t flags);
 
-    // Check if hw offload is possible for given format, stream type, sample rate,
-    // bit rate, duration, video and streaming or offload property is enabled
-    static bool isOffloadSupported(const audio_offload_info_t& info);
+    // Indicate if hw offload is possible for given format, stream type, sample rate,
+    // bit rate, duration, video and streaming or offload property is enabled and when possible
+    // if gapless transitions are supported.
+    static audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& info);
 
     // check presence of audio flinger service.
     // returns NO_ERROR if binding to service succeeds, DEAD_OBJECT otherwise
@@ -331,11 +352,11 @@ public:
     static status_t listAudioPorts(audio_port_role_t role,
                                    audio_port_type_t type,
                                    unsigned int *num_ports,
-                                   struct audio_port *ports,
+                                   struct audio_port_v7 *ports,
                                    unsigned int *generation);
 
     /* Get attributes for a given audio port */
-    static status_t getAudioPort(struct audio_port *port);
+    static status_t getAudioPort(struct audio_port_v7 *port);
 
     /* Create an audio patch between several source and sink ports */
     static status_t createAudioPatch(const struct audio_patch *patch,
@@ -579,7 +600,7 @@ private:
     };
 
     class AudioPolicyServiceClient: public IBinder::DeathRecipient,
-                                    public BnAudioPolicyServiceClient
+                                    public media::BnAudioPolicyServiceClient
     {
     public:
         AudioPolicyServiceClient() {
@@ -597,18 +618,21 @@ private:
         virtual void binderDied(const wp<IBinder>& who);
 
         // IAudioPolicyServiceClient
-        virtual void onAudioPortListUpdate();
-        virtual void onAudioPatchListUpdate();
-        virtual void onAudioVolumeGroupChanged(volume_group_t group, int flags);
-        virtual void onDynamicPolicyMixStateUpdate(String8 regId, int32_t state);
-        virtual void onRecordingConfigurationUpdate(int event,
-                                                    const record_client_info_t *clientInfo,
-                                                    const audio_config_base_t *clientConfig,
-                                                    std::vector<effect_descriptor_t> clientEffects,
-                                                    const audio_config_base_t *deviceConfig,
-                                                    std::vector<effect_descriptor_t> effects,
-                                                    audio_patch_handle_t patchHandle,
-                                                    audio_source_t source);
+        binder::Status onAudioVolumeGroupChanged(int32_t group, int32_t flags) override;
+        binder::Status onAudioPortListUpdate() override;
+        binder::Status onAudioPatchListUpdate() override;
+        binder::Status onDynamicPolicyMixStateUpdate(const std::string& regId,
+                                                     int32_t state) override;
+        binder::Status onRecordingConfigurationUpdate(
+                int32_t event,
+                const media::RecordClientInfo& clientInfo,
+                const media::AudioConfigBase& clientConfig,
+                const std::vector<media::EffectDescriptor>& clientEffects,
+                const media::AudioConfigBase& deviceConfig,
+                const std::vector<media::EffectDescriptor>& effects,
+                int32_t patchHandle,
+                media::AudioSourceType source) override;
+        binder::Status onRoutingUpdated();
 
     private:
         Mutex                               mLock;
@@ -635,6 +659,7 @@ private:
     static std::set<audio_error_callback> gAudioErrorCallbacks;
     static dynamic_policy_callback gDynPolicyCallback;
     static record_config_callback gRecordConfigCallback;
+    static routing_callback gRoutingCallback;
 
     static size_t gInBuffSize;
     // previous parameters for recording buffer size queries

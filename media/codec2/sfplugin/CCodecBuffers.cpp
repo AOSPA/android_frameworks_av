@@ -96,6 +96,9 @@ void CCodecBuffers::handleImageData(const sp<Codec2Buffer> &buffer) {
                 int32_t vstride = int32_t(offsetDelta / stride);
                 newFormat->setInt32(KEY_SLICE_HEIGHT, vstride);
                 ALOGD("[%s] updating vstride = %d", mName, vstride);
+                buffer->setRange(
+                        img->mPlane[0].mOffset,
+                        buffer->size() - img->mPlane[0].mOffset);
             }
         }
         setFormat(newFormat);
@@ -804,8 +807,9 @@ sp<Codec2Buffer> LinearInputBuffers::Alloc(
         capacity = kMaxLinearBufferSize;
     }
 
-    // TODO: read usage from intf
-    C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+    int64_t usageValue = 0;
+    (void)format->findInt64("android._C2MemoryUsage", &usageValue);
+    C2MemoryUsage usage{usageValue | C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE};
     std::shared_ptr<C2LinearBlock> block;
 
     c2_status_t err = pool->fetchLinearBlock(capacity, usage, &block);
@@ -1037,8 +1041,9 @@ size_t GraphicInputBuffers::numActiveSlots() const {
 }
 
 sp<Codec2Buffer> GraphicInputBuffers::createNewBuffer() {
-    // TODO: read usage from intf
-    C2MemoryUsage usage = { C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE };
+    int64_t usageValue = 0;
+    (void)mFormat->findInt64("android._C2MemoryUsage", &usageValue);
+    C2MemoryUsage usage{usageValue | C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE};
     return AllocateGraphicBuffer(
             mPool, mFormat, HAL_PIXEL_FORMAT_YV12, usage, mLocalBufferPool);
 }
