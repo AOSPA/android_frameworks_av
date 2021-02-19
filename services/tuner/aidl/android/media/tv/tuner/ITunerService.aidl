@@ -22,6 +22,7 @@ import android.hardware.common.fmq.UnsynchronizedWrite;
 import android.media.tv.tuner.ITunerDemux;
 import android.media.tv.tuner.ITunerFrontend;
 import android.media.tv.tuner.ITunerLnb;
+import android.media.tv.tuner.TunerDemuxCapabilities;
 import android.media.tv.tuner.TunerFrontendInfo;
 
 /**
@@ -34,10 +35,8 @@ interface ITunerService {
 
     /**
      * Gets frontend IDs.
-     *
-     * @return the result code of the operation.
      */
-    int getFrontendIds(out int[] ids);
+    void getFrontendIds(out int[] ids);
 
     /**
      * Retrieve the frontend's information.
@@ -82,4 +81,17 @@ interface ITunerService {
      * Create a new instance of Demux.
      */
     ITunerDemux openDemux(in int demuxHandle);
+
+    /**
+     * Retrieve the Tuner Demux capabilities.
+     *
+     * @return the demux’s capabilities.
+     */
+    TunerDemuxCapabilities getDemuxCaps();
+
+    /**
+     * Update Tuner Resources in TunerResourceManager.
+     */
+    // TODO: b/178124017 update TRM in TunerService independently.
+    void updateTunerResources();
 }

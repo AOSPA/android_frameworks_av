@@ -33,4 +33,11 @@ parcelable TunerFrontendAnalogSettings {
      * Standard Interchange Format (SIF) setting
      */
     int sifStandard;
+
+    /**
+     * Fields after isExtended are only valid when isExtended is true
+     */
+    boolean isExtended;
+
+    int aftFlag;
 }

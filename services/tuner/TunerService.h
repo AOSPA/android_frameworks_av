@@ -17,6 +17,7 @@
 #ifndef ANDROID_MEDIA_TUNERSERVICE_H
 #define ANDROID_MEDIA_TUNERSERVICE_H
 
+#include <aidl/android/media/tv/tunerresourcemanager/ITunerResourceManager.h>
 #include <aidl/android/media/tv/tuner/BnTunerService.h>
 #include <android/hardware/tv/tuner/1.0/ITuner.h>
 #include <fmq/AidlMessageQueue.h>
@@ -30,15 +31,19 @@ using ::aidl::android::media::tv::tuner::BnTunerService;
 using ::aidl::android::media::tv::tuner::ITunerDemux;
 using ::aidl::android::media::tv::tuner::ITunerFrontend;
 using ::aidl::android::media::tv::tuner::ITunerLnb;
+using ::aidl::android::media::tv::tuner::TunerDemuxCapabilities;
 using ::aidl::android::media::tv::tuner::TunerFrontendInfo;
+using ::aidl::android::media::tv::tunerresourcemanager::ITunerResourceManager;
 
 using ::android::hardware::details::logError;
-using ::android::hardware::EventFlag;
+using ::android::hardware::hidl_vec;
 using ::android::hardware::kSynchronizedReadWrite;
+using ::android::hardware::EventFlag;
 using ::android::hardware::MessageQueue;
 using ::android::hardware::MQDescriptorSync;
 using ::android::hardware::Return;
 using ::android::hardware::Void;
+using ::android::hardware::tv::tuner::V1_0::DemuxCapabilities;
 using ::android::hardware::tv::tuner::V1_0::DemuxFilterAvSettings;
 using ::android::hardware::tv::tuner::V1_0::DemuxFilterEvent;
 using ::android::hardware::tv::tuner::V1_0::DemuxFilterMainType;
@@ -94,7 +99,14 @@ public:
         return (resourceHandle & 0x00ff0000) >> 16;
     }
 
-    Status getFrontendIds(vector<int32_t>* ids, int32_t* _aidl_return) override;
+    int getResourceHandleFromId(int id, int resourceType) {
+        // TODO: build up randomly generated id to handle mapping
+        return (resourceType & 0x000000ff) << 24
+                | (id << 16)
+                | (mResourceRequestCount++ & 0xffff);
+    }
+
+    Status getFrontendIds(vector<int32_t>* ids) override;
     Status getFrontendInfo(int32_t frontendHandle, TunerFrontendInfo* _aidl_return) override;
     Status openFrontend(
             int32_t frontendHandle, shared_ptr<ITunerFrontend>* _aidl_return) override;
@@ -103,24 +115,32 @@ public:
     Status openLnb(int lnbHandle, shared_ptr<ITunerLnb>* _aidl_return) override;
     Status openLnbByName(const string& lnbName, shared_ptr<ITunerLnb>* _aidl_return) override;
     Status openDemux(int32_t demuxHandle, std::shared_ptr<ITunerDemux>* _aidl_return) override;
+    Status getDemuxCaps(TunerDemuxCapabilities* _aidl_return) override;
+    Status updateTunerResources() override;
 
 private:
-    template <typename HidlPayload, typename AidlPayload, typename AidlFlavor>
-    bool unsafeHidlToAidlMQDescriptor(
-            const hardware::MQDescriptor<HidlPayload, FlavorTypeToValue<AidlFlavor>::value>& hidl,
-            MQDescriptor<AidlPayload, AidlFlavor>* aidl);
-
     bool getITuner();
     Result configFilter();
 
+    void updateFrontendResources();
+    void updateLnbResources();
+    Result getHidlFrontendIds(hidl_vec<FrontendId>& ids);
+    Result getHidlFrontendInfo(int id, FrontendInfo& info);
+    vector<int> getLnbHandles();
+
+    TunerDemuxCapabilities getAidlDemuxCaps(DemuxCapabilities caps);
+    TunerFrontendInfo convertToAidlFrontendInfo(FrontendInfo halInfo);
+
     sp<ITuner> mTuner;
-    std::shared_ptr<ITunerDemux> mDemux;
     sp<IFilter> mFilter;
+
+    shared_ptr<ITunerResourceManager> mTunerResourceManager;
+    int mResourceRequestCount = 0;
+
     AidlMessageQueue* mAidlMq;
     MQDescriptorSync<uint8_t> mFilterMQDesc;
     AidlMQDesc mAidlMQDesc;
     EventFlag* mEventFlag;
-    TunerFrontendInfo convertToAidlFrontendInfo(FrontendInfo halInfo);
 };
 
 } // namespace android
