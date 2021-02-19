@@ -97,12 +97,10 @@ private:
     BlockingQueue<std::function<void()>> mCodecMessageQueue;
     std::shared_ptr<AMediaFormat> mDestinationFormat;
     std::shared_ptr<AMediaFormat> mActualOutputFormat;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-private-field"
-    // These could be unused on older platforms
     pid_t mPid;
     uid_t mUid;
-#pragma clang diagnostic pop
+    uint64_t mInputFrameCount = 0;
+    uint64_t mOutputFrameCount = 0;
 };
 
 }  // namespace android
