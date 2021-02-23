@@ -780,6 +780,22 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
     // check for device and output changes triggered by new phone state
     checkForDeviceAndOutputChanges();
 
+    sp<SwAudioOutputDescriptor> outputDesc;
+    bool voiceDSDConcurrency = property_get_bool("vendor.voice.dsd.playback.conc.disabled", true );
+    if (voiceDSDConcurrency) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            outputDesc = mOutputs.valueAt(i);
+            if (outputDesc != nullptr && outputDesc->mProfile != nullptr &&
+                (outputDesc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) &&
+                (outputDesc->getFormat() == AUDIO_FORMAT_DSD)) {
+                ALOGD("voice_conc:calling closeOutput on call mode for DSD COMPRESS output");
+                closeOutput(mOutputs.keyAt(i));
+                // call invalidate for music, so that DSD compress will fallback to deep-buffer.
+                mpClientInterface->invalidateStream(AUDIO_STREAM_MUSIC);
+            }
+        }
+    }
+
     int delayMs = 0;
     if (isStateInCall(state)) {
         nsecs_t sysTime = systemTime();
