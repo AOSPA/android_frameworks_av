@@ -1164,6 +1164,30 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     return NO_ERROR;
 }
 
+void AudioPolicyManager::checkAndUpdateOffloadInfoForDirectTracks(
+        const audio_attributes_t *attr,
+        audio_stream_type_t *stream,
+        audio_config_t *config,
+        audio_output_flags_t *flags)
+{
+    audio_offload_info_t tOffloadInfo = AUDIO_INFO_INITIALIZER;
+    // set offloadInfo for directTracks, If already not set.
+    if (!memcmp(&config->offload_info, &tOffloadInfo, sizeof(audio_offload_info_t))) {
+        bool trackDirectPCM = false;
+        if (*flags == AUDIO_OUTPUT_FLAG_NONE)
+            trackDirectPCM = property_get_bool("vendor.audio.offload.track.enable", true);
+        if (*flags == AUDIO_OUTPUT_FLAG_DIRECT || trackDirectPCM) {
+            ALOGV("Update offload config for direct track");
+            config->offload_info.sample_rate  = config->sample_rate;
+            config->offload_info.channel_mask = config->channel_mask;
+            config->offload_info.format = config->format;
+            config->offload_info.stream_type = *stream;
+            config->offload_info.bit_width = audio_bytes_per_sample(config->format) * 8;
+            config->offload_info.usage = attr != NULL ? attr->usage : config->offload_info.usage;
+        }
+    }
+}
+
 status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
                                               audio_io_handle_t *output,
                                               audio_session_t session,
@@ -1192,8 +1216,11 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
       requestedDevice != nullptr ? requestedPortId : AUDIO_PORT_HANDLE_NONE;
     *selectedDeviceId = sanitizedRequestedPortId;
 
+    audio_config_t directConfig = *config;
+    checkAndUpdateOffloadInfoForDirectTracks(attr, stream, &directConfig, flags);
+
     status_t status = getOutputForAttrInt(&resultAttr, output, session, attr, stream, uid,
-            config, flags, selectedDeviceId, &isRequestedDeviceForExclusiveUse,
+            &directConfig, flags, selectedDeviceId, &isRequestedDeviceForExclusiveUse,
             secondaryOutputs != nullptr ? &secondaryMixes : nullptr, outputType);
     if (status != NO_ERROR) {
         return status;

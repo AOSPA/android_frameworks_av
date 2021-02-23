@@ -922,6 +922,12 @@ protected:
                 audio_output_flags_t flags,
                 const DeviceVector &devices,
                 audio_io_handle_t *output);
+        // Internal method checking If direct pcm track's offloadInfo needs to be updated.
+        void checkAndUpdateOffloadInfoForDirectTracks(
+                const audio_attributes_t *attr,
+                audio_stream_type_t *stream,
+                audio_config_t *config,
+                audio_output_flags_t *flags);
         /**
          * @brief getInputForDevice selects an input handle for a given input device and
          * requester context
