@@ -285,13 +285,14 @@ public:
 
     virtual status_t listAudioProductStrategies(AudioProductStrategyVector &strategies) = 0;
 
-    virtual status_t getProductStrategyFromAudioAttributes(const AudioAttributes &aa,
-                                                           product_strategy_t &productStrategy) = 0;
+    virtual status_t getProductStrategyFromAudioAttributes(
+            const AudioAttributes &aa, product_strategy_t &productStrategy,
+            bool fallbackOnDefault) = 0;
 
     virtual status_t listAudioVolumeGroups(AudioVolumeGroupVector &groups) = 0;
 
-    virtual status_t getVolumeGroupFromAudioAttributes(const AudioAttributes &aa,
-                                                       volume_group_t &volumeGroup) = 0;
+    virtual status_t getVolumeGroupFromAudioAttributes(
+            const AudioAttributes &aa, volume_group_t &volumeGroup, bool fallbackOnDefault) = 0;
 
     virtual bool     isCallScreenModeSupported() = 0;
 
@@ -450,9 +451,11 @@ public:
     virtual status_t getAudioPort(struct audio_port_v7 *port) = 0;
 };
 
-extern "C" AudioPolicyInterface* createAudioPolicyManager(AudioPolicyClientInterface *clientInterface);
-extern "C" void destroyAudioPolicyManager(AudioPolicyInterface *interface);
-
+    // These are the signatures of createAudioPolicyManager/destroyAudioPolicyManager
+    // methods respectively, expected by AudioPolicyService, needs to be exposed by
+    // libaudiopolicymanagercustom.
+    using CreateAudioPolicyManagerInstance = AudioPolicyInterface* (*)(AudioPolicyClientInterface*);
+    using DestroyAudioPolicyManagerInstance = void (*)(AudioPolicyInterface*);
 
 } // namespace android
 

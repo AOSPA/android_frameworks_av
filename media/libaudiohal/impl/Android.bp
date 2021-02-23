@@ -1,3 +1,12 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_av_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
 cc_defaults {
     name: "libaudiohal_default",
 
@@ -26,7 +35,7 @@ cc_defaults {
         "android.hardware.audio.common-util",
         "android.hidl.allocator@1.0",
         "android.hidl.memory@1.0",
-        "av-types-aidl-unstable-cpp",
+        "av-types-aidl-cpp",
         "libaudiofoundation",
         "libaudiohal_deathhandler",
         "libaudioutils",
