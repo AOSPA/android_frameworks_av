@@ -1382,14 +1382,15 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     if ((*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) {
         *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_DIRECT);
     }
+    bool forceDeepBuffer = false;
     // only allow deep buffering for music stream type
     if (stream != AUDIO_STREAM_MUSIC) {
         *flags = (audio_output_flags_t)(*flags &~AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
-    } else if (/* stream == AUDIO_STREAM_MUSIC && */
-            *flags == AUDIO_OUTPUT_FLAG_NONE &&
-            property_get_bool("audio.deep_buffer.media", false /* default_value */)) {
+    } else if ((*flags == AUDIO_OUTPUT_FLAG_NONE || *flags == AUDIO_OUTPUT_FLAG_DIRECT ||
+                (*flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)) && !isInCall() &&
+                property_get_bool("audio.deep_buffer.media", false /* default_value */)) {
         // use DEEP_BUFFER as default output for music stream type
-        *flags = (audio_output_flags_t)AUDIO_OUTPUT_FLAG_DEEP_BUFFER;
+        forceDeepBuffer = true;
     }
     if (stream == AUDIO_STREAM_TTS) {
         *flags = AUDIO_OUTPUT_FLAG_TTS;
@@ -1426,6 +1427,10 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
 
         // at this stage we should ignore the DIRECT flag as no direct output could be found earlier
         *flags = (audio_output_flags_t)(*flags & ~AUDIO_OUTPUT_FLAG_DIRECT);
+        *flags = forceDeepBuffer ? AUDIO_OUTPUT_FLAG_DEEP_BUFFER :
+                 (*flags == AUDIO_OUTPUT_FLAG_NONE) ? AUDIO_OUTPUT_FLAG_PRIMARY : *flags;
+        ALOGI("%s forced deep-buffer (%s) flags (%0x)", __func__,
+                forceDeepBuffer ? "yes": "no" , *flags);
         output = selectOutput(
                 outputs, *flags, config->format, channelMask, config->sample_rate, session);
     }
