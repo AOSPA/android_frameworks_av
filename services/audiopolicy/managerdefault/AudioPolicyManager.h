@@ -853,6 +853,7 @@ protected:
 
 private:
         void onNewAudioModulesAvailableInt(DeviceVector *newDevices);
+        void chkDpConnAndAllowedForVoice(audio_devices_t device, audio_policy_dev_state_t state);
 
 protected:
         // Add or remove AC3 DTS encodings based on user preferences.
