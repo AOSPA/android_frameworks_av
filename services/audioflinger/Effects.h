@@ -373,8 +373,8 @@ private:
     DISALLOW_COPY_AND_ASSIGN(EffectHandle);
 
     Mutex mLock;                             // protects IEffect method calls
-    wp<EffectBase> mEffect;                  // pointer to controlled EffectModule
-    sp<media::IEffectClient> mEffectClient;  // callback interface for client notifications
+    const wp<EffectBase> mEffect;            // pointer to controlled EffectModule
+    const sp<media::IEffectClient> mEffectClient;  // callback interface for client notifications
     /*const*/ sp<Client> mClient;            // client for shared memory allocation, see
                                              //   disconnect()
     sp<IMemory> mCblkMemory;                 // shared memory for control block
@@ -512,14 +512,21 @@ public:
 
 private:
 
+    // For transaction consistency, please consider holding the EffectChain lock before
+    // calling the EffectChain::EffectCallback methods, excepting
+    // createEffectHal and allocateHalBuffer.
+    //
+    // This prevents migration of the EffectChain to another PlaybackThread
+    // for the purposes of the EffectCallback.
     class EffectCallback :  public EffectCallbackInterface {
     public:
         // Note: ctors taking a weak pointer to their owner must not promote it
         // during construction (but may keep a reference for later promotion).
         EffectCallback(const wp<EffectChain>& owner,
                        const wp<ThreadBase>& thread)
-            : mChain(owner) {
-            setThread(thread);
+            : mChain(owner)
+            , mThread(thread)
+            , mAudioFlinger(*gAudioFlinger) {
         }
 
         status_t createEffectHal(const effect_uuid_t *pEffectUuid,
@@ -556,18 +563,16 @@ private:
 
         wp<EffectChain> chain() const override { return mChain; }
 
-        wp<ThreadBase> thread() { return mThread; }
+        wp<ThreadBase> thread() const { return mThread.load(); }
 
         void setThread(const wp<ThreadBase>& thread) {
             mThread = thread;
-            sp<ThreadBase> p = thread.promote();
-            mAudioFlinger = p ? p->mAudioFlinger : nullptr;
         }
 
     private:
-        wp<EffectChain> mChain;
-        wp<ThreadBase> mThread;
-        wp<AudioFlinger> mAudioFlinger;
+        const wp<EffectChain> mChain;
+        mediautils::atomic_wp<ThreadBase> mThread;
+        AudioFlinger &mAudioFlinger;  // implementation detail: outer instance always exists.
     };
 
     friend class AudioFlinger;  // for mThread, mEffects
