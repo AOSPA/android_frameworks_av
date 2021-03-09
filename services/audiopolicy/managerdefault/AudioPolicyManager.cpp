@@ -1294,14 +1294,15 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
         return NAME_NOT_FOUND;
     }
 
-    // Do not allow offloading if one non offloadable effect is enabled or MasterMono is enabled.
-    // This prevents creating an offloaded track and tearing it down immediately after start
-    // when audioflinger detects there is an active non offloadable effect.
+    // Do not allow offloading or direct if one non offloadable effect is enabled or
+    // MasterMono is enabled. This prevents creating an offloaded or direct track
+    // and tearing it down immediately after start when audioflinger detects there
+    // is an active non offloadable effect.
     // FIXME: We should check the audio session here but we do not have it in this context.
     // This may prevent offloading in rare situations where effects are left active by apps
     // in the background.
     sp<IOProfile> profile;
-    if (((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0) ||
+    if (((flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0) ||
             !(mEffects.isNonOffloadableEffectEnabled() || mMasterMono)) {
         profile = getProfileForOutput(
                 devices, config->sample_rate, config->format, config->channel_mask,
@@ -1311,32 +1312,63 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     if (profile == nullptr) {
         return NAME_NOT_FOUND;
     }
+    if (!(flags & AUDIO_OUTPUT_FLAG_DIRECT) &&
+         (profile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT)) {
+        ALOGI("%s rejecting direct profile as was not requested ", __func__);
+        profile = nullptr;
+        return NAME_NOT_FOUND;
+    }
 
+    sp<SwAudioOutputDescriptor> outputDesc = nullptr;
+    // check if direct output for pcm/track offload or compress offload already exist
+    bool directSessionInUse = false;
+    bool offloadSessionInUse = false;
     // exclusive outputs for MMAP and Offload are enforced by different session ids.
-    for (size_t i = 0; i < mOutputs.size(); i++) {
-        sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-        if (!desc->isDuplicated() && (profile == desc->mProfile)) {
-            // reuse direct output if currently open by the same client
-            // and configured with same parameters
-            if ((config->sample_rate == desc->getSamplingRate()) &&
-                (config->format == desc->getFormat()) &&
-                (config->channel_mask == desc->getChannelMask()) &&
-                (session == desc->mDirectClientSession)) {
-                desc->mDirectOpenCount++;
-                ALOGI("%s reusing direct output %d for session %d", __func__,
-                    mOutputs.keyAt(i), session);
-                *output = mOutputs.keyAt(i);
-                return NO_ERROR;
+    if (!(property_get_bool("vendor.audio.offload.multiple.enabled", false) &&
+          ((flags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) &&
+          (flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) == 0)) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+            if (!desc->isDuplicated() && (profile == desc->mProfile)) {
+                 outputDesc = desc;
+                // reuse direct output if currently open by the same client
+                // and configured with same parameters
+                if ((config->sample_rate == desc->getSamplingRate()) &&
+                    (config->format == desc->getFormat()) &&
+                    (config->channel_mask == desc->getChannelMask()) &&
+                    (session == desc->mDirectClientSession)) {
+                    desc->mDirectOpenCount++;
+                    ALOGI("%s reusing direct output %d for session %d", __func__,
+                        mOutputs.keyAt(i), session);
+                    *output = mOutputs.keyAt(i);
+                    return NO_ERROR;
+                }
+                if (desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
+                    directSessionInUse = true;
+                    ALOGD("%s Direct PCM already in use", __func__);
+                }
+                if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
+                    offloadSessionInUse = true;
+                    ALOGD("%s Compress Offload already in use", __func__);
+                }
+            }
+        }
+        if (outputDesc != nullptr) {
+            if ((((flags == AUDIO_OUTPUT_FLAG_DIRECT) && directSessionInUse) ||
+                ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse)) &&
+                 session != outputDesc->mDirectClientSession) {
+                 ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
+                       "is not the same as requesting client (%d) for different output conf",
+                 outputDesc->mDirectClientSession, session);
+                 return NAME_NOT_FOUND;
             }
         }
     }
-
     if (!profile->canOpenNewIo()) {
         return NAME_NOT_FOUND;
     }
 
-    sp<SwAudioOutputDescriptor> outputDesc =
-            new SwAudioOutputDescriptor(profile, mpClientInterface);
+    outputDesc = new SwAudioOutputDescriptor(profile, mpClientInterface);
 
     // An MSD patch may be using the only output stream that can service this request. Release
     // all MSD patches to prioritize this request over any active output on MSD.
