@@ -741,10 +741,10 @@ status_t VideoFrameDecoder::captureSurface() {
 
 ////////////////////////////////////////////////////////////////////////
 
-struct ImageDecoder::ImageInputThread : public Thread {
-    ImageInputThread(ImageDecoder *imageDecoder)
+struct MediaImageDecoder::ImageInputThread : public Thread {
+    ImageInputThread(MediaImageDecoder *mediaImageDecoder)
         : Thread(false /*canCallJava*/),
-          mImageDecoder(imageDecoder) {
+          mImageDecoder(mediaImageDecoder) {
         ALOGD("ImageInputThread created");
     }
 
@@ -758,12 +758,12 @@ protected:
     }
 
 private:
-    ImageDecoder *mImageDecoder;
+    MediaImageDecoder *mImageDecoder;
 
     DISALLOW_EVIL_CONSTRUCTORS(ImageInputThread);
 };
 
-ImageDecoder::ImageDecoder(
+MediaImageDecoder::MediaImageDecoder(
         const AString &componentName,
         const sp<MetaData> &trackMeta,
         const sp<IMediaSource> &source)
@@ -781,14 +781,14 @@ ImageDecoder::ImageDecoder(
       mUseMultiThread(false) {
 }
 
-ImageDecoder::~ImageDecoder() {
+MediaImageDecoder::~MediaImageDecoder() {
     if (mThread != NULL) {
         mThread->requestExitAndWait();
         mThread.clear();
     }
 }
 
-sp<AMessage> ImageDecoder::onGetFormatAndSeekOptions(
+sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
         int64_t frameTimeUs, int /*seekMode*/,
         MediaSource::ReadOptions *options, sp<Surface> * /*window*/) {
     sp<MetaData> overrideMeta;
@@ -870,7 +870,7 @@ sp<AMessage> ImageDecoder::onGetFormatAndSeekOptions(
     return videoFormat;
 }
 
-status_t ImageDecoder::onExtractRect(FrameRect *rect) {
+status_t MediaImageDecoder::onExtractRect(FrameRect *rect) {
     // TODO:
     // This callback is for verifying whether we can decode the rect,
     // and if so, set up the internal variables for decoding.
@@ -909,7 +909,7 @@ status_t ImageDecoder::onExtractRect(FrameRect *rect) {
     return OK;
 }
 
-status_t ImageDecoder::onOutputReceived(
+status_t MediaImageDecoder::onOutputReceived(
         const sp<MediaCodecBuffer> &videoFrameBuffer,
         const sp<AMessage> &outputFormat, int64_t /*timeUs*/, bool *done) {
     if (outputFormat == NULL) {
@@ -996,7 +996,7 @@ status_t ImageDecoder::onOutputReceived(
     return ERROR_UNSUPPORTED;
 }
 
-bool ImageDecoder::inputLoop() {
+bool MediaImageDecoder::inputLoop() {
     status_t err = OK;
     size_t index;
     int64_t ptsUs = 0LL;
@@ -1070,7 +1070,7 @@ bool ImageDecoder::inputLoop() {
     return mHaveMoreInputs;
 }
 
-status_t ImageDecoder::extractInternal() {
+status_t MediaImageDecoder::extractInternal() {
     status_t err = OK;
     bool done = false;
     size_t retriesLeft = kRetryCount;
