@@ -307,7 +307,8 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
                 mEngine->getActiveMediaDevices(mAvailableOutputDevices);
         for (size_t i = 0; i < mOutputs.size(); i++) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-            if ((mEngine->getPhoneState() != AUDIO_MODE_IN_CALL) || (desc != mPrimaryOutput)) {
+            if (desc->isActive() && ((mEngine->getPhoneState() != AUDIO_MODE_IN_CALL) ||
+                (desc != mPrimaryOutput))) {
                 DeviceVector newDevices = getNewOutputDevices(desc, true /*fromCache*/);
                 // do not force device change on duplicated output because if device is 0, it will
                 // also force a device 0 for the two outputs it is duplicated to which may override
@@ -2320,7 +2321,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
         *inputType = API_INPUT_LEGACY;
         device = inputDesc->getDevice();
 
-        ALOGI("%s reusing MMAP input %d for session %d", __FUNCTION__, *input, session);
+        ALOGV("%s reusing MMAP input %d for session %d", __FUNCTION__, *input, session);
         goto exit;
     }
 
@@ -3492,6 +3493,11 @@ void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint
 
 void AudioPolicyManager::updateInputRouting() {
     for (const auto& activeDesc : mInputs.getActiveInputs()) {
+        // Skip for hotword recording as the input device switch
+        // is handled within sound trigger HAL
+        if (activeDesc->isSoundTrigger() && activeDesc->source() == AUDIO_SOURCE_HOTWORD) {
+            continue;
+        }
         auto newDevice = getNewInputDevice(activeDesc);
         // Force new input selection if the new device can not be reached via current input
         if (activeDesc->mProfile->getSupportedDevices().contains(newDevice)) {
@@ -3505,7 +3511,7 @@ void AudioPolicyManager::updateInputRouting() {
 status_t AudioPolicyManager::removeDevicesRoleForStrategy(product_strategy_t strategy,
                                                           device_role_t role)
 {
-    ALOGI("%s() strategy=%d role=%d", __func__, strategy, role);
+    ALOGV("%s() strategy=%d role=%d", __func__, strategy, role);
 
     status_t status = mEngine->removeDevicesRoleForStrategy(strategy, role);
     if (status != NO_ERROR) {
@@ -3607,7 +3613,7 @@ status_t AudioPolicyManager::getDevicesForRoleAndCapturePreset(
 
 status_t AudioPolicyManager::setUserIdDeviceAffinities(int userId,
         const AudioDeviceTypeAddrVector& devices) {
-    ALOGI("%s() userId=%d num devices %zu", __func__, userId, devices.size());
+    ALOGV("%s() userId=%d num devices %zu", __func__, userId, devices.size());
     if (!areAllDevicesSupported(devices, audio_is_output_device, __func__)) {
         return BAD_VALUE;
     }
@@ -3626,7 +3632,7 @@ status_t AudioPolicyManager::setUserIdDeviceAffinities(int userId,
 }
 
 status_t AudioPolicyManager::removeUserIdDeviceAffinities(int userId) {
-    ALOGI("%s() userId=%d", __FUNCTION__, userId);
+    ALOGV("%s() userId=%d", __FUNCTION__, userId);
     status_t status = mPolicyMixes.removeUserIdDeviceAffinities(userId);
     if (status != NO_ERROR) {
         ALOGE("%s() Could not remove all device affinities fo userId = %d",
@@ -5193,7 +5199,8 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
             const DeviceVector &supportedDevices = inProfile->getSupportedDevices();
             DeviceVector availProfileDevices = supportedDevices.filter(mInputDevicesAll);
             if (availProfileDevices.isEmpty()) {
-                ALOGE("%s: Input device list is empty!", __FUNCTION__);
+                ALOGV("%s: Input device list is empty! for profile %s",
+                    __func__, inProfile->getTagName().c_str());
                 continue;
             }
             sp<AudioInputDescriptor> inputDesc =
@@ -5995,14 +6002,29 @@ DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescr
     for (const auto &productStrategy : mEngine->getOrderedProductStrategies()) {
         StreamTypeVector streams = mEngine->getStreamTypesForProductStrategy(productStrategy);
         auto attr = mEngine->getAllAttributesForProductStrategy(productStrategy).front();
+        auto hasStreamActive = [&](auto stream) {
+            return hasStream(streams, stream) && isStreamActive(stream, 0);
+        };
 
-        if ((hasVoiceStream(streams) &&
-             (outputDesc->isActive(toVolumeSource(AUDIO_STREAM_VOICE_CALL)) || outputDesc == mPrimaryOutput) &&
-             (isInCall() || mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc))) ||
-             (((hasStream(streams, AUDIO_STREAM_ALARM) && isStreamActive(AUDIO_STREAM_ALARM, 0)) ||
-               (hasStream(streams, AUDIO_STREAM_ENFORCED_AUDIBLE) && isStreamActive(AUDIO_STREAM_ENFORCED_AUDIBLE, 0))) &&
-                mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc)) ||
-                outputDesc->isStrategyActive(productStrategy)) {
+        auto doGetOutputDevicesForVoice = [&]() {
+            return hasVoiceStream(streams) && (outputDesc == mPrimaryOutput ||
+                outputDesc->isActive(toVolumeSource(AUDIO_STREAM_VOICE_CALL))) &&
+                (isInCall() ||
+                 mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc));
+        };
+
+        // With low-latency playing on speaker, music on WFD, when the first low-latency
+        // output is stopped, getNewOutputDevices checks for a product strategy
+        // from the list, as STRATEGY_SONIFICATION comes prior to STRATEGY_MEDIA.
+        // If an ALARM or ENFORCED_AUDIBLE stream is supported by the product strategy,
+        // devices are returned for STRATEGY_SONIFICATION without checking whether the
+        // stream is associated to the output descriptor.
+        if (doGetOutputDevicesForVoice() || outputDesc->isStrategyActive(productStrategy) ||
+               ((hasStreamActive(AUDIO_STREAM_ALARM) ||
+                hasStreamActive(AUDIO_STREAM_ENFORCED_AUDIBLE)) &&
+                (outputDesc->isActive(toVolumeSource(AUDIO_STREAM_VOICE_CALL)) ||
+                 outputDesc == mPrimaryOutput) &&
+                mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc))) {
             // Retrieval of devices for voice DL is done on primary output profile, cannot
             // check the route (would force modifying configuration file for this profile)
             devices = mEngine->getOutputDevicesForAttributes(attr, nullptr, fromCache);
@@ -6985,7 +7007,7 @@ void AudioPolicyManager::modifySurroundChannelMasks(ChannelMaskSet *channelMasks
         for (auto it = channelMasks.begin(); it != channelMasks.end();) {
             audio_channel_mask_t channelMask = *it;
             if (channelMask & ~AUDIO_CHANNEL_OUT_STEREO) {
-                ALOGI("%s: force NEVER, so remove channelMask 0x%08x", __FUNCTION__, channelMask);
+                ALOGV("%s: force NEVER, so remove channelMask 0x%08x", __FUNCTION__, channelMask);
                 it = channelMasks.erase(it);
             } else {
                 ++it;
@@ -7005,7 +7027,7 @@ void AudioPolicyManager::modifySurroundChannelMasks(ChannelMaskSet *channelMasks
         // If not then add 5.1 support.
         if (!supports5dot1) {
             channelMasks.insert(AUDIO_CHANNEL_OUT_5POINT1);
-            ALOGI("%s: force MANUAL or ALWAYS, so adding channelMask for 5.1 surround", __func__);
+            ALOGV("%s: force MANUAL or ALWAYS, so adding channelMask for 5.1 surround", __func__);
         }
     }
 }

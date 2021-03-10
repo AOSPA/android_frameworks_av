@@ -285,6 +285,7 @@ void TunerFilter::getHidlIpSettings(
         .srcPort = static_cast<uint16_t>(ipConf.ipAddr.srcPort),
         .dstPort = static_cast<uint16_t>(ipConf.ipAddr.dstPort),
     };
+
     ipConf.ipAddr.srcIpAddress.isIpV6
             ? ipAddr.srcIpAddress.v6(getIpV6Address(ipConf.ipAddr.srcIpAddress))
             : ipAddr.srcIpAddress.v4(getIpV4Address(ipConf.ipAddr.srcIpAddress));
@@ -314,7 +315,7 @@ void TunerFilter::getHidlIpSettings(
 }
 
 hidl_array<uint8_t, IP_V6_LENGTH> TunerFilter::getIpV6Address(TunerDemuxIpAddress addr) {
-    hidl_array<uint8_t, IP_V6_LENGTH> ip = {0};
+    hidl_array<uint8_t, IP_V6_LENGTH> ip;
     if (addr.addr.size() != IP_V6_LENGTH) {
         return ip;
     }
@@ -323,7 +324,7 @@ hidl_array<uint8_t, IP_V6_LENGTH> TunerFilter::getIpV6Address(TunerDemuxIpAddres
 }
 
 hidl_array<uint8_t, IP_V4_LENGTH> TunerFilter::getIpV4Address(TunerDemuxIpAddress addr) {
-    hidl_array<uint8_t, IP_V4_LENGTH> ip = {0};
+    hidl_array<uint8_t, IP_V4_LENGTH> ip;
     if (addr.addr.size() != IP_V4_LENGTH) {
         return ip;
     }
@@ -541,6 +542,9 @@ Status TunerFilter::close() {
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
     Result res = mFilter->close();
+    mFilter = NULL;
+    mFilter_1_1 = NULL;
+
     if (res != Result::SUCCESS) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(res));
     }
@@ -620,16 +624,17 @@ void TunerFilter::FilterCallback::getAidlFilterEvent(vector<DemuxFilterEvent::Ev
         switch (eventExt.getDiscriminator()) {
             case DemuxFilterEventExt::Event::hidl_discriminator::monitorEvent: {
                 getMonitorEvent(eventsExt, tunerEvent);
-                break;
+                return;
             }
             case DemuxFilterEventExt::Event::hidl_discriminator::startId: {
                 getRestartEvent(eventsExt, tunerEvent);
-                break;
+                return;
             }
             default: {
                 break;
             }
         }
+        return;
     }
 
     if (!events.empty()) {
@@ -887,9 +892,6 @@ void TunerFilter::FilterCallback::getMonitorEvent(
         }
         case DemuxFilterMonitorEvent::hidl_discriminator::cid: {
             tunerMonitor.set<TunerFilterMonitorEvent::cid>(static_cast<int>(monitorEvent.cid()));
-            break;
-        }
-        default: {
             break;
         }
     }

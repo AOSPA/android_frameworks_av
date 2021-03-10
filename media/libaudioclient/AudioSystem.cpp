@@ -1849,19 +1849,22 @@ status_t AudioSystem::getSurroundFormats(unsigned int* numSurroundFormats,
 
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
-
     media::Int numSurroundFormatsAidl;
     numSurroundFormatsAidl.value =
             VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(*numSurroundFormats));
     std::vector<media::audio::common::AudioFormat> surroundFormatsAidl;
+    std::vector<bool> surroundFormatsEnabledAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
-            aps->getSurroundFormats(reported, &numSurroundFormatsAidl, &surroundFormatsAidl,
-                                    surroundFormatsEnabled)));
+            aps->getSurroundFormats(reported, &numSurroundFormatsAidl,
+                                    &surroundFormatsAidl, &surroundFormatsEnabledAidl)));
+
     *numSurroundFormats = VALUE_OR_RETURN_STATUS(
             convertIntegral<unsigned int>(numSurroundFormatsAidl.value));
     RETURN_STATUS_IF_ERROR(
             convertRange(surroundFormatsAidl.begin(), surroundFormatsAidl.end(), surroundFormats,
                          aidl2legacy_AudioFormat_audio_format_t));
+    std::copy(surroundFormatsEnabledAidl.begin(), surroundFormatsEnabledAidl.end(),
+            surroundFormatsEnabled);
     return OK;
 }
 
@@ -1994,7 +1997,8 @@ audio_stream_type_t AudioSystem::attributesToStreamType(const audio_attributes_t
 }
 
 status_t AudioSystem::getProductStrategyFromAudioAttributes(const AudioAttributes& aa,
-                                                            product_strategy_t& productStrategy) {
+                                                            product_strategy_t& productStrategy,
+                                                            bool fallbackOnDefault) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
@@ -2003,7 +2007,8 @@ status_t AudioSystem::getProductStrategyFromAudioAttributes(const AudioAttribute
     int32_t productStrategyAidl;
 
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
-            aps->getProductStrategyFromAudioAttributes(aaAidl, &productStrategyAidl)));
+            aps->getProductStrategyFromAudioAttributes(aaAidl, fallbackOnDefault,
+            &productStrategyAidl)));
     productStrategy = VALUE_OR_RETURN_STATUS(
             aidl2legacy_int32_t_product_strategy_t(productStrategyAidl));
     return OK;
@@ -2022,7 +2027,8 @@ status_t AudioSystem::listAudioVolumeGroups(AudioVolumeGroupVector& groups) {
 }
 
 status_t AudioSystem::getVolumeGroupFromAudioAttributes(const AudioAttributes& aa,
-                                                        volume_group_t& volumeGroup) {
+                                                        volume_group_t& volumeGroup,
+                                                        bool fallbackOnDefault) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
@@ -2030,7 +2036,7 @@ status_t AudioSystem::getVolumeGroupFromAudioAttributes(const AudioAttributes& a
             legacy2aidl_AudioAttributes_AudioAttributesEx(aa));
     int32_t volumeGroupAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
-            aps->getVolumeGroupFromAudioAttributes(aaAidl, &volumeGroupAidl)));
+            aps->getVolumeGroupFromAudioAttributes(aaAidl, fallbackOnDefault, &volumeGroupAidl)));
     volumeGroup = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_volume_group_t(volumeGroupAidl));
     return OK;
 }
