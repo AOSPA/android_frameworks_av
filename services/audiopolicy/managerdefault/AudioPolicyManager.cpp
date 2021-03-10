@@ -1421,6 +1421,17 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
             ? static_cast<audio_channel_mask_t>(config->channel_mask & ~AUDIO_CHANNEL_HAPTIC_ALL)
             : config->channel_mask;
 
+
+    String8 value;
+    String8 reply =  mpClientInterface->getParameters(AUDIO_IO_HANDLE_NONE,
+                                          String8("vr_audio_mode_on"));
+    AudioParameter repliedParameter(reply);
+    if (repliedParameter.get(String8("vr_audio_mode_on"), value) == NO_ERROR &&
+        value.contains("true")) {
+        ALOGI("%s VR mode is on, switch to primary output requested flags 0x%X",__func__, *flags);
+        *flags = (audio_output_flags_t)(*flags &
+                    (~(AUDIO_OUTPUT_FLAG_FAST|AUDIO_OUTPUT_FLAG_RAW)));
+    }
     // open a direct output if required by specified parameters
     //force direct flag if offload flag is set: offloading implies a direct output stream
     // and all common behaviors are driven by checking only the direct flag
