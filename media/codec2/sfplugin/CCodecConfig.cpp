@@ -420,16 +420,17 @@ void CCodecConfig::initializeStandardParams() {
 
     // read back default for decoders. This is needed in case the component does not support
     // color aspects. In that case, these values get copied to color-* keys.
+    // TRICKY: We read these values at raw port, since that's where we want to read these.
     add(ConfigMapper("default-color-range",     C2_PARAMKEY_DEFAULT_COLOR_ASPECTS,   "range")
-        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::CODED & D::READ)
+        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::RAW & D::READ)
         .withC2Mappers<C2Color::range_t>());
     add(ConfigMapper("default-color-transfer",  C2_PARAMKEY_DEFAULT_COLOR_ASPECTS,   "transfer")
-        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::CODED & D::READ)
+        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::RAW & D::READ)
         .withC2Mappers<C2Color::transfer_t>());
     add(ConfigMapper("default-color-primaries", C2_PARAMKEY_DEFAULT_COLOR_ASPECTS,   "primaries")
-        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::CODED & D::READ));
+        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::RAW & D::READ));
     add(ConfigMapper("default-color-matrix",    C2_PARAMKEY_DEFAULT_COLOR_ASPECTS,   "matrix")
-        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::CODED & D::READ));
+        .limitTo((D::VIDEO | D::IMAGE) & D::DECODER  & D::RAW & D::READ));
 
     // read back final for decoder output (also, configure final aspects as well. This should be
     // overwritten based on coded/default values if component supports color aspects, but is used
@@ -728,6 +729,19 @@ void CCodecConfig::initializeStandardParams() {
             }
             return C2Value();
         }));
+
+    add(ConfigMapper(KEY_VIDEO_QP_I_MAX, C2_PARAMKEY_QUANTIZATION, "i-max")
+        .limitTo(D::VIDEO & D::ENCODER));
+    add(ConfigMapper(KEY_VIDEO_QP_I_MIN, C2_PARAMKEY_QUANTIZATION, "i-min")
+        .limitTo(D::VIDEO & D::ENCODER));
+    add(ConfigMapper(KEY_VIDEO_QP_P_MAX, C2_PARAMKEY_QUANTIZATION, "p-max")
+        .limitTo(D::VIDEO & D::ENCODER));
+    add(ConfigMapper(KEY_VIDEO_QP_P_MIN, C2_PARAMKEY_QUANTIZATION, "p-min")
+        .limitTo(D::VIDEO & D::ENCODER));
+    add(ConfigMapper(KEY_VIDEO_QP_B_MAX, C2_PARAMKEY_QUANTIZATION, "b-max")
+        .limitTo(D::VIDEO & D::ENCODER));
+    add(ConfigMapper(KEY_VIDEO_QP_B_MIN, C2_PARAMKEY_QUANTIZATION, "b-min")
+        .limitTo(D::VIDEO & D::ENCODER));
 
     // convert to dBFS and add default
     add(ConfigMapper(KEY_AAC_DRC_TARGET_REFERENCE_LEVEL, C2_PARAMKEY_DRC_TARGET_REFERENCE_LEVEL, "value")

@@ -51,6 +51,7 @@ using aidl::android::media::ITranscodingClientCallback;
 using aidl::android::media::TranscodingRequestParcel;
 using aidl::android::media::TranscodingSessionParcel;
 using aidl::android::media::TranscodingSessionPriority;
+using aidl::android::media::TranscodingTestConfig;
 using aidl::android::media::TranscodingVideoTrackFormat;
 
 constexpr int32_t kClientUseCallingPid = IMediaTranscodingService::USE_CALLING_PID;
@@ -207,7 +208,9 @@ struct EventTracker {
         std::unique_lock lock(mLock);
 
         mEventQueue.push_back(event);
-        mLastErr = err;
+        if (err != TranscodingErrorCode::kNoError) {
+            mLastErrQueue.push_back(err);
+        }
         mCondition.notify_one();
     }
 
@@ -225,7 +228,12 @@ struct EventTracker {
 
     TranscodingErrorCode getLastError() {
         std::unique_lock lock(mLock);
-        return mLastErr;
+        if (mLastErrQueue.empty()) {
+            return TranscodingErrorCode::kNoError;
+        }
+        TranscodingErrorCode err = mLastErrQueue.front();
+        mLastErrQueue.pop_front();
+        return err;
     }
 
 private:
@@ -233,7 +241,7 @@ private:
     std::condition_variable mCondition;
     Event mPoppedEvent;
     std::list<Event> mEventQueue;
-    TranscodingErrorCode mLastErr;
+    std::list<TranscodingErrorCode> mLastErrQueue;
     int mUpdateCount = 0;
     int mLastProgress = -1;
 };
@@ -359,7 +367,8 @@ struct TestClientCallback : public BnTranscodingClientCallback,
     template <bool expectation = success>
     bool submit(int32_t sessionId, const char* sourceFilePath, const char* destinationFilePath,
                 TranscodingSessionPriority priority = TranscodingSessionPriority::kNormal,
-                int bitrateBps = -1, int overridePid = -1, int overrideUid = -1) {
+                int bitrateBps = -1, int overridePid = -1, int overrideUid = -1,
+                int sessionDurationMs = -1) {
         constexpr bool shouldSucceed = (expectation == success);
         bool result;
         TranscodingRequestParcel request;
@@ -374,6 +383,11 @@ struct TestClientCallback : public BnTranscodingClientCallback,
         if (bitrateBps > 0) {
             request.requestedVideoTrackFormat.emplace(TranscodingVideoTrackFormat());
             request.requestedVideoTrackFormat->bitrateBps = bitrateBps;
+        }
+        if (sessionDurationMs > 0) {
+            request.isForTesting = true;
+            request.testConfig.emplace(TranscodingTestConfig());
+            request.testConfig->processingTotalTimeMs = sessionDurationMs;
         }
         Status status = mClient->submitRequest(request, &session, &result);
 

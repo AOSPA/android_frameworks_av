@@ -209,7 +209,6 @@ AAUDIO_API aaudio_result_t  AAudioStreamBuilder_openStream(AAudioStreamBuilder* 
     AudioStreamBuilder *streamBuilder = COMMON_GET_FROM_BUILDER_OR_RETURN(streamPtr);
     aaudio_result_t result = streamBuilder->build(&audioStream);
     if (result == AAUDIO_OK) {
-        audioStream->registerPlayerBase();
         *streamPtr = (AAudioStream*) audioStream;
         id = audioStream->getId();
     } else {
@@ -348,7 +347,8 @@ AAUDIO_API aaudio_result_t AAudioStream_write(AAudioStream* stream,
 
     // Don't allow writes when playing with a callback.
     if (audioStream->isDataCallbackActive()) {
-        ALOGD("Cannot write to a callback stream when running.");
+        // A developer requested this warning because it would have saved lots of debugging.
+        ALOGW("%s() - Cannot write to a callback stream when running.", __func__);
         return AAUDIO_ERROR_INVALID_STATE;
     }
 

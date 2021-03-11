@@ -121,26 +121,18 @@ typedef enum {
     LVM_FS_DUMMY = LVM_MAXENUM
 } LVM_Fs_en;
 
-/* Memory Types */
-typedef enum {
-    LVM_PERSISTENT_SLOW_DATA = LVM_MEMREGION_PERSISTENT_SLOW_DATA,
-    LVM_PERSISTENT_FAST_DATA = LVM_MEMREGION_PERSISTENT_FAST_DATA,
-    LVM_PERSISTENT_FAST_COEF = LVM_MEMREGION_PERSISTENT_FAST_COEF,
-    LVM_TEMPORARY_FAST = LVM_MEMREGION_TEMPORARY_FAST,
-    LVM_MEMORYTYPE_DUMMY = LVM_MAXENUM
-} LVM_MemoryTypes_en;
-
-/* Memory region definition */
-typedef struct {
-    LVM_UINT32 Size;         /* Region size in bytes */
-    LVM_MemoryTypes_en Type; /* Region type */
-    void* pBaseAddress;      /* Pointer to the region base address */
-} LVM_MemoryRegion_st;
-
-/* Memory table containing the region definitions */
-typedef struct {
-    LVM_MemoryRegion_st Region[LVM_NR_MEMORY_REGIONS]; /* One definition for each region */
-} LVM_MemoryTable_st;
+static inline LVM_Fs_en lvmFsForSampleRate(int sampleRate) {
+    static const std::map<int, LVM_Fs_en> kLVMFsMap = {
+            {8000, LVM_FS_8000},    {11025, LVM_FS_11025}, {12000, LVM_FS_12000},
+            {16000, LVM_FS_16000},  {22050, LVM_FS_22050}, {24000, LVM_FS_24000},
+            {32000, LVM_FS_32000},  {44100, LVM_FS_44100}, {48000, LVM_FS_48000},
+            {88200, LVM_FS_88200},  {96000, LVM_FS_96000}, {176400, LVM_FS_176400},
+            {192000, LVM_FS_192000}};
+    if (kLVMFsMap.find(sampleRate) != kLVMFsMap.end()) {
+        return kLVMFsMap.at(sampleRate);
+    }
+    return LVM_FS_INVALID;
+}
 
 /****************************************************************************************/
 /*                                                                                      */

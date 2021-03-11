@@ -146,6 +146,9 @@ sp<ICryptoPlugin> CryptoHal::makeCryptoPlugin(const sp<ICryptoFactory>& factory,
                 plugin = hPlugin;
             }
         );
+    if (!hResult.isOk()) {
+        mInitCheck = DEAD_OBJECT;
+    }
     return plugin;
 }
 
@@ -179,10 +182,8 @@ status_t CryptoHal::createPlugin(const uint8_t uuid[16], const void *data,
         }
     }
 
-    if (mPlugin == NULL) {
-        mInitCheck = ERROR_UNSUPPORTED;
-    } else {
-        mInitCheck = OK;
+    if (mInitCheck == NO_INIT) {
+        mInitCheck = mPlugin == NULL ? ERROR_UNSUPPORTED : OK;
     }
 
     return mInitCheck;
@@ -342,6 +343,7 @@ ssize_t CryptoHal::decrypt(const uint8_t keyId[16], const uint8_t iv[16],
 
     Return<void> hResult;
 
+    mLock.unlock();
     if (mPluginV1_2 != NULL) {
         hResult = mPluginV1_2->decrypt_1_2(secure, toHidlArray16(keyId), toHidlArray16(iv),
                 hMode, hPattern, hSubSamples, hSource, offset, hDestination,

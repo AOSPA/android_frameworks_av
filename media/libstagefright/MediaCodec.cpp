@@ -119,6 +119,11 @@ static const char *kCodecQueueInputBufferError = "android.media.mediacodec.queue
 static const char *kCodecNumLowLatencyModeOn = "android.media.mediacodec.low-latency.on";  /* 0..n */
 static const char *kCodecNumLowLatencyModeOff = "android.media.mediacodec.low-latency.off";  /* 0..n */
 static const char *kCodecFirstFrameIndexLowLatencyModeOn = "android.media.mediacodec.low-latency.first-frame";  /* 0..n */
+static const char *kCodecChannelCount = "android.media.mediacodec.channelCount";
+static const char *kCodecSampleRate = "android.media.mediacodec.sampleRate";
+static const char *kCodecVideoEncodedBytes = "android.media.mediacodec.vencode.bytes";
+static const char *kCodecVideoEncodedFrames = "android.media.mediacodec.vencode.frames";
+static const char *kCodecVideoEncodedDurationUs = "android.media.mediacodec.vencode.durationUs";
 
 // the kCodecRecent* fields appear only in getMetrics() results
 static const char *kCodecRecentLatencyMax = "android.media.mediacodec.recent.max";      /* in us */
@@ -359,11 +364,24 @@ public:
         BufferQueue::createBufferQueue(&mProducer, &mConsumer);
         mSurface = new Surface(mProducer, false /* controlledByApp */);
         struct ConsumerListener : public BnConsumerListener {
-            void onFrameAvailable(const BufferItem&) override {}
+            ConsumerListener(const sp<IGraphicBufferConsumer> &consumer) {
+                mConsumer = consumer;
+            }
+            void onFrameAvailable(const BufferItem&) override {
+                BufferItem buffer;
+                // consume buffer
+                sp<IGraphicBufferConsumer> consumer = mConsumer.promote();
+                if (consumer != nullptr && consumer->acquireBuffer(&buffer, 0) == NO_ERROR) {
+                    consumer->releaseBuffer(buffer.mSlot, buffer.mFrameNumber,
+                                            EGL_NO_DISPLAY, EGL_NO_SYNC_KHR, buffer.mFence);
+                }
+            }
+
+            wp<IGraphicBufferConsumer> mConsumer;
             void onBuffersReleased() override {}
             void onSidebandStreamChanged() override {}
         };
-        sp<ConsumerListener> listener{new ConsumerListener};
+        sp<ConsumerListener> listener{new ConsumerListener(mConsumer)};
         mConsumer->consumerConnect(listener, false);
         mConsumer->setConsumerName(String8{"MediaCodec.release"});
         mConsumer->setConsumerUsageBits(usage);
@@ -683,6 +701,10 @@ MediaCodec::MediaCodec(
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
       mLatencyUnknown(0),
+      mBytesEncoded(0),
+      mEarliestEncodedPtsUs(INT64_MAX),
+      mLatestEncodedPtsUs(INT64_MIN),
+      mFramesEncoded(0),
       mNumLowLatencyEnables(0),
       mNumLowLatencyDisables(0),
       mIsLowLatencyModeOn(false),
@@ -788,6 +810,18 @@ void MediaCodec::updateMediametrics() {
         nsecs_t lifetime = systemTime(SYSTEM_TIME_MONOTONIC) - mLifetimeStartNs;
         lifetime = lifetime / (1000 * 1000);    // emitted in ms, truncated not rounded
         mediametrics_setInt64(mMetricsHandle, kCodecLifetimeMs, lifetime);
+    }
+
+    if (mBytesEncoded) {
+        Mutex::Autolock al(mOutputStatsLock);
+
+        mediametrics_setInt64(mMetricsHandle, kCodecVideoEncodedBytes, mBytesEncoded);
+        int64_t duration = 0;
+        if (mLatestEncodedPtsUs > mEarliestEncodedPtsUs) {
+            duration = mLatestEncodedPtsUs - mEarliestEncodedPtsUs;
+        }
+        mediametrics_setInt64(mMetricsHandle, kCodecVideoEncodedDurationUs, duration);
+        mediametrics_setInt64(mMetricsHandle, kCodecVideoEncodedFrames, mFramesEncoded);
     }
 
     {
@@ -993,9 +1027,33 @@ void MediaCodec::statsBufferSent(int64_t presentationUs) {
 }
 
 // when we get a buffer back from the codec
-void MediaCodec::statsBufferReceived(int64_t presentationUs) {
+void MediaCodec::statsBufferReceived(int64_t presentationUs, const sp<MediaCodecBuffer> &buffer) {
 
     CHECK_NE(mState, UNINITIALIZED);
+
+    if (mIsVideo && (mFlags & kFlagIsEncoder)) {
+        int32_t flags = 0;
+        (void) buffer->meta()->findInt32("flags", &flags);
+
+        // some of these frames, we don't want to count
+        // standalone EOS.... has an invalid timestamp
+        if ((flags & (BUFFER_FLAG_CODECCONFIG|BUFFER_FLAG_EOS)) == 0) {
+            mBytesEncoded += buffer->size();
+            mFramesEncoded++;
+
+            Mutex::Autolock al(mOutputStatsLock);
+            int64_t timeUs = 0;
+            if (buffer->meta()->findInt64("timeUs", &timeUs)) {
+                if (timeUs > mLatestEncodedPtsUs) {
+                    mLatestEncodedPtsUs = timeUs;
+                }
+                // can't chain as an else-if or this never triggers
+                if (timeUs < mEarliestEncodedPtsUs) {
+                    mEarliestEncodedPtsUs = timeUs;
+                }
+            }
+        }
+    }
 
     // mutex access to mBuffersInFlight and other stats
     Mutex::Autolock al(mLatencyLock);
@@ -1052,7 +1110,7 @@ void MediaCodec::statsBufferReceived(int64_t presentationUs) {
         return;
     }
 
-    // nowNs start our calculations
+    // now start our calculations
     const int64_t nowNs = systemTime(SYSTEM_TIME_MONOTONIC);
     int64_t latencyUs = (nowNs - startdata.startedNs + 500) / 1000;
 
@@ -1334,6 +1392,17 @@ status_t MediaCodec::configure(
             ALOGE("Invalid size(s), width=%d, height=%d", mVideoWidth, mVideoHeight);
             return BAD_VALUE;
         }
+    } else {
+        if (mMetricsHandle != 0) {
+            int32_t channelCount;
+            if (format->findInt32(KEY_CHANNEL_COUNT, &channelCount)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecChannelCount, channelCount);
+            }
+            int32_t sampleRate;
+            if (format->findInt32(KEY_SAMPLE_RATE, &sampleRate)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecSampleRate, sampleRate);
+            }
+        }
     }
 
     updateLowLatency(format);
@@ -1361,6 +1430,8 @@ status_t MediaCodec::configure(
     // save msg for reset
     mConfigureMsg = msg;
 
+    sp<AMessage> callback = mCallback;
+
     status_t err;
     std::vector<MediaResourceParcel> resources;
     resources.push_back(MediaResource::CodecResource(mFlags & kFlagIsSecure, mIsVideo));
@@ -1385,7 +1456,18 @@ status_t MediaCodec::configure(
             // the configure failure is due to wrong state.
 
             ALOGE("configure failed with err 0x%08x, resetting...", err);
-            reset();
+            status_t err2 = reset();
+            if (err2 != OK) {
+                ALOGE("retrying configure: failed to reset codec (%08x)", err2);
+                break;
+            }
+            if (callback != nullptr) {
+                err2 = setCallback(callback);
+                if (err2 != OK) {
+                    ALOGE("retrying configure: failed to set callback (%08x)", err2);
+                    break;
+                }
+            }
         }
         if (!isResourceError(err)) {
             break;
@@ -1494,6 +1576,8 @@ uint64_t MediaCodec::getGraphicBufferSize() {
 status_t MediaCodec::start() {
     sp<AMessage> msg = new AMessage(kWhatStart, this);
 
+    sp<AMessage> callback;
+
     status_t err;
     std::vector<MediaResourceParcel> resources;
     resources.push_back(MediaResource::CodecResource(mFlags & kFlagIsSecure, mIsVideo));
@@ -1518,6 +1602,20 @@ status_t MediaCodec::start() {
                 ALOGE("retrying start: failed to configure codec");
                 break;
             }
+            if (callback != nullptr) {
+                err = setCallback(callback);
+                if (err != OK) {
+                    ALOGE("retrying start: failed to set callback");
+                    break;
+                }
+                ALOGD("succeed to set callback for reclaim");
+            }
+        }
+
+        // Keep callback message after the first iteration if necessary.
+        if (i == 0 && mCallback != nullptr && mFlags & kFlagIsAsync) {
+            callback = mCallback;
+            ALOGD("keep callback message for reclaim");
         }
 
         sp<AMessage> response;
@@ -2159,14 +2257,15 @@ bool MediaCodec::handleDequeueOutputBuffer(const sp<AReplyToken> &replyID, bool 
         int64_t timeUs;
         CHECK(buffer->meta()->findInt64("timeUs", &timeUs));
 
-        statsBufferReceived(timeUs);
-
         response->setInt64("timeUs", timeUs);
 
         int32_t flags;
         CHECK(buffer->meta()->findInt32("flags", &flags));
 
         response->setInt32("flags", flags);
+
+        statsBufferReceived(timeUs, buffer);
+
         response->postReply(replyID);
     }
 
@@ -2256,6 +2355,8 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                     mComponentName.clear();
                                 }
                                 postPendingRepliesAndDeferredMessages(origin + ":dead");
+                                sendErrorResponse = false;
+                            } else if (!mReplyID) {
                                 sendErrorResponse = false;
                             }
                             break;
@@ -3148,15 +3249,20 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 break;
             }
 
-            // If we're flushing, stopping, configuring or starting  but
+            // If we're flushing, configuring or starting  but
             // received a release request, post the reply for the pending call
             // first, and consider it done. The reply token will be replaced
             // after this, and we'll no longer be able to reply.
-            if (mState == FLUSHING || mState == STOPPING
-                    || mState == CONFIGURING || mState == STARTING) {
+            if (mState == FLUSHING || mState == CONFIGURING || mState == STARTING) {
                 // mReply is always set if in these states.
                 postPendingRepliesAndDeferredMessages(
                         std::string("kWhatRelease:") + stateString(mState));
+            }
+            // If we're stopping but received a release request, post the reply
+            // for the pending call if necessary. Note that the reply may have been
+            // already posted due to an error.
+            if (mState == STOPPING && mReplyID) {
+                postPendingRepliesAndDeferredMessages("kWhatRelease:STOPPING");
             }
 
             if (mFlags & kFlagSawMediaServerDie) {
@@ -4314,12 +4420,12 @@ void MediaCodec::onOutputBufferAvailable() {
 
         msg->setInt64("timeUs", timeUs);
 
-        statsBufferReceived(timeUs);
-
         int32_t flags;
         CHECK(buffer->meta()->findInt32("flags", &flags));
 
         msg->setInt32("flags", flags);
+
+        statsBufferReceived(timeUs, buffer);
 
         msg->post();
     }

@@ -1,3 +1,4 @@
+// service library
 package {
     default_applicable_licenses: [
         "frameworks_av_services_mediatranscoding_license",
@@ -17,7 +18,6 @@ license {
     ],
 }
 
-// service library
 cc_library {
     name: "libmediatranscodingservice",
 

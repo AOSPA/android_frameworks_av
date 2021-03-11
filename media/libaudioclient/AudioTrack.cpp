@@ -40,15 +40,6 @@
 #include <binder/MemoryDealer.h>
 #include "media/AVMediaExtensions.h"
 
-#define VALUE_OR_FATAL(result)                   \
-    ({                                           \
-       auto _tmp = (result);                     \
-       LOG_ALWAYS_FATAL_IF(!_tmp.ok(),           \
-                           "Failed result (%d)", \
-                           _tmp.error());        \
-       std::move(_tmp.value());                  \
-     })
-
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
 #define DUMMY_TRACK_SMP_BUF_SIZE        12000
@@ -221,6 +212,7 @@ void AudioTrack::MediaMetrics::gather(const AudioTrack *track)
     mMetricsItem->setCString(MM_PREFIX "encoding", toString(track->mFormat).c_str());
     mMetricsItem->setInt32(MM_PREFIX "frameCount", (int32_t)track->mFrameCount);
     mMetricsItem->setCString(MM_PREFIX "attributes", toString(track->mAttributes).c_str());
+    mMetricsItem->setCString(MM_PREFIX "logSessionId", track->mLogSessionId.c_str());
 }
 
 // hand the user a snapshot of the metrics.
@@ -1939,6 +1931,8 @@ status_t AudioTrack::createTrack_l()
         .set(AMEDIAMETRICS_PROP_FLAGS, toString(mFlags).c_str())
         .set(AMEDIAMETRICS_PROP_ORIGINALFLAGS, toString(mOrigFlags).c_str())
         .set(AMEDIAMETRICS_PROP_SESSIONID, (int32_t)mSessionId)
+        .set(AMEDIAMETRICS_PROP_LOGSESSIONID, mLogSessionId)
+        .set(AMEDIAMETRICS_PROP_PLAYERIID, mPlayerIId)
         .set(AMEDIAMETRICS_PROP_TRACKID, mPortId) // dup from key
         .set(AMEDIAMETRICS_PROP_CONTENTTYPE, toString(mAttributes.content_type).c_str())
         .set(AMEDIAMETRICS_PROP_USAGE, toString(mAttributes.usage).c_str())
@@ -3351,6 +3345,31 @@ uint32_t AudioTrack::getUnderrunFrames() const
 {
     AutoMutex lock(mLock);
     return mProxy->getUnderrunFrames();
+}
+
+void AudioTrack::setLogSessionId(const char *logSessionId)
+{
+     AutoMutex lock(mLock);
+    if (logSessionId == nullptr) logSessionId = "";  // an empty string is an unset session id.
+    if (mLogSessionId == logSessionId) return;
+
+     mLogSessionId = logSessionId;
+     mediametrics::LogItem(mMetricsId)
+         .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_SETLOGSESSIONID)
+         .set(AMEDIAMETRICS_PROP_LOGSESSIONID, logSessionId)
+         .record();
+}
+
+void AudioTrack::setPlayerIId(int playerIId)
+{
+    AutoMutex lock(mLock);
+    if (mPlayerIId == playerIId) return;
+
+    mPlayerIId = playerIId;
+    mediametrics::LogItem(mMetricsId)
+        .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_SETPLAYERIID)
+        .set(AMEDIAMETRICS_PROP_PLAYERIID, playerIId)
+        .record();
 }
 
 status_t AudioTrack::addAudioDeviceCallback(const sp<AudioSystem::AudioDeviceCallback>& callback)

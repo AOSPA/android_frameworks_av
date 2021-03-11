@@ -86,6 +86,7 @@ private:
     bool mPollEventPending;
     int64_t mLastReceiverReportTimeUs;
     int64_t mLastBitrateReportTimeUs;
+    int64_t mLastEarlyNotifyTimeUs;
 
     int32_t mSelfID;
     int32_t mTargetBitrate;

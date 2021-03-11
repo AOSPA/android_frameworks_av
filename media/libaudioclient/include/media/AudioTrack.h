@@ -987,6 +987,23 @@ public:
      */
             audio_port_handle_t getPortId() const { return mPortId; };
 
+    /* Sets the LogSessionId field which is used for metrics association of
+     * this object with other objects. A nullptr or empty string clears
+     * the logSessionId.
+     */
+            void setLogSessionId(const char *logSessionId);
+
+    /* Sets the playerIId field to associate the AudioTrack with an interface managed by
+     * AudioService.
+     *
+     * If this value is not set, then the playerIId is reported as -1
+     * (not associated with an AudioService player interface).
+     *
+     * For metrics purposes, we keep the playerIId association in the native
+     * client AudioTrack to improve the robustness under track restoration.
+     */
+            void setPlayerIId(int playerIId);
+
             void setAudioTrackCallback(const sp<media::IAudioTrackCallback>& callback) {
                 mAudioTrackCallback->setAudioTrackCallback(callback);
             }
@@ -1257,6 +1274,19 @@ public:
     audio_session_t         mSessionId;
     int                     mAuxEffectId;
     audio_port_handle_t     mPortId;                    // Id from Audio Policy Manager
+
+    /**
+     * mPlayerIId is the player id of the AudioTrack used by AudioManager.
+     * For an AudioTrack created by the Java interface, this is generally set once.
+     */
+    int                     mPlayerIId = -1;  // AudioManager.h PLAYER_PIID_INVALID
+
+    /**
+     * mLogSessionId is a string identifying this AudioTrack for the metrics service.
+     * It may be unique or shared with other objects.  An empty string means the
+     * logSessionId is not set.
+     */
+    std::string             mLogSessionId{};
 
     mutable Mutex           mLock;
 

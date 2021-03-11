@@ -33,6 +33,7 @@ typedef float LVM_FLOAT;
 #include "EffectReverb.h"
 // from Reverb/lib
 #include "LVREV.h"
+#include "VectorArithmetic.h"
 
 // effect_handle_t interface implementation for reverb
 extern "C" const struct effect_interface_s gReverbInterface;
@@ -190,8 +191,8 @@ int Reverb_paramValueSize(int32_t param);
 
 /* Effect Library Interface Implementation */
 
-extern "C" int EffectCreate(const effect_uuid_t* uuid, int32_t sessionId __unused,
-                            int32_t ioId __unused, effect_handle_t* pHandle) {
+extern "C" int EffectCreate(const effect_uuid_t* uuid, int32_t /* sessionId __unused */,
+                            int32_t /* ioId __unused */, effect_handle_t* pHandle) {
     int ret;
     int i;
     int length = sizeof(gDescriptors) / sizeof(const effect_descriptor_t*);
@@ -332,6 +333,7 @@ extern "C" int EffectGetDescriptor(const effect_uuid_t* uuid, effect_descriptor_
 //----------------------------------------------------------------------------
 int process(effect_buffer_t* pIn, effect_buffer_t* pOut, int frameCount, ReverbContext* pContext) {
     int channels = audio_channel_count_from_out_mask(pContext->config.inputCfg.channels);
+    int outChannels = audio_channel_count_from_out_mask(pContext->config.outputCfg.channels);
     LVREV_ReturnStatus_en LvmStatus = LVREV_SUCCESS; /* Function call status */
 
     // Reverb only effects the stereo channels in multichannel source.
@@ -454,33 +456,49 @@ int process(effect_buffer_t* pIn, effect_buffer_t* pOut, int frameCount, ReverbC
         }
     }
 
-    if (channels > 2) {
+    if (outChannels > 2) {
         // Accumulate if required
         if (pContext->config.outputCfg.accessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE) {
             for (int i = 0; i < frameCount; i++) {
-                pOut[channels * i] += pContext->OutFrames[FCC_2 * i];
-                pOut[channels * i + 1] += pContext->OutFrames[FCC_2 * i + 1];
+                pOut[outChannels * i] += pContext->OutFrames[FCC_2 * i];
+                pOut[outChannels * i + 1] += pContext->OutFrames[FCC_2 * i + 1];
             }
         } else {
             for (int i = 0; i < frameCount; i++) {
-                pOut[channels * i] = pContext->OutFrames[FCC_2 * i];
-                pOut[channels * i + 1] = pContext->OutFrames[FCC_2 * i + 1];
+                pOut[outChannels * i] = pContext->OutFrames[FCC_2 * i];
+                pOut[outChannels * i + 1] = pContext->OutFrames[FCC_2 * i + 1];
             }
         }
-        for (int i = 0; i < frameCount; i++) {
-            for (int j = FCC_2; j < channels; j++) {
-                pOut[channels * i + j] = pIn[channels * i + j];
+        if (!pContext->auxiliary) {
+            for (int i = 0; i < frameCount; i++) {
+                // channels and outChannels are expected to be same.
+                for (int j = FCC_2; j < outChannels; j++) {
+                    pOut[outChannels * i + j] = pIn[outChannels * i + j];
+                }
             }
         }
     } else {
         if (pContext->config.outputCfg.accessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE) {
-            for (int i = 0; i < frameCount * FCC_2; i++) {
-                pOut[i] += pContext->OutFrames[i];
+            if (outChannels == FCC_1) {
+                for (int i = 0; i < frameCount; i++) {
+                    pOut[i] +=
+                            ((pContext->OutFrames[i * FCC_2] + pContext->OutFrames[i * FCC_2 + 1]) *
+                             0.5f);
+                }
+            } else {
+                for (int i = 0; i < frameCount * FCC_2; i++) {
+                    pOut[i] += pContext->OutFrames[i];
+                }
             }
         } else {
-            memcpy(pOut, pContext->OutFrames, frameCount * sizeof(*pOut) * FCC_2);
+            if (outChannels == FCC_1) {
+                From2iToMono_Float((const process_buffer_t*)pContext->OutFrames, pOut, frameCount);
+            } else {
+                memcpy(pOut, pContext->OutFrames, frameCount * sizeof(*pOut) * FCC_2);
+            }
         }
     }
+
     return 0;
 } /* end process */
 
@@ -498,25 +516,9 @@ int process(effect_buffer_t* pIn, effect_buffer_t* pOut, int frameCount, ReverbC
 
 void Reverb_free(ReverbContext* pContext) {
     LVREV_ReturnStatus_en LvmStatus = LVREV_SUCCESS; /* Function call status */
-    LVREV_MemoryTable_st MemTab;
 
-    /* Free the algorithm memory */
-    LvmStatus = LVREV_GetMemoryTable(pContext->hInstance, &MemTab, LVM_NULL);
-
-    LVM_ERROR_CHECK(LvmStatus, "LVM_GetMemoryTable", "Reverb_free")
-
-    for (int i = 0; i < LVM_NR_MEMORY_REGIONS; i++) {
-        if (MemTab.Region[i].Size != 0) {
-            if (MemTab.Region[i].pBaseAddress != NULL) {
-                free(MemTab.Region[i].pBaseAddress);
-            } else {
-                ALOGV("\tLVM_ERROR : free() - trying to free with NULL pointer %" PRIu32
-                      " bytes "
-                      "for region %u at %p ERROR\n",
-                      MemTab.Region[i].Size, i, MemTab.Region[i].pBaseAddress);
-            }
-        }
-    }
+    LvmStatus = LVREV_FreeInstance(pContext->hInstance);
+    LVM_ERROR_CHECK(LvmStatus, "LVREV_FreeInstance", "Reverb_free")
 } /* end Reverb_free */
 
 //----------------------------------------------------------------------------
@@ -546,47 +548,17 @@ int Reverb_setConfig(ReverbContext* pContext, effect_config_t* pConfig) {
     CHECK_ARG((pContext->auxiliary && pConfig->inputCfg.channels == AUDIO_CHANNEL_OUT_MONO) ||
               ((!pContext->auxiliary) && (inputChannels <= LVM_MAX_CHANNELS)));
     int outputChannels = audio_channel_count_from_out_mask(pConfig->outputCfg.channels);
-    CHECK_ARG(outputChannels >= FCC_2 && outputChannels <= LVM_MAX_CHANNELS);
+    CHECK_ARG(outputChannels <= LVM_MAX_CHANNELS);
     CHECK_ARG(pConfig->outputCfg.accessMode == EFFECT_BUFFER_ACCESS_WRITE ||
               pConfig->outputCfg.accessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE);
     CHECK_ARG(pConfig->inputCfg.format == EFFECT_BUFFER_FORMAT);
     // ALOGV("\tReverb_setConfig calling memcpy");
     pContext->config = *pConfig;
 
-    switch (pConfig->inputCfg.samplingRate) {
-        case 8000:
-            SampleRate = LVM_FS_8000;
-            break;
-        case 16000:
-            SampleRate = LVM_FS_16000;
-            break;
-        case 22050:
-            SampleRate = LVM_FS_22050;
-            break;
-        case 32000:
-            SampleRate = LVM_FS_32000;
-            break;
-        case 44100:
-            SampleRate = LVM_FS_44100;
-            break;
-        case 48000:
-            SampleRate = LVM_FS_48000;
-            break;
-        case 88200:
-            SampleRate = LVM_FS_88200;
-            break;
-        case 96000:
-            SampleRate = LVM_FS_96000;
-            break;
-        case 176400:
-            SampleRate = LVM_FS_176400;
-            break;
-        case 192000:
-            SampleRate = LVM_FS_192000;
-            break;
-        default:
-            ALOGV("\rReverb_setConfig invalid sampling rate %d", pConfig->inputCfg.samplingRate);
-            return -EINVAL;
+    SampleRate = lvmFsForSampleRate(pConfig->inputCfg.samplingRate);
+    if (SampleRate == LVM_FS_INVALID) {
+        ALOGE("Reverb_setConfig invalid sampling rate %d", pConfig->inputCfg.samplingRate);
+        return -EINVAL;
     }
 
     if (pContext->SampleRate != SampleRate) {
@@ -686,65 +658,17 @@ int Reverb_init(ReverbContext* pContext) {
     LVREV_ReturnStatus_en LvmStatus = LVREV_SUCCESS; /* Function call status */
     LVREV_ControlParams_st params;                   /* Control Parameters */
     LVREV_InstanceParams_st InstParams;              /* Instance parameters */
-    LVREV_MemoryTable_st MemTab;                     /* Memory allocation table */
-    bool bMallocFailure = LVM_FALSE;
 
     /* Set the capabilities */
     InstParams.MaxBlockSize = MAX_CALL_SIZE;
     InstParams.SourceFormat = LVM_STEREO;  // Max format, could be mono during process
     InstParams.NumDelays = LVREV_DELAYLINES_4;
 
-    /* Allocate memory, forcing alignment */
-    LvmStatus = LVREV_GetMemoryTable(LVM_NULL, &MemTab, &InstParams);
-
-    LVM_ERROR_CHECK(LvmStatus, "LVREV_GetMemoryTable", "Reverb_init")
-    if (LvmStatus != LVREV_SUCCESS) return -EINVAL;
-
-    ALOGV("\tCreateInstance Successfully called LVM_GetMemoryTable\n");
-
-    /* Allocate memory */
-    for (int i = 0; i < LVM_NR_MEMORY_REGIONS; i++) {
-        if (MemTab.Region[i].Size != 0) {
-            MemTab.Region[i].pBaseAddress = calloc(1, MemTab.Region[i].Size);
-
-            if (MemTab.Region[i].pBaseAddress == LVM_NULL) {
-                ALOGV("\tLVREV_ERROR :Reverb_init CreateInstance Failed to allocate %" PRIu32
-                      " bytes for region %u\n",
-                      MemTab.Region[i].Size, i);
-                bMallocFailure = LVM_TRUE;
-            } else {
-                ALOGV("\tReverb_init CreateInstance allocate %" PRIu32
-                      " bytes for region %u at %p\n",
-                      MemTab.Region[i].Size, i, MemTab.Region[i].pBaseAddress);
-            }
-        }
-    }
-
-    /* If one or more of the memory regions failed to allocate, free the regions that were
-     * succesfully allocated and return with an error
-     */
-    if (bMallocFailure == LVM_TRUE) {
-        for (int i = 0; i < LVM_NR_MEMORY_REGIONS; i++) {
-            if (MemTab.Region[i].pBaseAddress == LVM_NULL) {
-                ALOGV("\tLVM_ERROR :Reverb_init CreateInstance Failed to allocate %" PRIu32
-                      " bytes for region %u - Not freeing\n",
-                      MemTab.Region[i].Size, i);
-            } else {
-                ALOGV("\tLVM_ERROR :Reverb_init CreateInstance Failed: but allocated %" PRIu32
-                      " bytes for region %u at %p- free\n",
-                      MemTab.Region[i].Size, i, MemTab.Region[i].pBaseAddress);
-                free(MemTab.Region[i].pBaseAddress);
-            }
-        }
-        return -EINVAL;
-    }
-    ALOGV("\tReverb_init CreateInstance Successfully malloc'd memory\n");
-
     /* Initialise */
     pContext->hInstance = LVM_NULL;
 
     /* Init sets the instance handle */
-    LvmStatus = LVREV_GetInstanceHandle(&pContext->hInstance, &MemTab, &InstParams);
+    LvmStatus = LVREV_GetInstanceHandle(&pContext->hInstance, &InstParams);
 
     LVM_ERROR_CHECK(LvmStatus, "LVM_GetInstanceHandle", "Reverb_init")
     if (LvmStatus != LVREV_SUCCESS) return -EINVAL;
