@@ -1824,7 +1824,7 @@ Status AudioPolicyService::getStreamVolumeDB(media::AudioStreamType streamAidl, 
 Status AudioPolicyService::getSurroundFormats(
         bool reported, media::Int* count,
         std::vector<media::audio::common::AudioFormat>* formats,
-        bool* _aidl_return) {
+        std::vector<bool>* formatsEnabled) {
     unsigned int numSurroundFormats = VALUE_OR_RETURN_BINDER_STATUS(
             convertIntegral<unsigned int>(count->value));
     if (numSurroundFormats > MAX_ITEMS_PER_LIST) {
@@ -1832,6 +1832,7 @@ Status AudioPolicyService::getSurroundFormats(
     }
     unsigned int numSurroundFormatsReq = numSurroundFormats;
     std::unique_ptr<audio_format_t[]>surroundFormats(new audio_format_t[numSurroundFormats]);
+    std::unique_ptr<bool[]>surroundFormatsEnabled(new bool[numSurroundFormats]);
 
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
@@ -1840,11 +1841,15 @@ Status AudioPolicyService::getSurroundFormats(
     AutoCallerClear acc;
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             mAudioPolicyManager->getSurroundFormats(&numSurroundFormats, surroundFormats.get(),
-                                                    _aidl_return, reported)));
+                                                    surroundFormatsEnabled.get(), reported)));
     numSurroundFormatsReq = std::min(numSurroundFormats, numSurroundFormatsReq);
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             convertRange(surroundFormats.get(), surroundFormats.get() + numSurroundFormatsReq,
                          std::back_inserter(*formats), legacy2aidl_audio_format_t_AudioFormat)));
+    formatsEnabled->insert(
+            formatsEnabled->begin(),
+            surroundFormatsEnabled.get(),
+            surroundFormatsEnabled.get() + numSurroundFormatsReq);
     count->value = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<uint32_t>(numSurroundFormats));
     return Status::ok();
 }
@@ -1942,7 +1947,7 @@ Status AudioPolicyService::listAudioProductStrategies(
 }
 
 Status AudioPolicyService::getProductStrategyFromAudioAttributes(
-        const media::AudioAttributesEx& aaAidl, int32_t* _aidl_return) {
+        const media::AudioAttributesEx& aaAidl, bool fallbackOnDefault, int32_t* _aidl_return) {
     AudioAttributes aa = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioAttributesEx_AudioAttributes(aaAidl));
     product_strategy_t productStrategy;
@@ -1952,8 +1957,8 @@ Status AudioPolicyService::getProductStrategyFromAudioAttributes(
     }
     Mutex::Autolock _l(mLock);
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
-            mAudioPolicyManager->getProductStrategyFromAudioAttributes(aa,
-                                                                       productStrategy)));
+            mAudioPolicyManager->getProductStrategyFromAudioAttributes(
+                    aa, productStrategy, fallbackOnDefault)));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
             legacy2aidl_product_strategy_t_int32_t(productStrategy));
     return Status::ok();
@@ -1974,8 +1979,8 @@ Status AudioPolicyService::listAudioVolumeGroups(std::vector<media::AudioVolumeG
     return Status::ok();
 }
 
-Status AudioPolicyService::getVolumeGroupFromAudioAttributes(const media::AudioAttributesEx& aaAidl,
-                                                             int32_t* _aidl_return) {
+Status AudioPolicyService::getVolumeGroupFromAudioAttributes(
+        const media::AudioAttributesEx& aaAidl, bool fallbackOnDefault, int32_t* _aidl_return) {
     AudioAttributes aa = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioAttributesEx_AudioAttributes(aaAidl));
     volume_group_t volumeGroup;
@@ -1986,7 +1991,8 @@ Status AudioPolicyService::getVolumeGroupFromAudioAttributes(const media::AudioA
     Mutex::Autolock _l(mLock);
     RETURN_IF_BINDER_ERROR(
             binderStatusFromStatusT(
-                    mAudioPolicyManager->getVolumeGroupFromAudioAttributes(aa, volumeGroup)));
+                    mAudioPolicyManager->getVolumeGroupFromAudioAttributes(
+                            aa, volumeGroup, fallbackOnDefault)));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(legacy2aidl_volume_group_t_int32_t(volumeGroup));
     return Status::ok();
 }

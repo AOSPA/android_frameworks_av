@@ -1,3 +1,12 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_av_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
 cc_library_headers {
     name: "libaudiofoundation_headers",
     vendor_available: true,
@@ -15,10 +24,10 @@ cc_library_headers {
         "libmedia_helper_headers",
     ],
     static_libs: [
-        "audioclient-types-aidl-unstable-cpp",
+        "audioclient-types-aidl-cpp",
     ],
     export_static_lib_headers: [
-        "audioclient-types-aidl-unstable-cpp",
+        "audioclient-types-aidl-cpp",
     ],
     host_supported: true,
     target: {
@@ -43,7 +52,7 @@ cc_library {
     ],
 
     shared_libs: [
-        "audioclient-types-aidl-unstable-cpp",
+        "audioclient-types-aidl-cpp",
         "libaudioclient_aidl_conversion",
         "libaudioutils",
         "libbase",
@@ -54,7 +63,7 @@ cc_library {
     ],
 
     export_shared_lib_headers: [
-        "audioclient-types-aidl-unstable-cpp",
+        "audioclient-types-aidl-cpp",
         "libaudioclient_aidl_conversion",
     ],
 

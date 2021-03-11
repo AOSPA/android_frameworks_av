@@ -1,6 +1,15 @@
 // Media Statistics service
 //
 
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_av_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
 tidy_errors = [
     // https://clang.llvm.org/extra/clang-tidy/checks/list.html
     // For many categories, the checks are too many to specify individually.
@@ -100,7 +109,7 @@ cc_binary {
         "libmediametricsservice",
         "libmediautils",
         "libutils",
-        "mediametricsservice-aidl-unstable-cpp",
+        "mediametricsservice-aidl-cpp",
     ],
     header_libs: [
         "libaudioutils_headers",
@@ -143,7 +152,7 @@ cc_library {
     },
 
     shared_libs: [
-        "mediametricsservice-aidl-unstable-cpp",
+        "mediametricsservice-aidl-cpp",
         "libbase", // android logging
         "libbinder",
         "libcutils",

@@ -30,7 +30,7 @@ parcelable TunerFrontendCableCapabilities {
     /**
      * Code Rate capability
      */
-    int codeRateCap; // inner FEC will converge to codeRate
+    long codeRateCap; // inner FEC will converge to codeRate
 
     /**
      * Annex capability

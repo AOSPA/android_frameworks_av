@@ -17,12 +17,12 @@
 #define LOG_TAG "TunerService"
 
 #include <android/binder_manager.h>
-#include <fmq/ConvertMQDescriptors.h>
 #include <utils/Log.h>
 #include "TunerService.h"
 #include "TunerFrontend.h"
 #include "TunerLnb.h"
 #include "TunerDemux.h"
+#include "TunerDescrambler.h"
 
 using ::aidl::android::media::tv::tuner::TunerFrontendAnalogCapabilities;
 using ::aidl::android::media::tv::tuner::TunerFrontendAtsc3Capabilities;
@@ -45,20 +45,21 @@ using ::android::hardware::tv::tuner::V1_0::IFrontend;
 using ::android::hardware::tv::tuner::V1_0::ILnb;
 using ::android::hardware::tv::tuner::V1_0::LnbId;
 using ::android::hardware::tv::tuner::V1_0::Result;
+using ::android::hardware::tv::tuner::V1_1::FrontendDtmbCapabilities;
 
 namespace android {
 
 TunerService::TunerService() {}
 TunerService::~TunerService() {}
 
-void TunerService::instantiate() {
+binder_status_t TunerService::instantiate() {
     shared_ptr<TunerService> service =
             ::ndk::SharedRefBase::make<TunerService>();
-    AServiceManager_addService(service->asBinder().get(), getServiceName());
+    return AServiceManager_addService(service->asBinder().get(), getServiceName());
 }
 
-bool TunerService::getITuner() {
-    ALOGD("getITuner");
+bool TunerService::hasITuner() {
+    ALOGD("hasITuner");
     if (mTuner != nullptr) {
         return true;
     }
@@ -67,13 +68,26 @@ bool TunerService::getITuner() {
         ALOGE("Failed to get ITuner service");
         return false;
     }
+    mTunerVersion = TUNER_HAL_VERSION_1_0;
+    mTuner_1_1 = ::android::hardware::tv::tuner::V1_1::ITuner::castFrom(mTuner);
+    if (mTuner_1_1 != nullptr) {
+        mTunerVersion = TUNER_HAL_VERSION_1_1;
+    } else {
+        ALOGE("Failed to get ITuner_1_1 service");
+    }
     return true;
+}
+
+bool TunerService::hasITuner_1_1() {
+    ALOGD("hasITuner_1_1");
+    hasITuner();
+    return (mTunerVersion == TUNER_HAL_VERSION_1_1);
 }
 
 Status TunerService::openDemux(
         int /* demuxHandle */, std::shared_ptr<ITunerDemux>* _aidl_return) {
     ALOGD("openDemux");
-    if (!getITuner()) {
+    if (!hasITuner()) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::NOT_INITIALIZED));
     }
     Result res;
@@ -98,7 +112,7 @@ Status TunerService::openDemux(
 
 Status TunerService::getDemuxCaps(TunerDemuxCapabilities* _aidl_return) {
     ALOGD("getDemuxCaps");
-    if (!getITuner()) {
+    if (!hasITuner()) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::NOT_INITIALIZED));
     }
     Result res;
@@ -116,48 +130,8 @@ Status TunerService::getDemuxCaps(TunerDemuxCapabilities* _aidl_return) {
     return Status::fromServiceSpecificError(static_cast<int32_t>(res));
 }
 
-Result TunerService::configFilter() {
-    ALOGD("configFilter");
-    if (mFilter == NULL) {
-        ALOGD("Failed to configure filter: filter not found");
-        return Result::NOT_INITIALIZED;
-    }
-    DemuxFilterSettings filterSettings;
-    DemuxTsFilterSettings tsFilterSettings {
-        .tpid = 256,
-    };
-    DemuxFilterAvSettings filterAvSettings {
-        .isPassthrough = false,
-    };
-    tsFilterSettings.filterSettings.av(filterAvSettings);
-    filterSettings.ts(tsFilterSettings);
-    Result res = mFilter->configure(filterSettings);
-
-    if (res != Result::SUCCESS) {
-        ALOGD("config filter failed, res = %d", res);
-        return res;
-    }
-
-    Result getQueueDescResult = Result::UNKNOWN_ERROR;
-    mFilter->getQueueDesc(
-            [&](Result r, const MQDescriptorSync<uint8_t>& desc) {
-                mFilterMQDesc = desc;
-                getQueueDescResult = r;
-                ALOGD("getFilterQueueDesc");
-            });
-    if (getQueueDescResult == Result::SUCCESS) {
-        unsafeHidlToAidlMQDescriptor<uint8_t, int8_t, SynchronizedReadWrite>(
-                mFilterMQDesc,  &mAidlMQDesc);
-        mAidlMq = new (nothrow) AidlMessageQueue(mAidlMQDesc);
-        EventFlag::createEventFlag(mAidlMq->getEventFlagWord(), &mEventFlag);
-    } else {
-        ALOGD("get MQDesc failed, res = %d", getQueueDescResult);
-    }
-    return getQueueDescResult;
-}
-
 Status TunerService::getFrontendIds(vector<int32_t>* ids) {
-    if (!getITuner()) {
+    if (!hasITuner()) {
         return Status::fromServiceSpecificError(
                 static_cast<int32_t>(Result::NOT_INITIALIZED));
     }
@@ -172,17 +146,15 @@ Status TunerService::getFrontendIds(vector<int32_t>* ids) {
     return Status::ok();
 }
 
-Status TunerService::getFrontendInfo(
-        int32_t frontendHandle, TunerFrontendInfo* _aidl_return) {
-    if (mTuner == nullptr) {
+Status TunerService::getFrontendInfo(int32_t id, TunerFrontendInfo* _aidl_return) {
+    if (!hasITuner()) {
         ALOGE("ITuner service is not init.");
         return ::ndk::ScopedAStatus::fromServiceSpecificError(
                 static_cast<int32_t>(Result::UNAVAILABLE));
     }
 
     FrontendInfo info;
-    int feId = getResourceIdFromHandle(frontendHandle, FRONTEND);
-    Result res = getHidlFrontendInfo(feId, info);
+    Result res = getHidlFrontendInfo(id, info);
     if (res != Result::SUCCESS) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(res));
     }
@@ -192,9 +164,41 @@ Status TunerService::getFrontendInfo(
     return Status::ok();
 }
 
+Status TunerService::getFrontendDtmbCapabilities(
+        int32_t id, TunerFrontendDtmbCapabilities* _aidl_return) {
+    if (!hasITuner_1_1()) {
+        ALOGE("ITuner_1_1 service is not init.");
+        return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::UNAVAILABLE));
+    }
+
+    Result res;
+    FrontendDtmbCapabilities dtmbCaps;
+    mTuner_1_1->getFrontendDtmbCapabilities(id,
+            [&](Result r, const FrontendDtmbCapabilities& caps) {
+        dtmbCaps = caps;
+        res = r;
+    });
+    if (res != Result::SUCCESS) {
+        return Status::fromServiceSpecificError(static_cast<int32_t>(res));
+    }
+
+    TunerFrontendDtmbCapabilities aidlDtmbCaps{
+        .transmissionModeCap = (int)dtmbCaps.transmissionModeCap,
+        .bandwidthCap = (int)dtmbCaps.bandwidthCap,
+        .modulationCap = (int)dtmbCaps.modulationCap,
+        .codeRateCap = (int)dtmbCaps.codeRateCap,
+        .guardIntervalCap = (int)dtmbCaps.guardIntervalCap,
+        .interleaveModeCap = (int)dtmbCaps.interleaveModeCap,
+    };
+
+    *_aidl_return = aidlDtmbCaps;
+    return Status::ok();
+}
+
 Status TunerService::openFrontend(
         int32_t frontendHandle, shared_ptr<ITunerFrontend>* _aidl_return) {
-    if (mTuner == nullptr) {
+    if (!hasITuner()) {
         ALOGE("ITuner service is not init.");
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
@@ -213,25 +217,8 @@ Status TunerService::openFrontend(
     return Status::ok();
 }
 
-Status TunerService::getFmqSyncReadWrite(
-        MQDescriptor<int8_t, SynchronizedReadWrite>* mqDesc, bool* _aidl_return) {
-    ALOGD("getFmqSyncReadWrite");
-    // TODO: put the following methods AIDL, and should be called from clients.
-    configFilter();
-    mFilter->start();
-    if (mqDesc == nullptr) {
-        ALOGD("getFmqSyncReadWrite null MQDescriptor.");
-        *_aidl_return = false;
-    } else {
-        ALOGD("getFmqSyncReadWrite true");
-        *_aidl_return = true;
-        *mqDesc = move(mAidlMQDesc);
-    }
-    return ndk::ScopedAStatus::ok();
-}
-
 Status TunerService::openLnb(int lnbHandle, shared_ptr<ITunerLnb>* _aidl_return) {
-    if (!getITuner()) {
+    if (!hasITuner()) {
         ALOGD("get ITuner failed");
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
@@ -252,7 +239,7 @@ Status TunerService::openLnb(int lnbHandle, shared_ptr<ITunerLnb>* _aidl_return)
 }
 
 Status TunerService::openLnbByName(const string& lnbName, shared_ptr<ITunerLnb>* _aidl_return) {
-    if (!getITuner()) {
+    if (!hasITuner()) {
         ALOGE("get ITuner failed");
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
@@ -273,8 +260,30 @@ Status TunerService::openLnbByName(const string& lnbName, shared_ptr<ITunerLnb>*
     return Status::ok();
 }
 
+Status TunerService::openDescrambler(int32_t /*descramblerHandle*/,
+            std::shared_ptr<ITunerDescrambler>* _aidl_return) {
+    if (!hasITuner()) {
+        ALOGD("get ITuner failed");
+        return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
+    }
+
+    Result status;
+    sp<IDescrambler> descrambler;
+    //int id = getResourceIdFromHandle(descramblerHandle, DESCRAMBLER);
+    mTuner->openDescrambler([&](Result r, const sp<IDescrambler>& descramblerSp) {
+        status = r;
+        descrambler = descramblerSp;
+    });
+    if (status != Result::SUCCESS) {
+        return Status::fromServiceSpecificError(static_cast<int32_t>(status));
+    }
+
+    *_aidl_return = ::ndk::SharedRefBase::make<TunerDescrambler>(descrambler);
+    return Status::ok();
+}
+
 Status TunerService::updateTunerResources() {
-    if (!getITuner()) {
+    if (!hasITuner()) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
 
@@ -285,6 +294,12 @@ Status TunerService::updateTunerResources() {
     updateFrontendResources();
     updateLnbResources();
     // TODO: update Demux, Descrambler.
+    return Status::ok();
+}
+
+Status TunerService::getTunerHalVersion(int* _aidl_return) {
+    hasITuner();
+    *_aidl_return = mTunerVersion;
     return Status::ok();
 }
 
@@ -430,7 +445,7 @@ TunerFrontendInfo TunerService::convertToAidlFrontendInfo(FrontendInfo halInfo) 
         case FrontendType::DVBC: {
             TunerFrontendCableCapabilities cableCaps{
                 .modulationCap = (int)halInfo.frontendCaps.dvbcCaps().modulationCap,
-                .codeRateCap = (int)halInfo.frontendCaps.dvbcCaps().fecCap,
+                .codeRateCap = (int64_t)halInfo.frontendCaps.dvbcCaps().fecCap,
                 .annexCap = (int)halInfo.frontendCaps.dvbcCaps().annexCap,
             };
             caps.set<TunerFrontendCapabilities::cableCaps>(cableCaps);

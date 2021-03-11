@@ -14,6 +14,15 @@
  * limitations under the License.
  */
 
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_av_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
 filegroup {
     name: "libmediatranscoding_aidl",
     srcs: [
@@ -96,7 +105,7 @@ cc_library {
 
     static_libs: [
         "mediatranscoding_aidl_interface-ndk_platform",
-        "resourceobserver_aidl_interface-ndk_platform",
+        "resourceobserver_aidl_interface-V1-ndk_platform",
     ],
 
     cflags: [

@@ -1,5 +1,24 @@
 
 
+package {
+    default_applicable_licenses: [
+        "frameworks_av_services_audioflinger_license",
+    ],
+}
+
+// Added automatically by a large-scale-change
+// See: http://go/android-license-faq
+license {
+    name: "frameworks_av_services_audioflinger_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "SPDX-license-identifier-Apache-2.0",
+    ],
+    license_text: [
+        "NOTICE",
+    ],
+}
+
 cc_library_shared {
     name: "libaudioflinger",
 
@@ -35,10 +54,10 @@ cc_library_shared {
     ],
 
     shared_libs: [
-        "audioflinger-aidl-unstable-cpp",
-        "audioclient-types-aidl-unstable-cpp",
-        "av-types-aidl-unstable-cpp",
-        "effect-aidl-unstable-cpp",
+        "audioflinger-aidl-cpp",
+        "audioclient-types-aidl-cpp",
+        "av-types-aidl-cpp",
+        "effect-aidl-cpp",
         "libaudioclient_aidl_conversion",
         "libaudiofoundation",
         "libaudiohal",

@@ -38,7 +38,6 @@
 #include "CaptureStateNotifier.h"
 #include <AudioPolicyInterface.h>
 #include <android/hardware/BnSensorPrivacyListener.h>
-
 #include <unordered_map>
 
 namespace android {
@@ -185,7 +184,7 @@ public:
                                      float* _aidl_return) override;
     binder::Status getSurroundFormats(bool reported, media::Int* count,
                                       std::vector<media::audio::common::AudioFormat>* formats,
-                                      bool* _aidl_return) override;
+                                      std::vector<bool>* formatsEnabled) override;
     binder::Status getHwOffloadEncodingFormatsSupportedForA2DP(
             std::vector<media::audio::common::AudioFormat>* _aidl_return) override;
     binder::Status setSurroundFormatEnabled(media::audio::common::AudioFormat audioFormat,
@@ -199,10 +198,12 @@ public:
     binder::Status listAudioProductStrategies(
             std::vector<media::AudioProductStrategy>* _aidl_return) override;
     binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesEx& aa,
+                                                         bool fallbackOnDefault,
                                                          int32_t* _aidl_return) override;
     binder::Status listAudioVolumeGroups(
             std::vector<media::AudioVolumeGroup>* _aidl_return) override;
     binder::Status getVolumeGroupFromAudioAttributes(const media::AudioAttributesEx& aa,
+                                                     bool fallbackOnDefault,
                                                      int32_t* _aidl_return) override;
     binder::Status setRttEnabled(bool enabled) override;
     binder::Status isCallScreenModeSupported(bool* _aidl_return) override;
@@ -870,7 +871,8 @@ private:
 
     // Internal dump utilities.
     status_t dumpPermissionDenial(int fd);
-
+    void loadAudioPolicyManager();
+    void unloadAudioPolicyManager();
 
     mutable Mutex mLock;    // prevents concurrent access to AudioPolicy manager functions changing
                             // device connection state  or routing
@@ -904,6 +906,10 @@ private:
     MediaPackageManager mPackageManager; // To check allowPlaybackCapture
 
     CaptureStateNotifier mCaptureStateNotifier;
+
+    void *mLibraryHandle = nullptr;
+    CreateAudioPolicyManagerInstance mCreateAudioPolicyManager;
+    DestroyAudioPolicyManagerInstance mDestroyAudioPolicyManager;
 
     std::map<userid_t, sp<SensorPrivacyPolicy>> mMicrophoneSensorPrivacyPolicies;
 };
