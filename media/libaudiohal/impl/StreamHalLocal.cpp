@@ -22,8 +22,8 @@
 #include <utils/Log.h>
 
 #include "DeviceHalLocal.h"
+#include "ParameterUtils.h"
 #include "StreamHalLocal.h"
-#include "VersionUtils.h"
 
 namespace android {
 namespace CPP_VERSION {
@@ -258,7 +258,7 @@ void StreamOutHalLocal::doUpdateSourceMetadata(const SourceMetadata& sourceMetad
 
 #if MAJOR_VERSION >= 7
 void StreamOutHalLocal::doUpdateSourceMetadataV7(const SourceMetadata& sourceMetadata) {
-    const source_metadata_t metadata {
+    const source_metadata_v7_t metadata {
         .track_count = sourceMetadata.tracks.size(),
         // const cast is fine as it is in a const structure
         .tracks = const_cast<playback_track_metadata_v7*>(sourceMetadata.tracks.data()),
@@ -274,7 +274,7 @@ status_t StreamOutHalLocal::updateSourceMetadata(const SourceMetadata& sourceMet
     }
     doUpdateSourceMetadata(sourceMetadata);
 #else
-    if (mDevice->version() < AUDIO_DEVICE_API_VERSION_3_2)
+    if (mDevice->version() < AUDIO_DEVICE_API_VERSION_3_2) {
         if (mStream->update_source_metadata == nullptr) {
             return INVALID_OPERATION;
         }
@@ -309,6 +309,36 @@ status_t StreamOutHalLocal::createMmapBuffer(int32_t minSizeFrames,
 status_t StreamOutHalLocal::getMmapPosition(struct audio_mmap_position *position) {
     if (mStream->get_mmap_position == NULL) return INVALID_OPERATION;
     return mStream->get_mmap_position(mStream, position);
+}
+
+status_t StreamOutHalLocal::getDualMonoMode(audio_dual_mono_mode_t* mode) {
+    if (mStream->get_dual_mono_mode == nullptr) return INVALID_OPERATION;
+    return mStream->get_dual_mono_mode(mStream, mode);
+}
+
+status_t StreamOutHalLocal::setDualMonoMode(audio_dual_mono_mode_t mode) {
+    if (mStream->set_dual_mono_mode == nullptr) return INVALID_OPERATION;
+    return mStream->set_dual_mono_mode(mStream, mode);
+}
+
+status_t StreamOutHalLocal::getAudioDescriptionMixLevel(float* leveldB) {
+    if (mStream->get_audio_description_mix_level == nullptr) return INVALID_OPERATION;
+    return mStream->get_audio_description_mix_level(mStream, leveldB);
+}
+
+status_t StreamOutHalLocal::setAudioDescriptionMixLevel(float leveldB) {
+    if (mStream->set_audio_description_mix_level == nullptr) return INVALID_OPERATION;
+    return mStream->set_audio_description_mix_level(mStream, leveldB);
+}
+
+status_t StreamOutHalLocal::getPlaybackRateParameters(audio_playback_rate_t* playbackRate) {
+    if (mStream->get_playback_rate_parameters == nullptr) return INVALID_OPERATION;
+    return mStream->get_playback_rate_parameters(mStream, playbackRate);
+}
+
+status_t StreamOutHalLocal::setPlaybackRateParameters(const audio_playback_rate_t& playbackRate) {
+    if (mStream->set_playback_rate_parameters == nullptr) return INVALID_OPERATION;
+    return mStream->set_playback_rate_parameters(mStream, &playbackRate);
 }
 
 status_t StreamOutHalLocal::setEventCallback(
@@ -416,13 +446,12 @@ void StreamInHalLocal::doUpdateSinkMetadataV7(const SinkMetadata& sinkMetadata) 
 
 status_t StreamInHalLocal::updateSinkMetadata(const SinkMetadata& sinkMetadata) {
 #if MAJOR_VERSION < 7
-
     if (mStream->update_sink_metadata == nullptr) {
         return INVALID_OPERATION;  // not supported by the HAL
     }
     doUpdateSinkMetadata(sinkMetadata);
 #else
-    if (mDevice->version() < AUDIO_DEVICE_API_VERSION_3_2)
+    if (mDevice->version() < AUDIO_DEVICE_API_VERSION_3_2) {
         if (mStream->update_sink_metadata == nullptr) {
             return INVALID_OPERATION;  // not supported by the HAL
         }

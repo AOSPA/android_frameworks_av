@@ -22,7 +22,7 @@ package android.media.tv.tuner;
  * {@hide}
  */
 parcelable TunerFrontendScanAtsc3PlpInfo {
-    int plpId;
+    byte plpId;
 
     boolean llsFlag;
 }

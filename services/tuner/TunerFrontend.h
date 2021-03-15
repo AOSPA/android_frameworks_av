@@ -41,10 +41,14 @@ using ::android::hardware::tv::tuner::V1_0::FrontendEventType;
 using ::android::hardware::tv::tuner::V1_0::FrontendId;
 using ::android::hardware::tv::tuner::V1_0::FrontendScanMessage;
 using ::android::hardware::tv::tuner::V1_0::FrontendScanMessageType;
+using ::android::hardware::tv::tuner::V1_0::FrontendSettings;
+using ::android::hardware::tv::tuner::V1_0::FrontendStatus;
 using ::android::hardware::tv::tuner::V1_0::IFrontend;
 using ::android::hardware::tv::tuner::V1_1::IFrontendCallback;
 using ::android::hardware::tv::tuner::V1_1::FrontendScanMessageExt1_1;
 using ::android::hardware::tv::tuner::V1_1::FrontendScanMessageTypeExt1_1;
+using ::android::hardware::tv::tuner::V1_1::FrontendSettingsExt1_1;
+using ::android::hardware::tv::tuner::V1_1::FrontendStatusExt1_1;
 
 using namespace std;
 
@@ -66,6 +70,8 @@ public:
     Status close() override;
     Status getStatus(const vector<int32_t>& statusTypes,
             vector<TunerFrontendStatus>* _aidl_return) override;
+    Status getStatusExtended_1_1(const vector<int32_t>& statusTypes,
+            vector<TunerFrontendStatus>* _aidl_return) override;
     Status getFrontendId(int* _aidl_return) override;
 
     struct FrontendCallback : public IFrontendCallback {
@@ -85,6 +91,12 @@ private:
     hidl_vec<FrontendAtsc3PlpSettings> getAtsc3PlpSettings(
             const TunerFrontendAtsc3Settings& settings);
     FrontendDvbsCodeRate getDvbsCodeRate(const TunerFrontendDvbsCodeRate& codeRate);
+    FrontendSettings getHidlFrontendSettings(const TunerFrontendSettings& aidlSettings);
+    FrontendSettingsExt1_1 getHidlFrontendSettingsExt(const TunerFrontendSettings& aidlSettings);
+    void getAidlFrontendStatus(
+            vector<FrontendStatus>& hidlStatus, vector<TunerFrontendStatus>& aidlStatus);
+    void getAidlFrontendStatusExt(
+            vector<FrontendStatusExt1_1>& hidlStatus, vector<TunerFrontendStatus>& aidlStatus);
 
     int mId;
     sp<IFrontend> mFrontend;

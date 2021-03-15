@@ -2351,11 +2351,11 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         // all tracks in same audio session must share the same routing strategy otherwise
         // conflicts will happen when tracks are moved from one output to another by audio policy
         // manager
-        uint32_t strategy = AudioSystem::getStrategyForStream(streamType);
+        product_strategy_t strategy = AudioSystem::getStrategyForStream(streamType);
         for (size_t i = 0; i < mTracks.size(); ++i) {
             sp<Track> t = mTracks[i];
             if (t != 0 && t->isExternalTrack()) {
-                uint32_t actual = AudioSystem::getStrategyForStream(t->streamType());
+                product_strategy_t actual = AudioSystem::getStrategyForStream(t->streamType());
                 if (sessionId == t->sessionId() && strategy != actual) {
                     ALOGE("createTrack_l() mismatched strategy; expected %u but found %u",
                             strategy, actual);
@@ -2981,7 +2981,10 @@ void AudioFlinger::PlaybackThread::updateMetadata_l()
     auto backInserter = std::back_inserter(metadata.tracks);
     for (const sp<Track> &track : mActiveTracks) {
         // No track is invalid as this is called after prepareTrack_l in the same critical section
-        track->copyMetadataTo(backInserter);
+        // Do not forward metadata for PatchTrack with unspecified stream type
+        if (track->streamType() != AUDIO_STREAM_PATCH) {
+            track->copyMetadataTo(backInserter);
+        }
     }
     sendMetadataToBackend_l(metadata);
 }
@@ -3019,7 +3022,7 @@ status_t AudioFlinger::PlaybackThread::getRenderPosition(uint32_t *halFrames, ui
     }
 }
 
-uint32_t AudioFlinger::PlaybackThread::getStrategyForSession_l(audio_session_t sessionId)
+product_strategy_t AudioFlinger::PlaybackThread::getStrategyForSession_l(audio_session_t sessionId)
 {
     // session AUDIO_SESSION_OUTPUT_MIX is placed in same strategy as MUSIC stream so that
     // it is moved to correct output by audio policy manager when A2DP is connected or disconnected
@@ -8222,6 +8225,10 @@ void AudioFlinger::RecordThread::updateMetadata_l()
     }
     StreamInHalInterface::SinkMetadata metadata;
     for (const sp<RecordTrack> &track : mActiveTracks) {
+        // Do not forward PatchRecord metadata to audio HAL
+        if (track->isPatchTrack()) {
+            continue;
+        }
         // No track is invalid as this is called after prepareTrack_l in the same critical section
         record_track_metadata_v7_t trackMetadata;
         trackMetadata.base = {

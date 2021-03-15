@@ -2091,7 +2091,7 @@ status_t NuPlayer::Renderer::onOpenAudioSink(
 
             audioFormat = AVUtils::get()->updateAudioFormat(audioFormat, format);
             bitWidth = AVUtils::get()->getAudioSampleBits(format);
-            int avgBitRate = -1;
+            int avgBitRate = 0;
             format->findInt32("bitrate", &avgBitRate);
 
             int32_t aacProfile = -1;

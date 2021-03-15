@@ -180,7 +180,7 @@ public:
                                 const DeviceTypeSet& deviceTypes) const;
 
         // return the strategy corresponding to a given stream type
-        virtual uint32_t getStrategyForStream(audio_stream_type_t stream)
+        virtual product_strategy_t getStrategyForStream(audio_stream_type_t stream)
         {
             return streamToStrategy(stream);
         }
@@ -200,7 +200,7 @@ public:
         virtual audio_io_handle_t getOutputForEffect(const effect_descriptor_t *desc = NULL);
         virtual status_t registerEffect(const effect_descriptor_t *desc,
                                         audio_io_handle_t io,
-                                        uint32_t strategy,
+                                        product_strategy_t strategy,
                                         int session,
                                         int id);
         virtual status_t unregisterEffect(int id);
@@ -226,6 +226,7 @@ public:
 
         status_t setAllowedCapturePolicy(uid_t uid, audio_flags_mask_t capturePolicy) override;
         virtual audio_offload_mode_t getOffloadSupport(const audio_offload_info_t& offloadInfo);
+        bool isOffloadSupportedInternal(const audio_offload_info_t& offloadInfo);
 
         virtual bool isDirectOutputSupported(const audio_config_base_t& config,
                                              const audio_attributes_t& attributes);
@@ -590,6 +591,8 @@ protected:
          */
         void checkAudioSourceForAttributes(const audio_attributes_t &attr);
 
+        bool isInvalidationOfMusicStreamNeeded(const audio_attributes_t &attr);
+
         bool followsSameRouting(const audio_attributes_t &lAttr,
                                 const audio_attributes_t &rAttr) const;
 
@@ -850,6 +853,7 @@ protected:
 
 private:
         void onNewAudioModulesAvailableInt(DeviceVector *newDevices);
+        void chkDpConnAndAllowedForVoice(audio_devices_t device, audio_policy_dev_state_t state);
 
 protected:
         // Add or remove AC3 DTS encodings based on user preferences.
@@ -865,7 +869,8 @@ protected:
                                            audio_port_config *sourceConfig,
                                            audio_port_config *sinkConfig) const;
         PatchBuilder buildMsdPatch(const sp<DeviceDescriptor> &outputDevice) const;
-        status_t setMsdPatch(const sp<DeviceDescriptor> &outputDevice = nullptr);
+        status_t setMsdPatches(const DeviceVector *outputDevices = nullptr);
+        void releaseMsdPatches(const DeviceVector& devices);
 
         // If any, resolve any "dynamic" fields of an Audio Profiles collection
         void updateAudioProfiles(const sp<DeviceDescriptor>& devDesc, audio_io_handle_t ioHandle,
@@ -920,6 +925,12 @@ protected:
                 audio_output_flags_t flags,
                 const DeviceVector &devices,
                 audio_io_handle_t *output);
+        // Internal method checking If direct pcm track's offloadInfo needs to be updated.
+        void checkAndUpdateOffloadInfoForDirectTracks(
+                const audio_attributes_t *attr,
+                audio_stream_type_t *stream,
+                audio_config_t *config,
+                audio_output_flags_t *flags);
         /**
          * @brief getInputForDevice selects an input handle for a given input device and
          * requester context

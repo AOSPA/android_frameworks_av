@@ -73,6 +73,37 @@ static const std::vector<audio_channel_mask_t> surroundChannelMasksOrder = {{
         AUDIO_CHANNEL_OUT_2POINT1POINT2, AUDIO_CHANNEL_OUT_2POINT0POINT2,
         AUDIO_CHANNEL_OUT_5POINT1, AUDIO_CHANNEL_OUT_STEREO }};
 
+static constexpr unsigned int kWmaStandardFrequencies = 7;
+static constexpr unsigned int kWmaStandardChannels = 2;
+static constexpr unsigned int kWmaProMaxBitrate = 1536000;
+static constexpr unsigned int kWmaLosslessMaxBitrate = 1152000;
+
+static const uint32_t kWMASupportedSampleRates[kWmaStandardFrequencies] =
+{
+    8000, 11025, 16000, 22050, 32000, 44100, 48000
+};
+
+static const uint32_t kWMASupportedMinByteRates[kWmaStandardFrequencies][kWmaStandardChannels] =
+{
+    {128, 12000},
+    {8016, 8016},
+    {10000, 16000},
+    {16016, 20008},
+    {20000, 24000},
+    {20008, 31960},
+    {63000, 63000}
+};
+
+static const uint32_t kWMASupportedMaxByteRates[kWmaStandardFrequencies][kWmaStandardChannels] =
+{
+    {8000, 12000},
+    {10168, 10168},
+    {16000, 20000},
+    {20008, 32048},
+    {20000, 48000},
+    {48024, 320032},
+};
+
 template <typename T>
 bool operator== (const SortedVector<T> &left, const SortedVector<T> &right)
 {
@@ -219,6 +250,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
             return BAD_VALUE;
         }
 
+        chkDpConnAndAllowedForVoice(device->type(), state);
         // Propagate device availability to Engine
         setEngineDeviceConnectionState(device, state);
 
@@ -749,6 +781,22 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
     // check for device and output changes triggered by new phone state
     checkForDeviceAndOutputChanges();
 
+    sp<SwAudioOutputDescriptor> outputDesc;
+    bool voiceDSDConcurrency = property_get_bool("vendor.voice.dsd.playback.conc.disabled", true );
+    if (voiceDSDConcurrency) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            outputDesc = mOutputs.valueAt(i);
+            if (outputDesc != nullptr && outputDesc->mProfile != nullptr &&
+                (outputDesc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) &&
+                (outputDesc->getFormat() == AUDIO_FORMAT_DSD)) {
+                ALOGD("voice_conc:calling closeOutput on call mode for DSD COMPRESS output");
+                closeOutput(mOutputs.keyAt(i));
+                // call invalidate for music, so that DSD compress will fallback to deep-buffer.
+                mpClientInterface->invalidateStream(AUDIO_STREAM_MUSIC);
+            }
+        }
+    }
+
     int delayMs = 0;
     if (isStateInCall(state)) {
         nsecs_t sysTime = systemTime();
@@ -1099,8 +1147,7 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     *output = AUDIO_IO_HANDLE_NONE;
     if (!msdDevices.isEmpty()) {
         *output = getOutputForDevices(msdDevices, session, *stream, config, flags);
-        sp<DeviceDescriptor> device = outputDevices.isEmpty() ? nullptr : outputDevices.itemAt(0);
-        if (*output != AUDIO_IO_HANDLE_NONE && setMsdPatch(device) == NO_ERROR) {
+        if (*output != AUDIO_IO_HANDLE_NONE && setMsdPatches(&outputDevices) == NO_ERROR) {
             ALOGV("%s() Using MSD devices %s instead of devices %s",
                   __func__, msdDevices.toString().c_str(), outputDevices.toString().c_str());
         } else {
@@ -1116,6 +1163,12 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     }
 
     *selectedDeviceId = getFirstDeviceId(outputDevices);
+    for (auto &outputDevice : outputDevices) {
+        if (outputDevice->getId() == getConfig().getDefaultOutputDevice()->getId()) {
+            *selectedDeviceId = outputDevice->getId();
+            break;
+        }
+    }
 
     if (outputDevices.onlyContainsDevicesWithType(AUDIO_DEVICE_OUT_TELEPHONY_TX)) {
         *outputType = API_OUTPUT_TELEPHONY_TX;
@@ -1126,6 +1179,30 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     ALOGV("%s returns output %d selectedDeviceId %d", __func__, *output, *selectedDeviceId);
 
     return NO_ERROR;
+}
+
+void AudioPolicyManager::checkAndUpdateOffloadInfoForDirectTracks(
+        const audio_attributes_t *attr,
+        audio_stream_type_t *stream,
+        audio_config_t *config,
+        audio_output_flags_t *flags)
+{
+    audio_offload_info_t tOffloadInfo = AUDIO_INFO_INITIALIZER;
+    // set offloadInfo for directTracks, If already not set.
+    if (!memcmp(&config->offload_info, &tOffloadInfo, sizeof(audio_offload_info_t))) {
+        bool trackDirectPCM = false;
+        if (*flags == AUDIO_OUTPUT_FLAG_NONE)
+            trackDirectPCM = property_get_bool("vendor.audio.offload.track.enable", true);
+        if (*flags == AUDIO_OUTPUT_FLAG_DIRECT || trackDirectPCM) {
+            ALOGV("Update offload config for direct track");
+            config->offload_info.sample_rate  = config->sample_rate;
+            config->offload_info.channel_mask = config->channel_mask;
+            config->offload_info.format = config->format;
+            config->offload_info.stream_type = *stream;
+            config->offload_info.bit_width = audio_bytes_per_sample(config->format) * 8;
+            config->offload_info.usage = attr != NULL ? attr->usage : config->offload_info.usage;
+        }
+    }
 }
 
 status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
@@ -1156,8 +1233,11 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
       requestedDevice != nullptr ? requestedPortId : AUDIO_PORT_HANDLE_NONE;
     *selectedDeviceId = sanitizedRequestedPortId;
 
+    audio_config_t directConfig = *config;
+    checkAndUpdateOffloadInfoForDirectTracks(attr, stream, &directConfig, flags);
+
     status_t status = getOutputForAttrInt(&resultAttr, output, session, attr, stream, uid,
-            config, flags, selectedDeviceId, &isRequestedDeviceForExclusiveUse,
+            &directConfig, flags, selectedDeviceId, &isRequestedDeviceForExclusiveUse,
             secondaryOutputs != nullptr ? &secondaryMixes : nullptr, outputType);
     if (status != NO_ERROR) {
         return status;
@@ -1258,24 +1338,9 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     sp<SwAudioOutputDescriptor> outputDesc =
             new SwAudioOutputDescriptor(profile, mpClientInterface);
 
-    String8 address = getFirstDeviceAddress(devices);
-
-    // MSD patch may be using the only output stream that can service this request. Release
-    // MSD patch to prioritize this request over any active output on MSD.
-    AudioPatchCollection msdPatches = getMsdPatches();
-    for (size_t i = 0; i < msdPatches.size(); i++) {
-        const auto& patch = msdPatches[i];
-        for (size_t j = 0; j < patch->mPatch.num_sinks; ++j) {
-            const struct audio_port_config *sink = &patch->mPatch.sinks[j];
-            if (sink->type == AUDIO_PORT_TYPE_DEVICE &&
-                    devices.containsDeviceWithType(sink->ext.device.type) &&
-                    (address.isEmpty() || strncmp(sink->ext.device.address, address.string(),
-                            AUDIO_DEVICE_MAX_ADDRESS_LEN) == 0)) {
-                releaseAudioPatch(patch->getHandle(), mUidCached);
-                break;
-            }
-        }
-    }
+    // An MSD patch may be using the only output stream that can service this request. Release
+    // all MSD patches to prioritize this request over any active output on MSD.
+    releaseMsdPatches(devices);
 
     status_t status = outputDesc->open(config, devices, stream, flags, output);
 
@@ -1334,14 +1399,15 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     if ((*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) {
         *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_DIRECT);
     }
+    bool forceDeepBuffer = false;
     // only allow deep buffering for music stream type
     if (stream != AUDIO_STREAM_MUSIC) {
         *flags = (audio_output_flags_t)(*flags &~AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
-    } else if (/* stream == AUDIO_STREAM_MUSIC && */
-            *flags == AUDIO_OUTPUT_FLAG_NONE &&
-            property_get_bool("audio.deep_buffer.media", false /* default_value */)) {
+    } else if ((*flags == AUDIO_OUTPUT_FLAG_NONE || *flags == AUDIO_OUTPUT_FLAG_DIRECT ||
+                (*flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)) && !isInCall() &&
+                property_get_bool("audio.deep_buffer.media", false /* default_value */)) {
         // use DEEP_BUFFER as default output for music stream type
-        *flags = (audio_output_flags_t)AUDIO_OUTPUT_FLAG_DEEP_BUFFER;
+        forceDeepBuffer = true;
     }
     if (stream == AUDIO_STREAM_TTS) {
         *flags = AUDIO_OUTPUT_FLAG_TTS;
@@ -1378,6 +1444,10 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
 
         // at this stage we should ignore the DIRECT flag as no direct output could be found earlier
         *flags = (audio_output_flags_t)(*flags & ~AUDIO_OUTPUT_FLAG_DIRECT);
+        *flags = forceDeepBuffer ? AUDIO_OUTPUT_FLAG_DEEP_BUFFER :
+                 (*flags == AUDIO_OUTPUT_FLAG_NONE) ? AUDIO_OUTPUT_FLAG_PRIMARY : *flags;
+        ALOGI("%s forced deep-buffer (%s) flags (%0x)", __func__,
+                forceDeepBuffer ? "yes": "no" , *flags);
         output = selectOutput(
                 outputs, *flags, config->format, channelMask, config->sample_rate, session);
     }
@@ -1449,7 +1519,8 @@ status_t AudioPolicyManager::getBestMsdAudioProfileFor(const sp<DeviceDescriptor
     }
     AudioProfileVector deviceProfiles;
     for (const auto &outProfile : outputProfiles) {
-        if (hwAvSync == ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0)) {
+        if (hwAvSync == ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) &&
+                outProfile->supportsDevice(outputDevice)) {
             appendAudioProfiles(deviceProfiles, outProfile->getAudioProfiles());
         }
     }
@@ -1517,38 +1588,83 @@ PatchBuilder AudioPolicyManager::buildMsdPatch(const sp<DeviceDescriptor> &outpu
     return patchBuilder;
 }
 
-status_t AudioPolicyManager::setMsdPatch(const sp<DeviceDescriptor> &outputDevice) {
-    sp<DeviceDescriptor> device = outputDevice;
-    if (device == nullptr) {
+status_t AudioPolicyManager::setMsdPatches(const DeviceVector *outputDevices) {
+    DeviceVector devices;
+    if (outputDevices != nullptr && outputDevices->size() > 0) {
+        devices.add(*outputDevices);
+    } else {
         // Use media strategy for unspecified output device. This should only
         // occur on checkForDeviceAndOutputChanges(). Device connection events may
         // therefore invalidate explicit routing requests.
-        DeviceVector devices = mEngine->getOutputDevicesForAttributes(
+        devices = mEngine->getOutputDevicesForAttributes(
                     attributes_initializer(AUDIO_USAGE_MEDIA), nullptr, false /*fromCache*/);
-        LOG_ALWAYS_FATAL_IF(devices.isEmpty(), "no outpudevice to set Msd Patch");
-        device = devices.itemAt(0);
+        LOG_ALWAYS_FATAL_IF(devices.isEmpty(), "no output device to set MSD patch");
     }
-    ALOGV("%s() for device %s", __func__, device->toString().c_str());
-    PatchBuilder patchBuilder = buildMsdPatch(device);
-    const struct audio_patch* patch = patchBuilder.patch();
-    const AudioPatchCollection msdPatches = getMsdPatches();
-    if (!msdPatches.isEmpty()) {
-        LOG_ALWAYS_FATAL_IF(msdPatches.size() > 1,
-                "The current MSD prototype only supports one output patch");
-        sp<AudioPatch> currentPatch = msdPatches.valueAt(0);
-        if (audio_patches_are_equal(&currentPatch->mPatch, patch)) {
-            return NO_ERROR;
+    std::vector<PatchBuilder> patchesToCreate;
+    for (auto i = 0u; i < devices.size(); ++i) {
+        ALOGV("%s() for device %s", __func__, devices[i]->toString().c_str());
+        patchesToCreate.push_back(buildMsdPatch(devices[i]));
+    }
+    // Retain only the MSD patches associated with outputDevices request.
+    // Tear down the others, and create new ones as needed.
+    AudioPatchCollection patchesToRemove = getMsdPatches();
+    for (auto it = patchesToCreate.begin(); it != patchesToCreate.end(); ) {
+        auto retainedPatch = false;
+        for (auto i = 0u; i < patchesToRemove.size(); ++i) {
+            if (audio_patches_are_equal(it->patch(), &patchesToRemove[i]->mPatch)) {
+                patchesToRemove.removeItemsAt(i);
+                retainedPatch = true;
+                break;
+            }
         }
+        if (retainedPatch) {
+            it = patchesToCreate.erase(it);
+            continue;
+        }
+        ++it;
+    }
+    if (patchesToCreate.size() == 0 && patchesToRemove.size() == 0) {
+        return NO_ERROR;
+    }
+    for (auto i = 0u; i < patchesToRemove.size(); ++i) {
+        auto &currentPatch = patchesToRemove.valueAt(i);
         releaseAudioPatch(currentPatch->getHandle(), mUidCached);
     }
-    status_t status = installPatch(__func__, -1 /*index*/, nullptr /*patchHandle*/,
-            patch, 0 /*delayMs*/, mUidCached, nullptr /*patchDescPtr*/);
-    ALOGE_IF(status != NO_ERROR, "%s() error %d creating MSD audio patch", __func__, status);
-    ALOGI_IF(status == NO_ERROR, "%s() Patch created from MSD_IN to "
-           "device:%s (format:%#x channels:%#x samplerate:%d)", __func__,
-             device->toString().c_str(), patch->sources[0].format,
-             patch->sources[0].channel_mask, patch->sources[0].sample_rate);
+    status_t status = NO_ERROR;
+    for (const auto &p : patchesToCreate) {
+        auto currStatus = installPatch(__func__, -1 /*index*/, nullptr /*patchHandle*/,
+                p.patch(), 0 /*delayMs*/, mUidCached, nullptr /*patchDescPtr*/);
+        char message[256];
+        snprintf(message, sizeof(message), "%s() %s: creating MSD patch from device:IN_BUS to "
+            "device:%#x (format:%#x channels:%#x samplerate:%d)", __func__,
+                currStatus == NO_ERROR ? "Success" : "Error",
+                p.patch()->sinks[0].ext.device.type, p.patch()->sources[0].format,
+                p.patch()->sources[0].channel_mask, p.patch()->sources[0].sample_rate);
+        if (currStatus == NO_ERROR) {
+            ALOGD("%s", message);
+        } else {
+            ALOGE("%s", message);
+            if (status == NO_ERROR) {
+                status = currStatus;
+            }
+        }
+    }
     return status;
+}
+
+void AudioPolicyManager::releaseMsdPatches(const DeviceVector& devices) {
+    AudioPatchCollection msdPatches = getMsdPatches();
+    for (size_t i = 0; i < msdPatches.size(); i++) {
+        const auto& patch = msdPatches[i];
+        for (size_t j = 0; j < patch->mPatch.num_sinks; ++j) {
+            const struct audio_port_config *sink = &patch->mPatch.sinks[j];
+            if (sink->type == AUDIO_PORT_TYPE_DEVICE && devices.getDevice(sink->ext.device.type,
+                    String8(sink->ext.device.address), AUDIO_FORMAT_DEFAULT) != nullptr) {
+                releaseAudioPatch(patch->getHandle(), mUidCached);
+                break;
+            }
+        }
+    }
 }
 
 audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_handle_t>& outputs,
@@ -2894,7 +3010,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForEffect(const effect_descriptor
 
 status_t AudioPolicyManager::registerEffect(const effect_descriptor_t *desc,
                                 audio_io_handle_t io,
-                                uint32_t strategy,
+                                product_strategy_t strategy,
                                 int session,
                                 int id)
 {
@@ -3581,6 +3697,9 @@ audio_offload_mode_t AudioPolicyManager::getOffloadSupport(const audio_offload_i
         return AUDIO_OFFLOAD_NOT_SUPPORTED;
     }
 
+    if (!isOffloadSupportedInternal(offloadInfo)) {
+        return AUDIO_OFFLOAD_NOT_SUPPORTED;
+    }
     // See if there is a profile to support this.
     // AUDIO_DEVICE_NONE
     sp<IOProfile> profile = getProfileForOutput(DeviceVector() /*ignore device */,
@@ -3599,6 +3718,67 @@ audio_offload_mode_t AudioPolicyManager::getOffloadSupport(const audio_offload_i
         return AUDIO_OFFLOAD_GAPLESS_SUPPORTED;
     }
     return AUDIO_OFFLOAD_SUPPORTED;
+}
+
+bool AudioPolicyManager::isOffloadSupportedInternal(const audio_offload_info_t& offloadInfo)
+{
+    const bool audioExtensionFormatsEnabled =
+            property_get_bool("vendor.audio.extn.formats", true /* default_value */);
+    if (audioExtensionFormatsEnabled) {
+        const audio_format_t audioFormat = audio_get_main_format(offloadInfo.format);
+        if (property_get_bool("vendor.voice.dsd.playback.conc.disabled", true) &&
+            isInCall() && (audioFormat == AUDIO_FORMAT_DSD)) {
+            ALOGD("%s, Offload denied for DSD as in call", __func__);
+            return false;
+        }
+        int channelCount = popcount(offloadInfo.channel_mask);
+        if (channelCount > 2) {
+            if (audioFormat == AUDIO_FORMAT_FLAC || audioFormat == AUDIO_FORMAT_AAC_ADTS ||
+                audioFormat == AUDIO_FORMAT_AAC || audioFormat == AUDIO_FORMAT_VORBIS) {
+                ALOGD("%s, Offload denied for format %0x, channels %d",
+                        __func__, audioFormat, channelCount);
+                return false;
+            }
+            if (offloadInfo.sample_rate > 48000 &&
+                (audioFormat == AUDIO_FORMAT_ALAC || audioFormat == AUDIO_FORMAT_WMA ||
+                audioFormat == AUDIO_FORMAT_WMA_PRO)) {
+                ALOGD("%s, Offload denied for format %0x, channels %d, samplerate %d",
+                        __func__, audioFormat, channelCount, offloadInfo.sample_rate);
+                return false;
+            }
+        }
+        // check against wma std bit rate restriction
+        if (audioFormat == AUDIO_FORMAT_WMA) {
+            int32_t srIndex = -1;
+            for (int i = 0; i < kWmaStandardFrequencies; i++) {
+                if (offloadInfo.sample_rate == kWMASupportedSampleRates[i]) {
+                    srIndex = i;
+                    break;
+                }
+            }
+            if (srIndex < 0 || channelCount > 2 || channelCount <= 0) {
+                ALOGD("%s,Offload denied for WMA, invalid sampleRate/channelCount", __func__);
+                return false;
+            }
+
+            uint32_t minBitRate = kWMASupportedMinByteRates[srIndex][channelCount - 1];
+            uint32_t maxBitRate = kWMASupportedMaxByteRates[srIndex][channelCount - 1];
+            if ((offloadInfo.bit_rate > maxBitRate) || (offloadInfo.bit_rate < minBitRate)) {
+                ALOGD("%s Offload denied for WMA unsupported bitRate %d, maxBitRate %d,"
+                        "minBitRate%d", __func__, offloadInfo.bit_rate, maxBitRate, minBitRate);
+                return false;
+            }
+        }
+
+        // Safely choose the min bitrate as threshold and leave the restriction to NT decoder
+        // as we can't distinguish wma pro and wma lossless here.
+        if (audioFormat == AUDIO_FORMAT_WMA_PRO && (offloadInfo.bit_rate > kWmaProMaxBitrate ||
+                offloadInfo.bit_rate > kWmaLosslessMaxBitrate)) {
+            ALOGD("%s offload disabled for WMA_PRO/WMA_LOSSLESS bit rate exceeding", __func__);
+            return false;
+        }
+    }
+    return true;
 }
 
 bool AudioPolicyManager::isDirectOutputSupported(const audio_config_base_t& config,
@@ -5362,8 +5542,13 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
             }
         }
         if (!directOutputOpen) {
-            ALOGV("no direct outputs open, reset MSD patch");
-            setMsdPatch();
+            ALOGV("no direct outputs open, reset MSD patches");
+            // TODO: The MSD patches to be established here may differ to current MSD patches due to
+            // how output devices for patching are resolved. Avoid by caching and reusing the
+            // arguments to mEngine->getOutputDevicesForAttributes() when resolving which output
+            // devices to patch to. This may be complicated by the fact that devices may become
+            // unavailable.
+            setMsdPatches();
         }
     }
 }
@@ -5430,7 +5615,13 @@ void AudioPolicyManager::checkForDeviceAndOutputChanges(std::function<bool()> on
     if (onOutputsChecked != nullptr && onOutputsChecked()) checkA2dpSuspend();
     updateDevicesAndOutputs();
     if (mHwModules.getModuleFromName(AUDIO_HARDWARE_MODULE_ID_MSD) != 0) {
-        setMsdPatch();
+        // TODO: The MSD patches to be established here may differ to current MSD patches due to how
+        // output devices for patching are resolved. Nevertheless, AudioTracks affected by device
+        // configuration changes will ultimately be rerouted correctly. We can still avoid
+        // unnecessary rerouting by caching and reusing the arguments to
+        // mEngine->getOutputDevicesForAttributes() when resolving which output devices to patch to.
+        // This may be complicated by the fact that devices may become unavailable.
+        setMsdPatches();
     }
     // an event that changed routing likely occurred, inform upper layers
     mpClientInterface->onRoutingUpdated();
@@ -5472,8 +5663,21 @@ const unsigned int muteLatencyFactor = property_get_int32(
 const unsigned int routingLatency = property_get_int32(
             "audio.sys.routing.latency", DEFAULT_ROUTING_LATENCY_MS);
 
+bool AudioPolicyManager::isInvalidationOfMusicStreamNeeded(const audio_attributes_t &attr)
+{
+    if (followsSameRouting(attr, attributes_initializer(AUDIO_USAGE_MEDIA))) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            sp<SwAudioOutputDescriptor> newOutputDesc = mOutputs.valueAt(i);
+            if (newOutputDesc->getFormat() == AUDIO_FORMAT_DSD)
+                return false;
+        }
+    }
+    return true;
+}
 void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr)
 {
+    if (!isInvalidationOfMusicStreamNeeded(attr))
+        return;
     auto psId = mEngine->getProductStrategyForAttributes(attr);
 
     DeviceVector oldDevices = mEngine->getOutputDevicesForAttributes(attr, 0, true /*fromCache*/);
@@ -6981,6 +7185,25 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
         mPrimaryOutput = desc;
     }
     return desc;
+}
+
+void AudioPolicyManager::chkDpConnAndAllowedForVoice(audio_devices_t device,
+                                                     audio_policy_dev_state_t state)
+{
+    if (device == AUDIO_DEVICE_OUT_AUX_DIGITAL) {
+        bool allowed = false;
+        bool connect = (state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
+        if (connect) {
+            String8 value;
+            String8 reply = mpClientInterface->getParameters(AUDIO_IO_HANDLE_NONE,
+                                                                String8("dp_for_voice"));
+            AudioParameter repliedParameters = AudioParameter(reply);
+            if (repliedParameters.get(String8("dp_for_voice"), value) == NO_ERROR) {
+                allowed = value.contains("true");
+            }
+        }
+        mEngine->setDpConnAndAllowedForVoice(connect & allowed);
+    }
 }
 
 } // namespace android

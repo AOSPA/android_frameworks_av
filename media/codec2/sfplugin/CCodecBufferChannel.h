@@ -31,6 +31,7 @@
 #include <media/stagefright/CodecBase.h>
 
 #include "CCodecBuffers.h"
+#include "FrameReassembler.h"
 #include "InputSurfaceWrapper.h"
 #include "PipelineWatcher.h"
 
@@ -238,7 +239,9 @@ private:
 
     void feedInputBufferIfAvailable();
     void feedInputBufferIfAvailableInternal();
-    status_t queueInputBufferInternal(sp<MediaCodecBuffer> buffer);
+    status_t queueInputBufferInternal(sp<MediaCodecBuffer> buffer,
+                                      std::shared_ptr<C2LinearBlock> encryptedBlock = nullptr,
+                                      size_t blockSize = 0);
     bool handleWork(
             std::unique_ptr<C2Work> work, const sp<AMessage> &outputFormat,
             const C2StreamInitDataInfo::output *initData);
@@ -269,6 +272,8 @@ private:
         size_t numExtraSlots;
         uint32_t inputDelay;
         uint32_t pipelineDelay;
+
+        FrameReassembler frameReassembler;
     };
     Mutexed<Input> mInput;
     struct Output {
@@ -316,6 +321,7 @@ private:
     inline bool hasCryptoOrDescrambler() {
         return mCrypto != nullptr || mDescrambler != nullptr;
     }
+    std::atomic_bool mSendEncryptedInfoBuffer;
 };
 
 // Conversion of a c2_status_t value to a status_t value may depend on the
