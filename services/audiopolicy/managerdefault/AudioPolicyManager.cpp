@@ -1433,6 +1433,25 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         *flags = (audio_output_flags_t)(*flags &
                     (~(AUDIO_OUTPUT_FLAG_FAST|AUDIO_OUTPUT_FLAG_RAW)));
     }
+
+    /*
+    * WFD audio routes back to target speaker when starting a ringtone playback.
+    * This is because primary output is reused for ringtone, so output device is
+    * updated based on SONIFICATION strategy for both ringtone and music playback.
+    * The same issue is not seen on remoted_submix HAL based WFD audio because
+    * primary output is not reused and a new output is created for ringtone playback.
+    * Issue is fixed by updating output flag to AUDIO_OUTPUT_FLAG_FAST when there is
+    * a non-music stream playback on WFD, so primary output is not reused for ringtone.
+    */
+    if (property_get_bool("vendor.audio.afe.proxy.enabled", true /* default_value */)) {
+        DeviceTypeSet availableOutputDeviceTypes = mAvailableOutputDevices.types();
+        if ((deviceTypesToBitMask(availableOutputDeviceTypes) & AUDIO_DEVICE_OUT_PROXY)
+              && (stream != AUDIO_STREAM_MUSIC)) {
+            ALOGD("%s Use fast flags for stream %d requested Flags%x",__func__, stream, *flags);
+            *flags = (*flags & AUDIO_OUTPUT_FLAG_DIRECT) ?
+                        AUDIO_OUTPUT_FLAG_DIRECT : AUDIO_OUTPUT_FLAG_FAST;
+        }
+    }
     // open a direct output if required by specified parameters
     //force direct flag if offload flag is set: offloading implies a direct output stream
     // and all common behaviors are driven by checking only the direct flag
