@@ -265,6 +265,7 @@ enum {
     // Slow-motion markers
     kKeySlowMotionMarkers = 'slmo', // raw data, byte array following spec for
                                     // MediaFormat#KEY_SLOW_MOTION_MARKERS
+    kKeyVendorFeatureNalLength = 'vfnl', // int32_t key to check nal length enable
 };
 
 enum {
