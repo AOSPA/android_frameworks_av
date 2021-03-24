@@ -864,8 +864,8 @@ sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
         videoFormat->setInt32("thumbnail-mode", 1);
         videoFormat->setInt32("vendor.qti-ext-dec-thumbnail-mode.value", 1);
     } else {
-        ALOGD("Enable multi-thread for Heif");
-        mUseMultiThread = true;
+        ALOGD("Disable multi-thread for Heif");
+        mUseMultiThread = false;
     }
     return videoFormat;
 }
