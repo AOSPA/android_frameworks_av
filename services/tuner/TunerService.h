@@ -72,6 +72,8 @@ namespace android {
 const static int TUNER_HAL_VERSION_UNKNOWN = 0;
 const static int TUNER_HAL_VERSION_1_0 = 1 << 16;
 const static int TUNER_HAL_VERSION_1_1 = (1 << 16) | 1;
+// System Feature defined in PackageManager
+static const ::android::String16 FEATURE_TUNER(::android::String16("android.hardware.tv.tuner"));
 
 typedef enum {
     FRONTEND,
@@ -113,7 +115,6 @@ public:
     Status getDemuxCaps(TunerDemuxCapabilities* _aidl_return) override;
     Status openDescrambler(int32_t descramblerHandle,
             std::shared_ptr<ITunerDescrambler>* _aidl_return) override;
-    Status updateTunerResources() override;
     Status getTunerHalVersion(int* _aidl_return) override;
 
     // TODO: create a map between resource id and handles.
@@ -131,6 +132,7 @@ public:
 private:
     bool hasITuner();
     bool hasITuner_1_1();
+    void updateTunerResources();
 
     void updateFrontendResources();
     void updateLnbResources();
