@@ -24,6 +24,7 @@
 #include <media/TranscodingUidPolicy.h>
 #include <utils/Log.h>
 
+#include <thread>
 #include <utility>
 
 namespace android {
@@ -60,12 +61,209 @@ const char* TranscodingSessionController::sessionStateToString(const Session::St
     return "(unknown)";
 }
 
+///////////////////////////////////////////////////////////////////////////////
+struct TranscodingSessionController::Watchdog {
+    Watchdog(TranscodingSessionController* owner, int64_t timeoutUs);
+    ~Watchdog();
+
+    // Starts monitoring the session.
+    void start(const SessionKeyType& key);
+    // Stops monitoring the session.
+    void stop();
+    // Signals that the session is still alive. Must be sent at least every mTimeoutUs.
+    // (Timeout will happen if no ping in mTimeoutUs since the last ping.)
+    void keepAlive();
+
+private:
+    void threadLoop();
+    void updateTimer_l();
+
+    TranscodingSessionController* mOwner;
+    const int64_t mTimeoutUs;
+    mutable std::mutex mLock;
+    std::condition_variable mCondition GUARDED_BY(mLock);
+    // Whether watchdog is monitoring a session for timeout.
+    bool mActive GUARDED_BY(mLock);
+    // Whether watchdog is aborted and the monitoring thread should exit.
+    bool mAbort GUARDED_BY(mLock);
+    // When watchdog is active, the next timeout time point.
+    std::chrono::steady_clock::time_point mNextTimeoutTime GUARDED_BY(mLock);
+    // When watchdog is active, the session being watched.
+    SessionKeyType mSessionToWatch GUARDED_BY(mLock);
+    std::thread mThread;
+};
+
+TranscodingSessionController::Watchdog::Watchdog(TranscodingSessionController* owner,
+                                                 int64_t timeoutUs)
+      : mOwner(owner),
+        mTimeoutUs(timeoutUs),
+        mActive(false),
+        mAbort(false),
+        mThread(&Watchdog::threadLoop, this) {
+    ALOGV("Watchdog CTOR: %p", this);
+}
+
+TranscodingSessionController::Watchdog::~Watchdog() {
+    ALOGV("Watchdog DTOR: %p", this);
+
+    {
+        // Exit the looper thread.
+        std::scoped_lock lock{mLock};
+
+        mAbort = true;
+        mCondition.notify_one();
+    }
+
+    mThread.join();
+    ALOGV("Watchdog DTOR: %p, done.", this);
+}
+
+void TranscodingSessionController::Watchdog::start(const SessionKeyType& key) {
+    std::scoped_lock lock{mLock};
+
+    if (!mActive) {
+        ALOGI("Watchdog start: %s", sessionToString(key).c_str());
+
+        mActive = true;
+        mSessionToWatch = key;
+        updateTimer_l();
+        mCondition.notify_one();
+    }
+}
+
+void TranscodingSessionController::Watchdog::stop() {
+    std::scoped_lock lock{mLock};
+
+    if (mActive) {
+        ALOGI("Watchdog stop: %s", sessionToString(mSessionToWatch).c_str());
+
+        mActive = false;
+        mCondition.notify_one();
+    }
+}
+
+void TranscodingSessionController::Watchdog::keepAlive() {
+    std::scoped_lock lock{mLock};
+
+    if (mActive) {
+        ALOGI("Watchdog keepAlive: %s", sessionToString(mSessionToWatch).c_str());
+
+        updateTimer_l();
+        mCondition.notify_one();
+    }
+}
+
+// updateTimer_l() is only called with lock held.
+void TranscodingSessionController::Watchdog::updateTimer_l() NO_THREAD_SAFETY_ANALYSIS {
+    std::chrono::microseconds timeout(mTimeoutUs);
+    mNextTimeoutTime = std::chrono::steady_clock::now() + timeout;
+}
+
+// Unfortunately std::unique_lock is incompatible with -Wthread-safety.
+void TranscodingSessionController::Watchdog::threadLoop() NO_THREAD_SAFETY_ANALYSIS {
+    std::unique_lock<std::mutex> lock{mLock};
+
+    while (!mAbort) {
+        if (!mActive) {
+            mCondition.wait(lock);
+            continue;
+        }
+        // Watchdog active, wait till next timeout time.
+        if (mCondition.wait_until(lock, mNextTimeoutTime) == std::cv_status::timeout) {
+            // If timeout happens, report timeout and deactivate watchdog.
+            mActive = false;
+            // Make a copy of session key, as once we unlock, it could be unprotected.
+            SessionKeyType sessionKey = mSessionToWatch;
+
+            ALOGE("Watchdog timeout: %s", sessionToString(sessionKey).c_str());
+
+            lock.unlock();
+            mOwner->onError(sessionKey.first, sessionKey.second,
+                            TranscodingErrorCode::kWatchdogTimeout);
+            lock.lock();
+        }
+    }
+}
+///////////////////////////////////////////////////////////////////////////////
+struct TranscodingSessionController::Pacer {
+    Pacer(const ControllerConfig& config)
+          : mBurstThresholdMs(config.pacerBurstThresholdMs),
+            mBurstCountQuota(config.pacerBurstCountQuota),
+            mBurstTimeQuotaSec(config.pacerBurstTimeQuotaSeconds) {}
+
+    ~Pacer() = default;
+
+    void onSessionCompleted(uid_t uid, std::chrono::microseconds runningTime);
+    bool onSessionStarted(uid_t uid);
+
+private:
+    // Threshold of time between finish/start below which a back-to-back start is counted.
+    int32_t mBurstThresholdMs;
+    // Maximum allowed back-to-back start count.
+    int32_t mBurstCountQuota;
+    // Maximum allowed back-to-back running time.
+    int32_t mBurstTimeQuotaSec;
+
+    struct UidHistoryEntry {
+        std::chrono::steady_clock::time_point lastCompletedTime;
+        int32_t burstCount = 0;
+        std::chrono::steady_clock::duration burstDuration{0};
+    };
+    std::map<uid_t, UidHistoryEntry> mUidHistoryMap;
+};
+
+void TranscodingSessionController::Pacer::onSessionCompleted(
+        uid_t uid, std::chrono::microseconds runningTime) {
+    if (mUidHistoryMap.find(uid) == mUidHistoryMap.end()) {
+        mUidHistoryMap.emplace(uid, UidHistoryEntry{});
+    }
+    mUidHistoryMap[uid].lastCompletedTime = std::chrono::steady_clock::now();
+    mUidHistoryMap[uid].burstCount++;
+    mUidHistoryMap[uid].burstDuration += runningTime;
+}
+
+bool TranscodingSessionController::Pacer::onSessionStarted(uid_t uid) {
+    // If uid doesn't exist, this uid has no completed sessions. Skip.
+    if (mUidHistoryMap.find(uid) == mUidHistoryMap.end()) {
+        return true;
+    }
+
+    // TODO: if Thermal throttling or resoure lost happened to occurr between this start
+    // and the previous completion, we should deduct the paused time from the elapsed time.
+    // (Individual session's pause time, on the other hand, doesn't need to be deducted
+    // because it doesn't affect the gap between last completion and the start.
+    auto timeSinceLastComplete =
+            std::chrono::steady_clock::now() - mUidHistoryMap[uid].lastCompletedTime;
+    if (mUidHistoryMap[uid].burstCount >= mBurstCountQuota &&
+        mUidHistoryMap[uid].burstDuration >= std::chrono::seconds(mBurstTimeQuotaSec)) {
+        ALOGW("Pacer: uid %d: over quota, burst count %d, time %lldms", uid,
+              mUidHistoryMap[uid].burstCount, (long long)mUidHistoryMap[uid].burstDuration.count());
+        return false;
+    }
+
+    // If not over quota, allow the session, and reset as long as this is not too close
+    // to previous completion.
+    if (timeSinceLastComplete > std::chrono::milliseconds(mBurstThresholdMs)) {
+        ALOGV("Pacer: uid %d: reset quota", uid);
+        mUidHistoryMap[uid].burstCount = 0;
+        mUidHistoryMap[uid].burstDuration = std::chrono::milliseconds(0);
+    } else {
+        ALOGV("Pacer: uid %d: burst count %d, time %lldms", uid, mUidHistoryMap[uid].burstCount,
+              (long long)mUidHistoryMap[uid].burstDuration.count());
+    }
+
+    return true;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 TranscodingSessionController::TranscodingSessionController(
-        const std::shared_ptr<TranscoderInterface>& transcoder,
+        const TranscoderFactoryType& transcoderFactory,
         const std::shared_ptr<UidPolicyInterface>& uidPolicy,
         const std::shared_ptr<ResourcePolicyInterface>& resourcePolicy,
-        const std::shared_ptr<ThermalPolicyInterface>& thermalPolicy)
-      : mTranscoder(transcoder),
+        const std::shared_ptr<ThermalPolicyInterface>& thermalPolicy,
+        const ControllerConfig* config)
+      : mTranscoderFactory(transcoderFactory),
         mUidPolicy(uidPolicy),
         mResourcePolicy(resourcePolicy),
         mThermalPolicy(thermalPolicy),
@@ -77,6 +275,13 @@ TranscodingSessionController::TranscodingSessionController(
     mSessionQueues.emplace(OFFLINE_UID, SessionQueueType());
     mUidPackageNames[OFFLINE_UID] = "(offline)";
     mThermalThrottling = thermalPolicy->getThrottlingStatus();
+    if (config != nullptr) {
+        mConfig = *config;
+    }
+    mPacer.reset(new Pacer(mConfig));
+    ALOGD("@@@ watchdog %lld, burst count %d, burst time %d, burst threshold %d",
+          (long long)mConfig.watchdogTimeoutUs, mConfig.pacerBurstCountQuota,
+          mConfig.pacerBurstTimeQuotaSeconds, mConfig.pacerBurstThresholdMs);
 }
 
 TranscodingSessionController::~TranscodingSessionController() {}
@@ -151,22 +356,54 @@ void TranscodingSessionController::dumpAllSessions(int fd, const Vector<String16
     write(fd, result.string(), result.size());
 }
 
+/*
+ * Returns nullptr if there is no session, or we're paused globally (due to resource lost,
+ * thermal throttling, etc.). Otherwise, return the session that should be run next.
+ */
 TranscodingSessionController::Session* TranscodingSessionController::getTopSession_l() {
     if (mSessionMap.empty()) {
         return nullptr;
     }
+
+    // Return nullptr if we're paused globally due to resource lost or thermal throttling.
+    if (((mResourcePolicy != nullptr && mResourceLost) ||
+         (mThermalPolicy != nullptr && mThermalThrottling))) {
+        return nullptr;
+    }
+
     uid_t topUid = *mUidSortedList.begin();
     SessionKeyType topSessionKey = *mSessionQueues[topUid].begin();
     return &mSessionMap[topSessionKey];
+}
+
+void TranscodingSessionController::setSessionState_l(Session* session, Session::State state) {
+    bool wasRunning = (session->getState() == Session::RUNNING);
+    session->setState(state);
+    bool isRunning = (session->getState() == Session::RUNNING);
+
+    if (wasRunning == isRunning) {
+        return;
+    }
+
+    // Currently we only have 1 running session, and we always put the previous
+    // session in non-running state before we run the new session, so it's okay
+    // to start/stop the watchdog here. If this assumption changes, we need to
+    // track the number of running sessions and start/stop watchdog based on that.
+    if (isRunning) {
+        mWatchdog->start(session->key);
+    } else {
+        mWatchdog->stop();
+    }
 }
 
 void TranscodingSessionController::Session::setState(Session::State newState) {
     if (state == newState) {
         return;
     }
-    auto nowTime = std::chrono::system_clock::now();
+    auto nowTime = std::chrono::steady_clock::now();
     if (state != INVALID) {
-        std::chrono::microseconds elapsedTime = (nowTime - stateEnterTime);
+        std::chrono::microseconds elapsedTime =
+                std::chrono::duration_cast<std::chrono::microseconds>(nowTime - stateEnterTime);
         switch (state) {
         case PAUSED:
             pausedTime = pausedTime + elapsedTime;
@@ -189,42 +426,60 @@ void TranscodingSessionController::Session::setState(Session::State newState) {
 }
 
 void TranscodingSessionController::updateCurrentSession_l() {
-    Session* topSession = getTopSession_l();
     Session* curSession = mCurrentSession;
-    ALOGV("updateCurrentSession: topSession is %s, curSession is %s",
-          topSession == nullptr ? "null" : sessionToString(topSession->key).c_str(),
-          curSession == nullptr ? "null" : sessionToString(curSession->key).c_str());
+    Session* topSession = getTopSession_l();
 
-    if (topSession == nullptr) {
-        mCurrentSession = nullptr;
-        return;
+    // Delayed init of transcoder and watchdog.
+    if (mTranscoder == nullptr) {
+        mTranscoder = mTranscoderFactory(shared_from_this());
+        mWatchdog = std::make_shared<Watchdog>(this, mConfig.watchdogTimeoutUs);
     }
 
-    bool shouldBeRunning = !((mResourcePolicy != nullptr && mResourceLost) ||
-                             (mThermalPolicy != nullptr && mThermalThrottling));
-    // If we found a topSession that should be run, and it's not already running,
-    // take some actions to ensure it's running.
-    if (topSession != curSession ||
-        (shouldBeRunning ^ (topSession->getState() == Session::RUNNING))) {
-        // If current session is running, pause it first. Note this is true for either
-        // cases: 1) If top session is changing, or 2) if top session is not changing but
-        // the topSession's state is changing.
+    // If we found a different top session, or the top session's running state is not
+    // correct. Take some actions to ensure it's correct.
+    while ((topSession = getTopSession_l()) != curSession ||
+           (topSession != nullptr && !topSession->isRunning())) {
+        ALOGV("updateCurrentSession_l: topSession is %s, curSession is %s",
+              topSession == nullptr ? "null" : sessionToString(topSession->key).c_str(),
+              curSession == nullptr ? "null" : sessionToString(curSession->key).c_str());
+
+        // If current session is running, pause it first. Note this is needed for either
+        // cases: 1) Top session is changing to another session, or 2) Top session is
+        // changing to null (which means we should be globally paused).
         if (curSession != nullptr && curSession->getState() == Session::RUNNING) {
             mTranscoder->pause(curSession->key.first, curSession->key.second);
-            curSession->setState(Session::PAUSED);
+            setSessionState_l(curSession, Session::PAUSED);
         }
-        // If we are not experiencing resource loss nor thermal throttling, we can start
-        // or resume the topSession now.
-        if (shouldBeRunning) {
-            if (topSession->getState() == Session::NOT_STARTED) {
-                mTranscoder->start(topSession->key.first, topSession->key.second,
-                                   topSession->request, topSession->callback.lock());
-            } else if (topSession->getState() == Session::PAUSED) {
-                mTranscoder->resume(topSession->key.first, topSession->key.second,
-                                    topSession->request, topSession->callback.lock());
+
+        if (topSession == nullptr) {
+            // Nothing more to run (either no session or globally paused).
+            break;
+        }
+
+        // Otherwise, ensure topSession is running.
+        if (topSession->getState() == Session::NOT_STARTED) {
+            if (!mPacer->onSessionStarted(topSession->clientUid)) {
+                // Unfortunately this uid is out of quota for new sessions.
+                // Drop this sesion and try another one.
+                {
+                    auto clientCallback = mSessionMap[topSession->key].callback.lock();
+                    if (clientCallback != nullptr) {
+                        clientCallback->onTranscodingFailed(
+                                topSession->key.second, TranscodingErrorCode::kDroppedByService);
+                    }
+                }
+                removeSession_l(topSession->key, Session::DROPPED_BY_PACER);
+                continue;
             }
-            topSession->setState(Session::RUNNING);
+            mTranscoder->start(topSession->key.first, topSession->key.second, topSession->request,
+                               topSession->callingUid, topSession->callback.lock());
+            setSessionState_l(topSession, Session::RUNNING);
+        } else if (topSession->getState() == Session::PAUSED) {
+            mTranscoder->resume(topSession->key.first, topSession->key.second, topSession->request,
+                                topSession->callingUid, topSession->callback.lock());
+            setSessionState_l(topSession, Session::RUNNING);
         }
+        break;
     }
     mCurrentSession = topSession;
 }
@@ -239,7 +494,7 @@ void TranscodingSessionController::removeSession_l(const SessionKeyType& session
     }
 
     // Remove session from uid's queue.
-    const uid_t uid = mSessionMap[sessionKey].uid;
+    const uid_t uid = mSessionMap[sessionKey].clientUid;
     SessionQueueType& sessionQueue = mSessionQueues[uid];
     auto it = std::find(sessionQueue.begin(), sessionQueue.end(), sessionKey);
     if (it == sessionQueue.end()) {
@@ -264,7 +519,13 @@ void TranscodingSessionController::removeSession_l(const SessionKeyType& session
         mCurrentSession = nullptr;
     }
 
-    mSessionMap[sessionKey].setState(finalState);
+    setSessionState_l(&mSessionMap[sessionKey], finalState);
+
+    if (finalState == Session::FINISHED || finalState == Session::ERROR) {
+        mPacer->onSessionCompleted(mSessionMap[sessionKey].clientUid,
+                                   mSessionMap[sessionKey].runningTime);
+    }
+
     mSessionHistory.push_back(mSessionMap[sessionKey]);
     if (mSessionHistory.size() > kSessionHistoryMax) {
         mSessionHistory.erase(mSessionHistory.begin());
@@ -328,13 +589,13 @@ void TranscodingSessionController::moveUidsToTop_l(const std::unordered_set<uid_
 }
 
 bool TranscodingSessionController::submit(
-        ClientIdType clientId, SessionIdType sessionId, uid_t uid,
+        ClientIdType clientId, SessionIdType sessionId, uid_t callingUid, uid_t clientUid,
         const TranscodingRequestParcel& request,
         const std::weak_ptr<ITranscodingClientCallback>& callback) {
     SessionKeyType sessionKey = std::make_pair(clientId, sessionId);
 
     ALOGV("%s: session %s, uid %d, prioirty %d", __FUNCTION__, sessionToString(sessionKey).c_str(),
-          uid, (int32_t)request.priority);
+          clientUid, (int32_t)request.priority);
 
     std::scoped_lock lock{mLock};
 
@@ -344,47 +605,46 @@ bool TranscodingSessionController::submit(
     }
 
     // Add the uid package name to the store of package names we already know.
-    if (mUidPackageNames.count(uid) == 0) {
-        mUidPackageNames.emplace(uid, request.clientPackageName);
+    if (mUidPackageNames.count(clientUid) == 0) {
+        mUidPackageNames.emplace(clientUid, request.clientPackageName);
     }
 
     // TODO(chz): only support offline vs real-time for now. All kUnspecified sessions
     // go to offline queue.
     if (request.priority == TranscodingSessionPriority::kUnspecified) {
-        uid = OFFLINE_UID;
+        clientUid = OFFLINE_UID;
     }
 
     // Add session to session map.
     mSessionMap[sessionKey].key = sessionKey;
-    mSessionMap[sessionKey].uid = uid;
-    mSessionMap[sessionKey].lastProgress = 0;
-    mSessionMap[sessionKey].pauseCount = 0;
+    mSessionMap[sessionKey].clientUid = clientUid;
+    mSessionMap[sessionKey].callingUid = callingUid;
     mSessionMap[sessionKey].request = request;
     mSessionMap[sessionKey].callback = callback;
-    mSessionMap[sessionKey].setState(Session::NOT_STARTED);
+    setSessionState_l(&mSessionMap[sessionKey], Session::NOT_STARTED);
 
     // If it's an offline session, the queue was already added in constructor.
     // If it's a real-time sessions, check if a queue is already present for the uid,
     // and add a new queue if needed.
-    if (uid != OFFLINE_UID) {
-        if (mSessionQueues.count(uid) == 0) {
-            mUidPolicy->registerMonitorUid(uid);
-            if (mUidPolicy->isUidOnTop(uid)) {
-                mUidSortedList.push_front(uid);
+    if (clientUid != OFFLINE_UID) {
+        if (mSessionQueues.count(clientUid) == 0) {
+            mUidPolicy->registerMonitorUid(clientUid);
+            if (mUidPolicy->isUidOnTop(clientUid)) {
+                mUidSortedList.push_front(clientUid);
             } else {
                 // Shouldn't be submitting real-time requests from non-top app,
                 // put it in front of the offline queue.
-                mUidSortedList.insert(mOfflineUidIterator, uid);
+                mUidSortedList.insert(mOfflineUidIterator, clientUid);
             }
-        } else if (uid != *mUidSortedList.begin()) {
-            if (mUidPolicy->isUidOnTop(uid)) {
-                mUidSortedList.remove(uid);
-                mUidSortedList.push_front(uid);
+        } else if (clientUid != *mUidSortedList.begin()) {
+            if (mUidPolicy->isUidOnTop(clientUid)) {
+                mUidSortedList.remove(clientUid);
+                mUidSortedList.push_front(clientUid);
             }
         }
     }
     // Append this session to the uid's queue.
-    mSessionQueues[uid].push_back(sessionKey);
+    mSessionQueues[clientUid].push_back(sessionKey);
 
     updateCurrentSession_l();
 
@@ -403,7 +663,7 @@ bool TranscodingSessionController::cancel(ClientIdType clientId, SessionIdType s
 
     if (sessionId < 0) {
         for (auto it = mSessionMap.begin(); it != mSessionMap.end(); ++it) {
-            if (it->first.first == clientId && it->second.uid != OFFLINE_UID) {
+            if (it->first.first == clientId && it->second.clientUid != OFFLINE_UID) {
                 sessionsToRemove.push_back(it->first);
             }
         }
@@ -527,6 +787,15 @@ void TranscodingSessionController::onFinish(ClientIdType clientId, SessionIdType
 void TranscodingSessionController::onError(ClientIdType clientId, SessionIdType sessionId,
                                            TranscodingErrorCode err) {
     notifyClient(clientId, sessionId, "error", [=](const SessionKeyType& sessionKey) {
+        if (err == TranscodingErrorCode::kWatchdogTimeout) {
+            // Abandon the transcoder, as its handler thread might be stuck in some call to
+            // MediaTranscoder altogether, and may not be able to handle any new tasks.
+            mTranscoder->stop(clientId, sessionId, true /*abandon*/);
+            // Clear the last ref count before we create new transcoder.
+            mTranscoder = nullptr;
+            mTranscoder = mTranscoderFactory(shared_from_this());
+        }
+
         {
             auto clientCallback = mSessionMap[sessionKey].callback.lock();
             if (clientCallback != nullptr) {
@@ -555,6 +824,11 @@ void TranscodingSessionController::onProgressUpdate(ClientIdType clientId, Sessi
     });
 }
 
+void TranscodingSessionController::onHeartBeat(ClientIdType clientId, SessionIdType sessionId) {
+    notifyClient(clientId, sessionId, "heart-beat",
+                 [=](const SessionKeyType& /*sessionKey*/) { mWatchdog->keepAlive(); });
+}
+
 void TranscodingSessionController::onResourceLost(ClientIdType clientId, SessionIdType sessionId) {
     ALOGI("%s", __FUNCTION__);
 
@@ -572,7 +846,7 @@ void TranscodingSessionController::onResourceLost(ClientIdType clientId, Session
         // If we receive a resource loss event, the transcoder already paused the transcoding,
         // so we don't need to call onPaused() to pause it. However, we still need to notify
         // the client and update the session state here.
-        resourceLostSession->setState(Session::PAUSED);
+        setSessionState_l(resourceLostSession, Session::PAUSED);
         // Notify the client as a paused event.
         auto clientCallback = resourceLostSession->callback.lock();
         if (clientCallback != nullptr) {

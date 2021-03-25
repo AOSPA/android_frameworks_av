@@ -738,9 +738,22 @@ protected:
                     String8(devices.itemAt(0)->address().c_str()) : String8("");
         }
 
-        uint32_t updateCallRouting(const DeviceVector &rxDevices, uint32_t delayMs = 0);
+        status_t updateCallRouting(
+                bool fromCache, uint32_t delayMs = 0, uint32_t *waitMs = nullptr);
+        status_t updateCallRoutingInternal(
+                const DeviceVector &rxDevices, uint32_t delayMs, uint32_t *waitMs);
         sp<AudioPatch> createTelephonyPatch(bool isRx, const sp<DeviceDescriptor> &device,
                                             uint32_t delayMs);
+        /**
+         * @brief selectBestRxSinkDevicesForCall: if the primary module host both Telephony Rx/Tx
+         * devices, and it declares also supporting a HW bridge between the Telephony Rx and the
+         * given sink device for Voice Call audio attributes, select this device in prio.
+         * Otherwise, getNewOutputDevices() is called on the primary output to select sink device.
+         * @param fromCache true to prevent engine reconsidering all product strategies and retrieve
+         * from engine cache.
+         * @return vector of devices, empty if none is found.
+         */
+        DeviceVector selectBestRxSinkDevicesForCall(bool fromCache);
         bool isDeviceOfModule(const sp<DeviceDescriptor>& devDesc, const char *moduleId) const;
 
         virtual status_t startSource(const sp<SwAudioOutputDescriptor>& outputDesc,
@@ -868,14 +881,22 @@ protected:
         // Support for Multi-Stream Decoder (MSD) module
         sp<DeviceDescriptor> getMsdAudioInDevice() const;
         DeviceVector getMsdAudioOutDevices() const;
-        const AudioPatchCollection getMsdPatches() const;
-        status_t getBestMsdAudioProfileFor(const sp<DeviceDescriptor> &outputDevice,
-                                           bool hwAvSync,
-                                           audio_port_config *sourceConfig,
-                                           audio_port_config *sinkConfig) const;
-        PatchBuilder buildMsdPatch(const sp<DeviceDescriptor> &outputDevice) const;
-        status_t setMsdPatches(const DeviceVector *outputDevices = nullptr);
-        void releaseMsdPatches(const DeviceVector& devices);
+        const AudioPatchCollection getMsdOutputPatches() const;
+        status_t getMsdProfiles(bool hwAvSync,
+                const InputProfileCollection &inputProfiles,
+                const OutputProfileCollection &outputProfiles,
+                const sp<DeviceDescriptor> &sourceDevice,
+                const sp<DeviceDescriptor> &sinkDevice,
+                AudioProfileVector &sourceProfiles,
+                AudioProfileVector &sinkProfiles) const;
+        status_t getBestMsdConfig(bool hwAvSync,
+                const AudioProfileVector &sourceProfiles,
+                const AudioProfileVector &sinkProfiles,
+                audio_port_config *sourceConfig,
+                audio_port_config *sinkConfig) const;
+        PatchBuilder buildMsdPatch(bool msdIsSource, const sp<DeviceDescriptor> &device) const;
+        status_t setMsdOutputPatches(const DeviceVector *outputDevices = nullptr);
+        void releaseMsdOutputPatches(const DeviceVector& devices);
 
         // If any, resolve any "dynamic" fields of an Audio Profiles collection
         void updateAudioProfiles(const sp<DeviceDescriptor>& devDesc, audio_io_handle_t ioHandle,
