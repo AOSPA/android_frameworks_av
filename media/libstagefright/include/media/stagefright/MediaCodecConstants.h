@@ -796,7 +796,7 @@ constexpr char KEY_OUTPUT_REORDER_DEPTH[] = "output-reorder-depth";
 constexpr char KEY_PCM_ENCODING[] = "pcm-encoding";
 constexpr char KEY_PIXEL_ASPECT_RATIO_HEIGHT[] = "sar-height";
 constexpr char KEY_PIXEL_ASPECT_RATIO_WIDTH[] = "sar-width";
-constexpr char KEY_PREPEND_HEADERS_TO_SYNC_FRAMES[] = "prepend-sps-pps-to-idr-frames";
+constexpr char KEY_PREPEND_HEADER_TO_SYNC_FRAMES[] = "prepend-sps-pps-to-idr-frames";
 constexpr char KEY_PRIORITY[] = "priority";
 constexpr char KEY_PROFILE[] = "profile";
 constexpr char KEY_PUSH_BLANK_BUFFERS_ON_STOP[] = "push-blank-buffers-on-shutdown";
@@ -859,9 +859,9 @@ constexpr char PARAMETER_KEY_OFFSET_TIME[] = "time-offset-us";
 constexpr char PARAMETER_KEY_REQUEST_SYNC_FRAME[] = "request-sync";
 constexpr char PARAMETER_KEY_SUSPEND[] = "drop-input-frames";
 constexpr char PARAMETER_KEY_SUSPEND_TIME[] = "drop-start-time-us";
+constexpr char PARAMETER_KEY_TUNNEL_PEEK[] =  "tunnel-peek";
 constexpr char PARAMETER_KEY_VIDEO_BITRATE[] = "video-bitrate";
 
 }
 
 #endif  // MEDIA_CODEC_CONSTANTS_H_
-

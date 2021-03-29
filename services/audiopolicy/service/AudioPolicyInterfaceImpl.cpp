@@ -26,6 +26,7 @@
 #include <media/MediaMetricsItem.h>
 #include <media/PolicyAidlConversion.h>
 #include <utils/Log.h>
+#include <android/media/permission/Identity.h>
 
 #define VALUE_OR_RETURN_BINDER_STATUS(x) \
     ({ auto _tmp = (x); \
@@ -43,6 +44,7 @@
 namespace android {
 using binder::Status;
 using aidl_utils::binderStatusFromStatusT;
+using media::permission::Identity;
 
 const std::vector<audio_usage_t>& SYSTEM_USAGES = {
     AUDIO_USAGE_CALL_ASSISTANT,
@@ -63,15 +65,15 @@ bool AudioPolicyService::isSupportedSystemUsage(audio_usage_t usage) {
 }
 
 status_t AudioPolicyService::validateUsage(audio_usage_t usage) {
-     return validateUsage(usage, IPCThreadState::self()->getCallingPid(),
-        IPCThreadState::self()->getCallingUid());
+     return validateUsage(usage, getCallingIdentity());
 }
 
-status_t AudioPolicyService::validateUsage(audio_usage_t usage, pid_t pid, uid_t uid) {
+status_t AudioPolicyService::validateUsage(audio_usage_t usage, const Identity& identity) {
     if (isSystemUsage(usage)) {
         if (isSupportedSystemUsage(usage)) {
-            if (!modifyAudioRoutingAllowed(pid, uid)) {
-                ALOGE("permission denied: modify audio routing not allowed for uid %d", uid);
+            if (!modifyAudioRoutingAllowed(identity)) {
+                ALOGE(("permission denied: modify audio routing not allowed "
+                       "for identity %s"), identity.toString().c_str());
                 return PERMISSION_DENIED;
             }
         } else {
@@ -277,8 +279,7 @@ Status AudioPolicyService::getOutput(media::AudioStreamType streamAidl, int32_t*
 
 Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal& attrAidl,
                                             int32_t sessionAidl,
-                                            int32_t pidAidl,
-                                            int32_t uidAidl,
+                                            const Identity& identity,
                                             const media::AudioConfig& configAidl,
                                             int32_t flagsAidl,
                                             int32_t selectedDeviceIdAidl,
@@ -289,8 +290,6 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
     audio_session_t session = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_int32_t_audio_session_t(sessionAidl));
     audio_stream_type_t stream = AUDIO_STREAM_DEFAULT;
-    pid_t pid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_pid_t(pidAidl));
-    uid_t uid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_uid_t(uidAidl));
     audio_config_t config = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioConfig_audio_config_t(configAidl));
     audio_output_flags_t flags = VALUE_OR_RETURN_BINDER_STATUS(
@@ -308,22 +307,28 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
 
     RETURN_IF_BINDER_ERROR(
             binderStatusFromStatusT(AudioValidator::validateAudioAttributes(attr, "68953950")));
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr.usage, pid, uid)));
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr.usage, identity)));
 
     ALOGV("%s()", __func__);
     Mutex::Autolock _l(mLock);
 
+    // TODO b/182392553: refactor or remove
+    Identity adjIdentity = identity;
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    if (!isAudioServerOrMediaServerUid(callingUid) || uid == (uid_t)-1) {
-        ALOGW_IF(uid != (uid_t)-1 && uid != callingUid,
-                "%s uid %d tried to pass itself off as %d", __func__, callingUid, uid);
-        uid = callingUid;
+    if (!isAudioServerOrMediaServerUid(callingUid) || identity.uid == -1) {
+        int32_t callingUidAidl = VALUE_OR_RETURN_BINDER_STATUS(
+            legacy2aidl_uid_t_int32_t(callingUid));
+        ALOGW_IF(identity.uid != -1 && identity.uid != callingUidAidl,
+                "%s uid %d tried to pass itself off as %d", __func__,
+                callingUidAidl, identity.uid);
+        adjIdentity.uid = callingUidAidl;
     }
-    if (!mPackageManager.allowPlaybackCapture(uid)) {
+    if (!mPackageManager.allowPlaybackCapture(VALUE_OR_RETURN_BINDER_STATUS(
+        aidl2legacy_int32_t_uid_t(adjIdentity.uid)))) {
         attr.flags = static_cast<audio_flags_mask_t>(attr.flags | AUDIO_FLAG_NO_MEDIA_PROJECTION);
     }
     if (((attr.flags & (AUDIO_FLAG_BYPASS_INTERRUPTION_POLICY|AUDIO_FLAG_BYPASS_MUTE)) != 0)
-            && !bypassInterruptionPolicyAllowed(pid, uid)) {
+            && !bypassInterruptionPolicyAllowed(identity)) {
         attr.flags = static_cast<audio_flags_mask_t>(
                 attr.flags & ~(AUDIO_FLAG_BYPASS_INTERRUPTION_POLICY|AUDIO_FLAG_BYPASS_MUTE));
     }
@@ -331,7 +336,7 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
     AudioPolicyInterface::output_type_t outputType;
     status_t result = mAudioPolicyManager->getOutputForAttr(&attr, &output, session,
                                                             &stream,
-                                                            uid,
+                                                            adjIdentity,
                                                             &config,
                                                             &flags, &selectedDeviceId, &portId,
                                                             &secondaryOutputs,
@@ -344,16 +349,16 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
         case AudioPolicyInterface::API_OUTPUT_LEGACY:
             break;
         case AudioPolicyInterface::API_OUTPUT_TELEPHONY_TX:
-            if (!modifyPhoneStateAllowed(pid, uid)) {
+            if (!modifyPhoneStateAllowed(adjIdentity)) {
                 ALOGE("%s() permission denied: modify phone state not allowed for uid %d",
-                    __func__, uid);
+                    __func__, adjIdentity.uid);
                 result = PERMISSION_DENIED;
             }
             break;
         case AudioPolicyInterface::API_OUT_MIX_PLAYBACK:
-            if (!modifyAudioRoutingAllowed(pid, uid)) {
+            if (!modifyAudioRoutingAllowed(adjIdentity)) {
                 ALOGE("%s() permission denied: modify audio routing not allowed for uid %d",
-                    __func__, uid);
+                    __func__, adjIdentity.uid);
                 result = PERMISSION_DENIED;
             }
             break;
@@ -366,8 +371,8 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
 
     if (result == NO_ERROR) {
         sp<AudioPlaybackClient> client =
-                new AudioPlaybackClient(attr, output, uid, pid, session, portId, selectedDeviceId,
-                                        stream);
+                new AudioPlaybackClient(attr, output, adjIdentity, session,
+                    portId, selectedDeviceId, stream);
         mAudioPlaybackClients.add(portId, client);
 
         _aidl_return->output = VALUE_OR_RETURN_BINDER_STATUS(
@@ -512,9 +517,7 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
                                            int32_t inputAidl,
                                            int32_t riidAidl,
                                            int32_t sessionAidl,
-                                           int32_t pidAidl,
-                                           int32_t uidAidl,
-                                           const std::string& opPackageNameAidl,
+                                           const Identity& identity,
                                            const media::AudioConfigBase& configAidl,
                                            int32_t flagsAidl,
                                            int32_t selectedDeviceIdAidl,
@@ -527,10 +530,6 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
             aidl2legacy_int32_t_audio_unique_id_t(riidAidl));
     audio_session_t session = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_int32_t_audio_session_t(sessionAidl));
-    pid_t pid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_pid_t(pidAidl));
-    uid_t uid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_uid_t(uidAidl));
-    String16 opPackageName = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_string_view_String16(opPackageNameAidl));
     audio_config_base_t config = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioConfigBase_audio_config_base_t(configAidl));
     audio_input_flags_t flags = VALUE_OR_RETURN_BINDER_STATUS(
@@ -546,7 +545,6 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
 
     RETURN_IF_BINDER_ERROR(
             binderStatusFromStatusT(AudioValidator::validateAudioAttributes(attr, "68953950")));
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr.usage, pid, uid)));
 
     audio_source_t inputSource = attr.source;
     if (inputSource == AUDIO_SOURCE_DEFAULT) {
@@ -562,34 +560,42 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
         return binderStatusFromStatusT(BAD_VALUE);
     }
 
-    bool updatePid = (pid == -1);
-    const uid_t callingUid = IPCThreadState::self()->getCallingUid();
+    // Make sure identity represents the current caller
+    Identity adjIdentity = identity;
+    // TODO b/182392553: refactor or remove
+    bool updatePid = (identity.pid == -1);
+    const uid_t callingUid =IPCThreadState::self()->getCallingUid();
+    const uid_t currentUid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_uid_t(identity.uid));
     if (!isAudioServerOrMediaServerUid(callingUid)) {
-        ALOGW_IF(uid != (uid_t)-1 && uid != callingUid,
-                "%s uid %d tried to pass itself off as %d", __FUNCTION__, callingUid, uid);
-        uid = callingUid;
+        ALOGW_IF(currentUid != (uid_t)-1 && currentUid != callingUid,
+                "%s uid %d tried to pass itself off as %d", __FUNCTION__, callingUid,
+                currentUid);
+        adjIdentity.uid = VALUE_OR_RETURN_BINDER_STATUS(legacy2aidl_uid_t_int32_t(callingUid));
         updatePid = true;
     }
 
     if (updatePid) {
-        const pid_t callingPid = IPCThreadState::self()->getCallingPid();
-        ALOGW_IF(pid != (pid_t)-1 && pid != callingPid,
+        const int32_t callingPid = VALUE_OR_RETURN_BINDER_STATUS(legacy2aidl_pid_t_int32_t(
+            IPCThreadState::self()->getCallingPid()));
+        ALOGW_IF(identity.pid != -1 && identity.pid != callingPid,
                  "%s uid %d pid %d tried to pass itself off as pid %d",
-                 __func__, callingUid, callingPid, pid);
-        pid = callingPid;
+                 __func__, adjIdentity.uid, callingPid, identity.pid);
+        adjIdentity.pid = callingPid;
     }
+
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr.usage, adjIdentity)));
 
     // check calling permissions.
     // Capturing from FM_TUNER source is controlled by captureTunerAudioInputAllowed() and
     // captureAudioOutputAllowed() (deprecated) as this does not affect users privacy
     // as does capturing from an actual microphone.
-    if (!(recordingAllowed(opPackageName, pid, uid) || attr.source == AUDIO_SOURCE_FM_TUNER)) {
-        ALOGE("%s permission denied: recording not allowed for uid %d pid %d",
-                __func__, uid, pid);
+    if (!(recordingAllowed(adjIdentity) || attr.source == AUDIO_SOURCE_FM_TUNER)) {
+        ALOGE("%s permission denied: recording not allowed for %s",
+                __func__, adjIdentity.toString().c_str());
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
-    bool canCaptureOutput = captureAudioOutputAllowed(pid, uid);
+    bool canCaptureOutput = captureAudioOutputAllowed(adjIdentity);
     if ((inputSource == AUDIO_SOURCE_VOICE_UPLINK ||
         inputSource == AUDIO_SOURCE_VOICE_DOWNLINK ||
         inputSource == AUDIO_SOURCE_VOICE_CALL ||
@@ -599,12 +605,12 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
     }
 
     if (inputSource == AUDIO_SOURCE_FM_TUNER
-        && !captureTunerAudioInputAllowed(pid, uid)
+        && !captureTunerAudioInputAllowed(adjIdentity)
         && !canCaptureOutput) {
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
-    bool canCaptureHotword = captureHotwordAllowed(opPackageName, pid, uid);
+    bool canCaptureHotword = captureHotwordAllowed(adjIdentity);
     if ((inputSource == AUDIO_SOURCE_HOTWORD) && !canCaptureHotword) {
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
@@ -612,7 +618,7 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
     if (((flags & AUDIO_INPUT_FLAG_HW_HOTWORD) != 0)
             && !canCaptureHotword) {
         ALOGE("%s: permission denied: hotword mode not allowed"
-              " for uid %d pid %d", __func__, uid, pid);
+              " for uid %d pid %d", __func__, adjIdentity.uid, adjIdentity.pid);
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
@@ -625,10 +631,11 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
         {
             AutoCallerClear acc;
             // the audio_in_acoustics_t parameter is ignored by get_input()
-            status = mAudioPolicyManager->getInputForAttr(&attr, &input, riid, session, uid,
-                                                          &config,
+            status = mAudioPolicyManager->getInputForAttr(&attr, &input, riid, session,
+                                                          adjIdentity, &config,
                                                           flags, &selectedDeviceId,
                                                           &inputType, &portId);
+
         }
         audioPolicyEffects = mAudioPolicyEffects;
 
@@ -659,7 +666,7 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
                 }
                 break;
             case AudioPolicyInterface::API_INPUT_MIX_EXT_POLICY_REROUTE:
-                if (!modifyAudioRoutingAllowed(pid, uid)) {
+                if (!modifyAudioRoutingAllowed(adjIdentity)) {
                     ALOGE("getInputForAttr() permission denied: modify audio routing not allowed");
                     status = PERMISSION_DENIED;
                 }
@@ -679,8 +686,8 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
             return binderStatusFromStatusT(status);
         }
 
-        sp<AudioRecordClient> client = new AudioRecordClient(attr, input, uid, pid, session, portId,
-                                                             selectedDeviceId, opPackageName,
+        sp<AudioRecordClient> client = new AudioRecordClient(attr, input, session, portId,
+                                                             selectedDeviceId, adjIdentity,
                                                              canCaptureOutput, canCaptureHotword);
         mAudioRecordClients.add(portId, client);
     }
@@ -731,12 +738,15 @@ Status AudioPolicyService::startInput(int32_t portIdAidl)
         client = mAudioRecordClients.valueAt(index);
     }
 
+    std::stringstream msg;
+    msg << "Audio recording on session " << client->session;
+
     // check calling permissions
-    if (!(startRecording(client->opPackageName, client->pid, client->uid,
-            client->attributes.source)
+    if (!(startRecording(client->identity, String16(msg.str().c_str()),
+        client->attributes.source)
             || client->attributes.source == AUDIO_SOURCE_FM_TUNER)) {
-        ALOGE("%s permission denied: recording not allowed for uid %d pid %d",
-                __func__, client->uid, client->pid);
+        ALOGE("%s permission denied: recording not allowed for identity %s",
+                __func__, client->identity.toString().c_str());
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
@@ -780,11 +790,13 @@ Status AudioPolicyService::startInput(int32_t portIdAidl)
             item->setCString(kAudioPolicyRqstSrc,
                              toString(client->attributes.source).c_str());
             item->setInt32(kAudioPolicyRqstSession, client->session);
-            if (client->opPackageName.size() != 0) {
+            if (client->identity.packageName.has_value() &&
+                client->identity.packageName.value().size() != 0) {
                 item->setCString(kAudioPolicyRqstPkg,
-                                 std::string(String8(client->opPackageName).string()).c_str());
+                    client->identity.packageName.value().c_str());
             } else {
-                item->setCString(kAudioPolicyRqstPkg, std::to_string(client->uid).c_str());
+                item->setCString(kAudioPolicyRqstPkg,
+                    std::to_string(client->identity.uid).c_str());
             }
             item->setCString(
                     kAudioPolicyRqstDevice, getDeviceTypeStrForPortId(client->deviceId).c_str());
@@ -800,12 +812,13 @@ Status AudioPolicyService::startInput(int32_t portIdAidl)
                     item->setCString(kAudioPolicyActiveSrc,
                                      toString(other->attributes.source).c_str());
                     item->setInt32(kAudioPolicyActiveSession, other->session);
-                    if (other->opPackageName.size() != 0) {
+                    if (other->identity.packageName.has_value() &&
+                        other->identity.packageName.value().size() != 0) {
                         item->setCString(kAudioPolicyActivePkg,
-                             std::string(String8(other->opPackageName).string()).c_str());
+                            other->identity.packageName.value().c_str());
                     } else {
-                        item->setCString(kAudioPolicyRqstPkg,
-                                         std::to_string(other->uid).c_str());
+                        item->setCString(kAudioPolicyRqstPkg, std::to_string(
+                            other->identity.uid).c_str());
                     }
                     item->setCString(kAudioPolicyActiveDevice,
                                      getDeviceTypeStrForPortId(other->deviceId).c_str());
@@ -821,8 +834,7 @@ Status AudioPolicyService::startInput(int32_t portIdAidl)
         client->active = false;
         client->startTimeNs = 0;
         updateUidStates_l();
-        finishRecording(client->opPackageName, client->uid,
-                        client->attributes.source);
+        finishRecording(client->identity, client->attributes.source);
     }
 
     return binderStatusFromStatusT(status);
@@ -851,8 +863,7 @@ Status AudioPolicyService::stopInput(int32_t portIdAidl)
     updateUidStates_l();
 
     // finish the recording app op
-    finishRecording(client->opPackageName, client->uid,
-                    client->attributes.source);
+    finishRecording(client->identity, client->attributes.source);
     AutoCallerClear acc;
     return binderStatusFromStatusT(mAudioPolicyManager->stopInput(portId));
 }
@@ -1649,15 +1660,15 @@ Status AudioPolicyService::registerPolicyMixes(const std::vector<media::AudioMix
     bool needCaptureMediaOutput = std::any_of(mixes.begin(), mixes.end(), [](auto& mix) {
             return mix.mAllowPrivilegedMediaPlaybackCapture; });
 
-    const uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    const pid_t callingPid = IPCThreadState::self()->getCallingPid();
+    const Identity identity = getCallingIdentity();
 
-    if (needCaptureMediaOutput && !captureMediaOutputAllowed(callingPid, callingUid)) {
+
+    if (needCaptureMediaOutput && !captureMediaOutputAllowed(identity)) {
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
     if (needCaptureVoiceCommunicationOutput &&
-        !captureVoiceCommunicationOutputAllowed(callingPid, callingUid)) {
+        !captureVoiceCommunicationOutputAllowed(identity)) {
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
 
@@ -1821,8 +1832,7 @@ Status AudioPolicyService::getStreamVolumeDB(media::AudioStreamType streamAidl, 
     return Status::ok();
 }
 
-Status AudioPolicyService::getSurroundFormats(
-        bool reported, media::Int* count,
+Status AudioPolicyService::getSurroundFormats(media::Int* count,
         std::vector<media::audio::common::AudioFormat>* formats,
         std::vector<bool>* formatsEnabled) {
     unsigned int numSurroundFormats = VALUE_OR_RETURN_BINDER_STATUS(
@@ -1841,7 +1851,7 @@ Status AudioPolicyService::getSurroundFormats(
     AutoCallerClear acc;
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             mAudioPolicyManager->getSurroundFormats(&numSurroundFormats, surroundFormats.get(),
-                                                    surroundFormatsEnabled.get(), reported)));
+                                                    surroundFormatsEnabled.get())));
     numSurroundFormatsReq = std::min(numSurroundFormats, numSurroundFormatsReq);
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             convertRange(surroundFormats.get(), surroundFormats.get() + numSurroundFormatsReq,
@@ -1850,6 +1860,32 @@ Status AudioPolicyService::getSurroundFormats(
             formatsEnabled->begin(),
             surroundFormatsEnabled.get(),
             surroundFormatsEnabled.get() + numSurroundFormatsReq);
+    count->value = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<uint32_t>(numSurroundFormats));
+    return Status::ok();
+}
+
+Status AudioPolicyService::getReportedSurroundFormats(
+        media::Int* count, std::vector<media::audio::common::AudioFormat>* formats) {
+    unsigned int numSurroundFormats = VALUE_OR_RETURN_BINDER_STATUS(
+            convertIntegral<unsigned int>(count->value));
+    if (numSurroundFormats > MAX_ITEMS_PER_LIST) {
+        numSurroundFormats = MAX_ITEMS_PER_LIST;
+    }
+    unsigned int numSurroundFormatsReq = numSurroundFormats;
+    std::unique_ptr<audio_format_t[]>surroundFormats(new audio_format_t[numSurroundFormats]);
+
+    if (mAudioPolicyManager == NULL) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    Mutex::Autolock _l(mLock);
+    AutoCallerClear acc;
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
+            mAudioPolicyManager->getReportedSurroundFormats(
+                    &numSurroundFormats, surroundFormats.get())));
+    numSurroundFormatsReq = std::min(numSurroundFormats, numSurroundFormatsReq);
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
+            convertRange(surroundFormats.get(), surroundFormats.get() + numSurroundFormatsReq,
+                         std::back_inserter(*formats), legacy2aidl_audio_format_t_AudioFormat)));
     count->value = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<uint32_t>(numSurroundFormats));
     return Status::ok();
 }

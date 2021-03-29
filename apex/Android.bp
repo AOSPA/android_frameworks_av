@@ -51,7 +51,10 @@ apex_defaults {
         },
     },
     // JNI
-    native_shared_libs: ["libmediaparser-jni"],
+    native_shared_libs: [
+        "libmediaparser-jni",
+        "libmediaformatshaper",
+    ],
     compile_multilib: "both",
     prebuilts: [
         "code_coverage.policy",
@@ -74,6 +77,9 @@ apex_defaults {
     // - build artifacts (lib/javalib/bin) against Android 10 SDK
     //   so that the artifacts can run.
     min_sdk_version: "29",
+    // Indicates that pre-installed version of this apex can be compressed.
+    // Whether it actually will be compressed is controlled on per-device basis.
+    compressible: true,
 }
 
 apex {
@@ -107,6 +113,7 @@ apex_defaults {
     native_shared_libs: [
         "libcodec2_hidl@1.0",
         "libcodec2_hidl@1.1",
+        "libcodec2_hidl@1.2",
         "libstagefright_foundation",
     ],
     prebuilts: [
@@ -131,6 +138,9 @@ apex_defaults {
     // - build artifacts (lib/javalib/bin) against Android 10 SDK
     //   so that the artifacts can run.
     min_sdk_version: "29",
+    // Indicates that pre-installed version of this apex can be compressed.
+    // Whether it actually will be compressed is controlled on per-device basis.
+    compressible: true,
 }
 
 prebuilt_etc {
