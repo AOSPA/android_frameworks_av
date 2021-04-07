@@ -307,7 +307,8 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
                 mEngine->getActiveMediaDevices(mAvailableOutputDevices);
         for (size_t i = 0; i < mOutputs.size(); i++) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-            if ((mEngine->getPhoneState() != AUDIO_MODE_IN_CALL) || (desc != mPrimaryOutput)) {
+            if (desc->isActive() && ((mEngine->getPhoneState() != AUDIO_MODE_IN_CALL) ||
+                (desc != mPrimaryOutput))) {
                 DeviceVector newDevices = getNewOutputDevices(desc, true /*fromCache*/);
                 // do not force device change on duplicated output because if device is 0, it will
                 // also force a device 0 for the two outputs it is duplicated to which may override
@@ -1294,14 +1295,15 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
         return NAME_NOT_FOUND;
     }
 
-    // Do not allow offloading if one non offloadable effect is enabled or MasterMono is enabled.
-    // This prevents creating an offloaded track and tearing it down immediately after start
-    // when audioflinger detects there is an active non offloadable effect.
+    // Do not allow offloading or direct if one non offloadable effect is enabled or
+    // MasterMono is enabled. This prevents creating an offloaded or direct track
+    // and tearing it down immediately after start when audioflinger detects there
+    // is an active non offloadable effect.
     // FIXME: We should check the audio session here but we do not have it in this context.
     // This may prevent offloading in rare situations where effects are left active by apps
     // in the background.
     sp<IOProfile> profile;
-    if (((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0) ||
+    if (((flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0) ||
             !(mEffects.isNonOffloadableEffectEnabled() || mMasterMono)) {
         profile = getProfileForOutput(
                 devices, config->sample_rate, config->format, config->channel_mask,
@@ -1311,32 +1313,63 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     if (profile == nullptr) {
         return NAME_NOT_FOUND;
     }
+    if (!(flags & AUDIO_OUTPUT_FLAG_DIRECT) &&
+         (profile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT)) {
+        ALOGI("%s rejecting direct profile as was not requested ", __func__);
+        profile = nullptr;
+        return NAME_NOT_FOUND;
+    }
 
+    sp<SwAudioOutputDescriptor> outputDesc = nullptr;
+    // check if direct output for pcm/track offload or compress offload already exist
+    bool directSessionInUse = false;
+    bool offloadSessionInUse = false;
     // exclusive outputs for MMAP and Offload are enforced by different session ids.
-    for (size_t i = 0; i < mOutputs.size(); i++) {
-        sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-        if (!desc->isDuplicated() && (profile == desc->mProfile)) {
-            // reuse direct output if currently open by the same client
-            // and configured with same parameters
-            if ((config->sample_rate == desc->getSamplingRate()) &&
-                (config->format == desc->getFormat()) &&
-                (config->channel_mask == desc->getChannelMask()) &&
-                (session == desc->mDirectClientSession)) {
-                desc->mDirectOpenCount++;
-                ALOGI("%s reusing direct output %d for session %d", __func__,
-                    mOutputs.keyAt(i), session);
-                *output = mOutputs.keyAt(i);
-                return NO_ERROR;
+    if (!(property_get_bool("vendor.audio.offload.multiple.enabled", false) &&
+          ((flags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) &&
+          (flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) == 0)) {
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+            if (!desc->isDuplicated() && (profile == desc->mProfile)) {
+                 outputDesc = desc;
+                // reuse direct output if currently open by the same client
+                // and configured with same parameters
+                if ((config->sample_rate == desc->getSamplingRate()) &&
+                    (config->format == desc->getFormat()) &&
+                    (config->channel_mask == desc->getChannelMask()) &&
+                    (session == desc->mDirectClientSession)) {
+                    desc->mDirectOpenCount++;
+                    ALOGI("%s reusing direct output %d for session %d", __func__,
+                        mOutputs.keyAt(i), session);
+                    *output = mOutputs.keyAt(i);
+                    return NO_ERROR;
+                }
+                if (desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
+                    directSessionInUse = true;
+                    ALOGD("%s Direct PCM already in use", __func__);
+                }
+                if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
+                    offloadSessionInUse = true;
+                    ALOGD("%s Compress Offload already in use", __func__);
+                }
+            }
+        }
+        if (outputDesc != nullptr) {
+            if ((((flags == AUDIO_OUTPUT_FLAG_DIRECT) && directSessionInUse) ||
+                ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse)) &&
+                 session != outputDesc->mDirectClientSession) {
+                 ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
+                       "is not the same as requesting client (%d) for different output conf",
+                 outputDesc->mDirectClientSession, session);
+                 return NAME_NOT_FOUND;
             }
         }
     }
-
     if (!profile->canOpenNewIo()) {
         return NAME_NOT_FOUND;
     }
 
-    sp<SwAudioOutputDescriptor> outputDesc =
-            new SwAudioOutputDescriptor(profile, mpClientInterface);
+    outputDesc = new SwAudioOutputDescriptor(profile, mpClientInterface);
 
     // An MSD patch may be using the only output stream that can service this request. Release
     // all MSD patches to prioritize this request over any active output on MSD.
@@ -1389,6 +1422,36 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
             ? static_cast<audio_channel_mask_t>(config->channel_mask & ~AUDIO_CHANNEL_HAPTIC_ALL)
             : config->channel_mask;
 
+
+    String8 value;
+    String8 reply =  mpClientInterface->getParameters(AUDIO_IO_HANDLE_NONE,
+                                          String8("vr_audio_mode_on"));
+    AudioParameter repliedParameter(reply);
+    if (repliedParameter.get(String8("vr_audio_mode_on"), value) == NO_ERROR &&
+        value.contains("true")) {
+        ALOGI("%s VR mode is on, switch to primary output requested flags 0x%X",__func__, *flags);
+        *flags = (audio_output_flags_t)(*flags &
+                    (~(AUDIO_OUTPUT_FLAG_FAST|AUDIO_OUTPUT_FLAG_RAW)));
+    }
+
+    /*
+    * WFD audio routes back to target speaker when starting a ringtone playback.
+    * This is because primary output is reused for ringtone, so output device is
+    * updated based on SONIFICATION strategy for both ringtone and music playback.
+    * The same issue is not seen on remoted_submix HAL based WFD audio because
+    * primary output is not reused and a new output is created for ringtone playback.
+    * Issue is fixed by updating output flag to AUDIO_OUTPUT_FLAG_FAST when there is
+    * a non-music stream playback on WFD, so primary output is not reused for ringtone.
+    */
+    if (property_get_bool("vendor.audio.afe.proxy.enabled", true /* default_value */)) {
+        DeviceTypeSet availableOutputDeviceTypes = mAvailableOutputDevices.types();
+        if ((deviceTypesToBitMask(availableOutputDeviceTypes) & AUDIO_DEVICE_OUT_PROXY)
+              && (stream != AUDIO_STREAM_MUSIC)) {
+            ALOGD("%s Use fast flags for stream %d requested Flags%x",__func__, stream, *flags);
+            *flags = (*flags & AUDIO_OUTPUT_FLAG_DIRECT) ?
+                        AUDIO_OUTPUT_FLAG_DIRECT : AUDIO_OUTPUT_FLAG_FAST;
+        }
+    }
     // open a direct output if required by specified parameters
     //force direct flag if offload flag is set: offloading implies a direct output stream
     // and all common behaviors are driven by checking only the direct flag
@@ -1399,6 +1462,30 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     if ((*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) {
         *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_DIRECT);
     }
+
+    // Force direct flags for PCM data, this can help to maintain audio bitstream
+    // quality by avoiding resampling/downmixing by using direct track when hal/DSP
+    // support is available. DSP PP can be applied directly on track data instead of
+    // mixed output. To some extent, it can help save some power.
+    const bool trackDirectPCM =
+            property_get_bool("vendor.audio.offload.track.enable", true /* default_value */);
+    if (trackDirectPCM) {
+        const bool offloadDisable =
+                property_get_bool("audio.offload.disable", false /* default_value */);
+        if (!offloadDisable && stream == AUDIO_STREAM_MUSIC) {
+           if ((*flags == AUDIO_OUTPUT_FLAG_NONE) &&
+                (config->offload_info.usage == AUDIO_USAGE_MEDIA ||
+                 config->offload_info.usage == AUDIO_USAGE_GAME)) {
+                ALOGV("Force direct flags to use pcm offload, original flags(0x%x)", *flags);
+                *flags = AUDIO_OUTPUT_FLAG_DIRECT;
+            }
+        } else if (audio_is_linear_pcm(config->format) &&
+                *flags == AUDIO_OUTPUT_FLAG_DIRECT) {
+            ALOGV("%s Remove direct flags stream %d,orginal flags %0x", __func__, stream, *flags);
+            *flags = AUDIO_OUTPUT_FLAG_NONE;
+        }
+    }
+
     bool forceDeepBuffer = false;
     // only allow deep buffering for music stream type
     if (stream != AUDIO_STREAM_MUSIC) {
@@ -2197,7 +2284,16 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
     sp<AudioInputDescriptor> inputDesc;
     sp<RecordClientDescriptor> clientDesc;
     audio_port_handle_t requestedDeviceId = *selectedDeviceId;
-    bool isSoundTrigger;
+    bool isSoundTrigger = attributes.source == AUDIO_SOURCE_HOTWORD &&
+                                mSoundTriggerSessions.indexOfKey(session) >= 0;
+    DeviceVector usbDevices;
+
+    if (isSoundTrigger) {
+        usbDevices = mAvailableInputDevices.getDevicesFromType(AUDIO_DEVICE_IN_USB_HEADSET);
+        for (size_t i = 0; i < usbDevices.size(); i++) {
+            mAvailableInputDevices.remove(usbDevices[i]);
+        }
+    }
 
     // The supplied portId must be AUDIO_PORT_HANDLE_NONE
     if (*portId != AUDIO_PORT_HANDLE_NONE) {
@@ -2253,7 +2349,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
         *inputType = API_INPUT_LEGACY;
         device = inputDesc->getDevice();
 
-        ALOGI("%s reusing MMAP input %d for session %d", __FUNCTION__, *input, session);
+        ALOGV("%s reusing MMAP input %d for session %d", __FUNCTION__, *input, session);
         goto exit;
     }
 
@@ -2325,8 +2421,6 @@ exit:
     *selectedDeviceId = mAvailableInputDevices.contains(device) ?
                 device->getId() : AUDIO_PORT_HANDLE_NONE;
 
-    isSoundTrigger = attributes.source == AUDIO_SOURCE_HOTWORD &&
-        mSoundTriggerSessions.indexOfKey(session) >= 0;
     *portId = PolicyAudioPort::getNextUniqueId();
 
     clientDesc = new RecordClientDescriptor(*portId, riid, uid, session, attributes, *config,
@@ -2338,9 +2432,14 @@ exit:
     ALOGV("getInputForAttr() returns input %d type %d selectedDeviceId %d for port ID %d",
             *input, *inputType, *selectedDeviceId, *portId);
 
-    return NO_ERROR;
+    status = NO_ERROR;
 
 error:
+    if (isSoundTrigger) {
+        for (size_t i = 0; i < usbDevices.size(); i++) {
+            mAvailableInputDevices.add(usbDevices[i]);
+        }
+    }
     return status;
 }
 
@@ -3425,6 +3524,11 @@ void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint
 
 void AudioPolicyManager::updateInputRouting() {
     for (const auto& activeDesc : mInputs.getActiveInputs()) {
+        // Skip for hotword recording as the input device switch
+        // is handled within sound trigger HAL
+        if (activeDesc->isSoundTrigger() && activeDesc->source() == AUDIO_SOURCE_HOTWORD) {
+            continue;
+        }
         auto newDevice = getNewInputDevice(activeDesc);
         // Force new input selection if the new device can not be reached via current input
         if (activeDesc->mProfile->getSupportedDevices().contains(newDevice)) {
@@ -3438,7 +3542,7 @@ void AudioPolicyManager::updateInputRouting() {
 status_t AudioPolicyManager::removeDevicesRoleForStrategy(product_strategy_t strategy,
                                                           device_role_t role)
 {
-    ALOGI("%s() strategy=%d role=%d", __func__, strategy, role);
+    ALOGV("%s() strategy=%d role=%d", __func__, strategy, role);
 
     status_t status = mEngine->removeDevicesRoleForStrategy(strategy, role);
     if (status != NO_ERROR) {
@@ -3540,7 +3644,7 @@ status_t AudioPolicyManager::getDevicesForRoleAndCapturePreset(
 
 status_t AudioPolicyManager::setUserIdDeviceAffinities(int userId,
         const AudioDeviceTypeAddrVector& devices) {
-    ALOGI("%s() userId=%d num devices %zu", __func__, userId, devices.size());
+    ALOGV("%s() userId=%d num devices %zu", __func__, userId, devices.size());
     if (!areAllDevicesSupported(devices, audio_is_output_device, __func__)) {
         return BAD_VALUE;
     }
@@ -3559,7 +3663,7 @@ status_t AudioPolicyManager::setUserIdDeviceAffinities(int userId,
 }
 
 status_t AudioPolicyManager::removeUserIdDeviceAffinities(int userId) {
-    ALOGI("%s() userId=%d", __FUNCTION__, userId);
+    ALOGV("%s() userId=%d", __FUNCTION__, userId);
     status_t status = mPolicyMixes.removeUserIdDeviceAffinities(userId);
     if (status != NO_ERROR) {
         ALOGE("%s() Could not remove all device affinities fo userId = %d",
@@ -5126,7 +5230,8 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
             const DeviceVector &supportedDevices = inProfile->getSupportedDevices();
             DeviceVector availProfileDevices = supportedDevices.filter(mInputDevicesAll);
             if (availProfileDevices.isEmpty()) {
-                ALOGE("%s: Input device list is empty!", __FUNCTION__);
+                ALOGV("%s: Input device list is empty! for profile %s",
+                    __func__, inProfile->getTagName().c_str());
                 continue;
             }
             sp<AudioInputDescriptor> inputDesc =
@@ -5928,14 +6033,29 @@ DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescr
     for (const auto &productStrategy : mEngine->getOrderedProductStrategies()) {
         StreamTypeVector streams = mEngine->getStreamTypesForProductStrategy(productStrategy);
         auto attr = mEngine->getAllAttributesForProductStrategy(productStrategy).front();
+        auto hasStreamActive = [&](auto stream) {
+            return hasStream(streams, stream) && isStreamActive(stream, 0);
+        };
 
-        if ((hasVoiceStream(streams) &&
-             (outputDesc->isActive(toVolumeSource(AUDIO_STREAM_VOICE_CALL)) || outputDesc == mPrimaryOutput) &&
-             (isInCall() || mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc))) ||
-             (((hasStream(streams, AUDIO_STREAM_ALARM) && isStreamActive(AUDIO_STREAM_ALARM, 0)) ||
-               (hasStream(streams, AUDIO_STREAM_ENFORCED_AUDIBLE) && isStreamActive(AUDIO_STREAM_ENFORCED_AUDIBLE, 0))) &&
-                mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc)) ||
-                outputDesc->isStrategyActive(productStrategy)) {
+        auto doGetOutputDevicesForVoice = [&]() {
+            return hasVoiceStream(streams) && (outputDesc == mPrimaryOutput ||
+                outputDesc->isActive(toVolumeSource(AUDIO_STREAM_VOICE_CALL))) &&
+                (isInCall() ||
+                 mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc));
+        };
+
+        // With low-latency playing on speaker, music on WFD, when the first low-latency
+        // output is stopped, getNewOutputDevices checks for a product strategy
+        // from the list, as STRATEGY_SONIFICATION comes prior to STRATEGY_MEDIA.
+        // If an ALARM or ENFORCED_AUDIBLE stream is supported by the product strategy,
+        // devices are returned for STRATEGY_SONIFICATION without checking whether the
+        // stream is associated to the output descriptor.
+        if (doGetOutputDevicesForVoice() || outputDesc->isStrategyActive(productStrategy) ||
+               ((hasStreamActive(AUDIO_STREAM_ALARM) ||
+                hasStreamActive(AUDIO_STREAM_ENFORCED_AUDIBLE)) &&
+                (outputDesc->isActive(toVolumeSource(AUDIO_STREAM_VOICE_CALL)) ||
+                 outputDesc == mPrimaryOutput) &&
+                mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc))) {
             // Retrieval of devices for voice DL is done on primary output profile, cannot
             // check the route (would force modifying configuration file for this profile)
             devices = mEngine->getOutputDevicesForAttributes(attr, nullptr, fromCache);
@@ -6918,7 +7038,7 @@ void AudioPolicyManager::modifySurroundChannelMasks(ChannelMaskSet *channelMasks
         for (auto it = channelMasks.begin(); it != channelMasks.end();) {
             audio_channel_mask_t channelMask = *it;
             if (channelMask & ~AUDIO_CHANNEL_OUT_STEREO) {
-                ALOGI("%s: force NEVER, so remove channelMask 0x%08x", __FUNCTION__, channelMask);
+                ALOGV("%s: force NEVER, so remove channelMask 0x%08x", __FUNCTION__, channelMask);
                 it = channelMasks.erase(it);
             } else {
                 ++it;
@@ -6938,7 +7058,7 @@ void AudioPolicyManager::modifySurroundChannelMasks(ChannelMaskSet *channelMasks
         // If not then add 5.1 support.
         if (!supports5dot1) {
             channelMasks.insert(AUDIO_CHANNEL_OUT_5POINT1);
-            ALOGI("%s: force MANUAL or ALWAYS, so adding channelMask for 5.1 surround", __func__);
+            ALOGV("%s: force MANUAL or ALWAYS, so adding channelMask for 5.1 surround", __func__);
         }
     }
 }
