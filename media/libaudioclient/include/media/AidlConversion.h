@@ -28,6 +28,7 @@
 #include <android/media/AudioDualMonoMode.h>
 #include <android/media/AudioEncapsulationMode.h>
 #include <android/media/AudioEncapsulationMetadataType.h>
+#include <android/media/AudioEncapsulationType.h>
 #include <android/media/AudioFlag.h>
 #include <android/media/AudioGain.h>
 #include <android/media/AudioGainMode.h>
@@ -48,6 +49,7 @@
 #include <android/media/AudioTimestampInternal.h>
 #include <android/media/AudioUniqueIdUse.h>
 #include <android/media/EffectDescriptor.h>
+#include <android/media/ExtraAudioDescriptor.h>
 
 #include <android/media/SharedFileRegion.h>
 #include <binder/IMemory.h>
@@ -107,6 +109,11 @@ ConversionResult<std::string> legacy2aidl_String8_string(const String8& legacy);
 
 ConversionResult<String16> aidl2legacy_string_view_String16(std::string_view aidl);
 ConversionResult<std::string> legacy2aidl_String16_string(const String16& legacy);
+
+ConversionResult<std::optional<String16>>
+aidl2legacy_optional_string_view_optional_String16(std::optional<std::string_view> aidl);
+ConversionResult<std::optional<std::string_view>>
+legacy2aidl_optional_String16_optional_string(std::optional<String16> legacy);
 
 ConversionResult<audio_io_config_event> aidl2legacy_AudioIoConfigEvent_audio_io_config_event(
         media::AudioIoConfigEvent aidl);
@@ -380,5 +387,26 @@ ConversionResult<audio_playback_rate_t>
 aidl2legacy_AudioPlaybackRate_audio_playback_rate_t(const media::AudioPlaybackRate& aidl);
 ConversionResult<media::AudioPlaybackRate>
 legacy2aidl_audio_playback_rate_t_AudioPlaybackRate(const audio_playback_rate_t& legacy);
+
+ConversionResult<audio_standard_t>
+aidl2legacy_AudioStandard_audio_standard_t(media::AudioStandard aidl);
+ConversionResult<media::AudioStandard>
+legacy2aidl_audio_standard_t_AudioStandard(audio_standard_t legacy);
+
+ConversionResult<audio_extra_audio_descriptor>
+aidl2legacy_ExtraAudioDescriptor_audio_extra_audio_descriptor(
+        const media::ExtraAudioDescriptor& aidl);
+ConversionResult<media::ExtraAudioDescriptor>
+legacy2aidl_audio_extra_audio_descriptor_ExtraAudioDescriptor(
+        const audio_extra_audio_descriptor& legacy);
+
+ConversionResult<audio_encapsulation_type_t>
+aidl2legacy_AudioEncapsulationType_audio_encapsulation_type_t(
+        const media::AudioEncapsulationType& aidl);
+ConversionResult<media::AudioEncapsulationType>
+legacy2aidl_audio_encapsulation_type_t_AudioEncapsulationType(
+        const audio_encapsulation_type_t & legacy);
+
+
 
 }  // namespace android

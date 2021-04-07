@@ -612,6 +612,11 @@ protected:
                 ExtendedTimestamp       mTimestamp;
                 TimestampVerifier< // For timestamp statistics.
                         int64_t /* frame count */, int64_t /* time ns */> mTimestampVerifier;
+                // DIRECT and OFFLOAD threads should reset frame count to zero on stop/flush
+                // TODO: add confirmation checks:
+                // 1) DIRECT threads and linear PCM format really resets to 0?
+                // 2) Is frame count really valid if not linear pcm?
+                // 3) Are all 64 bits of position returned, not just lowest 32 bits?
                 // Timestamp corrected device should be a single device.
                 audio_devices_t         mTimestampCorrectedDevice = AUDIO_DEVICE_NONE;
 
@@ -883,12 +888,11 @@ public:
                                 audio_session_t sessionId,
                                 audio_output_flags_t *flags,
                                 pid_t creatorPid,
+                                const media::permission::Identity& identity,
                                 pid_t tid,
-                                uid_t uid,
                                 status_t *status /*non-NULL*/,
                                 audio_port_handle_t portId,
-                                const sp<media::IAudioTrackCallback>& callback,
-                                const std::string& opPackageName);
+                                const sp<media::IAudioTrackCallback>& callback);
 
                 AudioStreamOut* getOutput() const;
                 AudioStreamOut* clearOutput();
@@ -1053,6 +1057,8 @@ protected:
 
     int64_t                         mBytesWritten;
     int64_t                         mFramesWritten; // not reset on standby
+    int64_t                         mLastFramesWritten = -1; // track changes in timestamp
+                                                             // server frames written.
     int64_t                         mSuspendedFrames; // not reset on standby
 
     // mHapticChannelMask and mHapticChannelCount will only be valid when the thread support
@@ -1065,6 +1071,14 @@ private:
     // copy rather than the one in AudioFlinger.  This optimization saves a lock.
     bool                            mMasterMute;
                 void        setMasterMute_l(bool muted) { mMasterMute = muted; }
+
+                auto discontinuityForStandbyOrFlush() const { // call on threadLoop or with lock.
+                    return ((mType == DIRECT && !audio_is_linear_pcm(mFormat))
+                                    || mType == OFFLOAD)
+                            ? mTimestampVerifier.DISCONTINUITY_MODE_ZERO
+                            : mTimestampVerifier.DISCONTINUITY_MODE_CONTINUOUS;
+                }
+
 protected:
     ActiveTracks<Track>     mActiveTracks;
 
@@ -1115,6 +1129,8 @@ private:
     void        readOutputParameters_l();
     void        updateMetadata_l() final;
     virtual void sendMetadataToBackend_l(const StreamOutHalInterface::SourceMetadata& metadata);
+
+    void        collectTimestamps_l();
 
     // The Tracks class manages tracks added and removed from the Thread.
     template <typename T>
@@ -1651,12 +1667,11 @@ public:
                     audio_session_t sessionId,
                     size_t *pNotificationFrameCount,
                     pid_t creatorPid,
-                    uid_t uid,
+                    const media::permission::Identity& identity,
                     audio_input_flags_t *flags,
                     pid_t tid,
                     status_t *status /*non-NULL*/,
-                    audio_port_handle_t portId,
-                    const String16& opPackageName);
+                    audio_port_handle_t portId);
 
             status_t    start(RecordTrack* recordTrack,
                               AudioSystem::sync_event_t event,
