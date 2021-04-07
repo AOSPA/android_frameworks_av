@@ -35,6 +35,7 @@
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 
+#include <media/AidlConversion.h>
 #include <media/IMediaPlayerService.h>
 #include <media/MediaMetricsItem.h>
 #include <media/stagefright/foundation/ABuffer.h>
@@ -121,8 +122,8 @@ static void addBatteryData(uint32_t params) {
 }
 
 
-StagefrightRecorder::StagefrightRecorder(const String16 &opPackageName)
-    : MediaRecorderBase(opPackageName),
+StagefrightRecorder::StagefrightRecorder(const Identity& clientIdentity)
+    : MediaRecorderBase(clientIdentity),
       mWriter(NULL),
       mOutputFd(-1),
       mAudioSource((audio_source_t)AUDIO_SOURCE_CNT), // initialize with invalid value
@@ -164,7 +165,7 @@ void StagefrightRecorder::updateMetrics() {
 
     // we run as part of the media player service; what we really want to
     // know is the app which requested the recording.
-    mMetricsItem->setUid(mClientUid);
+    mMetricsItem->setUid(VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClient.uid)));
 
     // populate the values from the raw fields.
 
@@ -1139,7 +1140,8 @@ status_t StagefrightRecorder::setListener(const sp<IMediaRecorderClient> &listen
 }
 
 status_t StagefrightRecorder::setClientName(const String16& clientName) {
-    mClientName = clientName;
+
+    mClient.packageName = VALUE_OR_RETURN_STATUS(legacy2aidl_String16_string(clientName));
 
     return OK;
 }
@@ -1150,10 +1152,6 @@ status_t StagefrightRecorder::prepareInternal() {
         ALOGE("Output file descriptor is invalid");
         return INVALID_OPERATION;
     }
-
-    // Get UID and PID here for permission checking
-    mClientUid = IPCThreadState::self()->getCallingUid();
-    mClientPid = IPCThreadState::self()->getCallingPid();
 
     status_t status = OK;
 
@@ -1357,12 +1355,10 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
 
     sp<AudioSource> audioSource = AVFactory::get()->createAudioSource(
                 &attr,
-                mOpPackageName,
+                mClient,
                 sourceSampleRate,
                 mAudioChannels,
                 mSampleRate,
-                mClientUid,
-                mClientPid,
                 mSelectedDeviceId,
                 mSelectedMicDirection,
                 mSelectedMicFieldDimension);
@@ -1900,6 +1896,10 @@ status_t StagefrightRecorder::setupCameraSource(
     Size videoSize;
     videoSize.width = mVideoWidth;
     videoSize.height = mVideoHeight;
+    uid_t uid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_uid_t(mClient.uid));
+    pid_t pid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_pid_t(mClient.pid));
+    String16 clientName = VALUE_OR_RETURN_STATUS(
+        aidl2legacy_string_view_String16(mClient.packageName.value_or("")));
     if (mCaptureFpsEnable && mCaptureFps != mFrameRate ) {
         if (!(mCaptureFps > 0.)) {
             ALOGE("Invalid mCaptureFps value: %lf", mCaptureFps);
@@ -1907,13 +1907,13 @@ status_t StagefrightRecorder::setupCameraSource(
         }
 
         mCameraSourceTimeLapse = AVFactory::get()->CreateCameraSourceTimeLapseFromCamera(
-                mCamera, mCameraProxy, mCameraId, mClientName, mClientUid, mClientPid,
+                mCamera, mCameraProxy, mCameraId, clientName, uid, pid,
                 videoSize, mFrameRate, mPreviewSurface,
                 std::llround(1e6 / mCaptureFps));
         *cameraSource = mCameraSourceTimeLapse;
     } else {
         mCameraSource = AVFactory::get()->CreateCameraSourceFromCamera(
-                mCamera, mCameraProxy, mCameraId, mClientName, mClientUid, mClientPid,
+                mCamera, mCameraProxy, mCameraId, clientName, uid, pid,
                 videoSize, mFrameRate,
                 mPreviewSurface);
         *cameraSource = mCameraSource;

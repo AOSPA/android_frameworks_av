@@ -48,6 +48,7 @@ import android.media.GetOutputForAttrResponse;
 import android.media.IAudioPolicyServiceClient;
 import android.media.ICaptureStateListener;
 import android.media.Int;
+import android.media.permission.Identity;
 import android.media.SoundTriggerSession;
 
 /**
@@ -80,8 +81,7 @@ interface IAudioPolicyService {
 
     GetOutputForAttrResponse getOutputForAttr(in AudioAttributesInternal attr,
                                               int /* audio_session_t */ session,
-                                              int /* pid_t */ pid,
-                                              int /* uid_t */ uid,
+                                              in Identity identity,
                                               in AudioConfig config,
                                               int /* Bitmask, indexed by AudioOutputFlags */ flags,
                                               int /* audio_port_handle_t */ selectedDeviceId);
@@ -96,9 +96,7 @@ interface IAudioPolicyService {
                                             int /* audio_io_handle_t */ input,
                                             int /* audio_unique_id_t */ riid,
                                             int /* audio_session_t */ session,
-                                            int /* pid_t */ pid,
-                                            int /* uid_t */ uid,
-                                            @utf8InCpp String opPackageName,
+                                            in Identity identity,
                                             in AudioConfigBase config,
                                             int /* Bitmask, indexed by AudioInputFlags */ flags,
                                             int /* audio_port_handle_t */ selectedDeviceId);
@@ -279,10 +277,20 @@ interface IAudioPolicyService {
      * Passing '0' on input and inspecting the value on output is a common way of determining the
      * number of elements without actually retrieving them.
      */
-    void getSurroundFormats(boolean reported,
-                            inout Int count,
+    void getSurroundFormats(inout Int count,
                             out AudioFormat[] formats,
                             out boolean[] formatsEnabled);
+
+    /**
+     * Populates the surround formats reported by the HDMI devices in formats.
+     *
+     * On input, count represents the maximum length of the returned array.
+     * On output, count is the total number of elements, which may be larger than the array size.
+     * Passing '0' on input and inspecting the value on output is a common way of determining the
+     * number of elements without actually retrieving them.
+     */
+    void getReportedSurroundFormats(inout Int count,
+                                    out AudioFormat[] formats);
 
     AudioFormat[] getHwOffloadEncodingFormatsSupportedForA2DP();
 

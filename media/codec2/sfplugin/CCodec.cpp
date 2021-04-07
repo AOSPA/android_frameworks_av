@@ -44,6 +44,7 @@
 #include <media/stagefright/BufferProducerWrapper.h>
 #include <media/stagefright/MediaCodecConstants.h>
 #include <media/stagefright/PersistentSurface.h>
+#include <utils/NativeHandle.h>
 
 #include "C2OMXNode.h"
 #include "CCodecBufferChannel.h"
@@ -210,8 +211,6 @@ public:
                 (OMX_INDEXTYPE)OMX_IndexParamConsumerUsageBits,
                 &usage, sizeof(usage));
 
-        // NOTE: we do not use/pass through color aspects from GraphicBufferSource as we
-        // communicate that directly to the component.
         mSource->configure(
                 mOmxNode, static_cast<hardware::graphics::common::V1_0::Dataspace>(mDataSpace));
         return OK;
@@ -408,6 +407,10 @@ public:
 
     void onInputBufferDone(c2_cntr64_t index) override {
         mNode->onInputBufferDone(index);
+    }
+
+    android_dataspace getDataspace() override {
+        return mNode->getDataspace();
     }
 
 private:
@@ -796,10 +799,30 @@ void CCodec::configure(const sp<AMessage> &msg) {
             mChannel->setMetaMode(CCodecBufferChannel::MODE_ANW);
         }
 
+        status_t err = OK;
         sp<RefBase> obj;
         sp<Surface> surface;
         if (msg->findObject("native-window", &obj)) {
             surface = static_cast<Surface *>(obj.get());
+            // setup tunneled playback
+            if (surface != nullptr) {
+                Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+                const std::unique_ptr<Config> &config = *configLocked;
+                if ((config->mDomain & Config::IS_DECODER)
+                        && (config->mDomain & Config::IS_VIDEO)) {
+                    int32_t tunneled;
+                    if (msg->findInt32("feature-tunneled-playback", &tunneled) && tunneled != 0) {
+                        ALOGI("Configuring TUNNELED video playback.");
+
+                        err = configureTunneledVideoPlayback(comp, &config->mSidebandHandle, msg);
+                        if (err != OK) {
+                            ALOGE("configureTunneledVideoPlayback failed!");
+                            return err;
+                        }
+                        config->mTunneled = true;
+                    }
+                }
+            }
             setSurface(surface);
         }
 
@@ -1008,6 +1031,26 @@ void CCodec::configure(const sp<AMessage> &msg) {
             }
         }
 
+        /*
+         * Handle dataspace
+         */
+        int32_t usingRecorder;
+        if (msg->findInt32("android._using-recorder", &usingRecorder) && usingRecorder) {
+            android_dataspace dataSpace = HAL_DATASPACE_BT709;
+            int32_t width, height;
+            if (msg->findInt32("width", &width)
+                    && msg->findInt32("height", &height)) {
+                ColorAspects aspects;
+                getColorAspectsFromFormat(msg, aspects);
+                setDefaultCodecColorAspectsIfNeeded(aspects, width, height);
+                // TODO: read dataspace / color aspect from the component
+                setColorAspectsIntoFormat(aspects, const_cast<sp<AMessage> &>(msg));
+                dataSpace = getDataSpaceForColorAspects(aspects, true /* mayexpand */);
+            }
+            msg->setInt32("android._dataspace", (int32_t)dataSpace);
+            ALOGD("setting dataspace to %x", dataSpace);
+        }
+
         int32_t subscribeToAllVendorParams;
         if (msg->findInt32("x-*", &subscribeToAllVendorParams) && subscribeToAllVendorParams) {
             if (config->subscribeToAllVendorParams(comp, C2_MAY_BLOCK) != OK) {
@@ -1024,7 +1067,7 @@ void CCodec::configure(const sp<AMessage> &msg) {
             sdkParams = msg->dup();
             sdkParams->removeEntryAt(sdkParams->findEntryByName(PARAMETER_KEY_VIDEO_BITRATE));
         }
-        status_t err = config->getConfigUpdateFromSdkParams(
+        err = config->getConfigUpdateFromSdkParams(
                 comp, sdkParams, Config::IS_CONFIG, C2_DONT_BLOCK, &configUpdate);
         if (err != OK) {
             ALOGW("failed to convert configuration to c2 params");
@@ -1043,6 +1086,45 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 uint32_t(maxBframes)
             };
             configUpdate.push_back(std::move(gop));
+        }
+
+        if ((config->mDomain & Config::IS_ENCODER)
+                && (config->mDomain & Config::IS_VIDEO)) {
+            // we may not use all 3 of these entries
+            std::unique_ptr<C2StreamPictureQuantizationTuning::output> qp =
+                C2StreamPictureQuantizationTuning::output::AllocUnique(3 /* flexCount */,
+                                                                       0u /* stream */);
+
+            int ix = 0;
+
+            int32_t iMax = INT32_MAX;
+            int32_t iMin = INT32_MIN;
+            (void) sdkParams->findInt32(KEY_VIDEO_QP_I_MAX, &iMax);
+            (void) sdkParams->findInt32(KEY_VIDEO_QP_I_MIN, &iMin);
+            if (iMax != INT32_MAX || iMin != INT32_MIN) {
+                qp->m.values[ix++] = {I_FRAME, iMin, iMax};
+            }
+
+            int32_t pMax = INT32_MAX;
+            int32_t pMin = INT32_MIN;
+            (void) sdkParams->findInt32(KEY_VIDEO_QP_P_MAX, &pMax);
+            (void) sdkParams->findInt32(KEY_VIDEO_QP_P_MIN, &pMin);
+            if (pMax != INT32_MAX || pMin != INT32_MIN) {
+                qp->m.values[ix++] = {P_FRAME, pMin, pMax};
+            }
+
+            int32_t bMax = INT32_MAX;
+            int32_t bMin = INT32_MIN;
+            (void) sdkParams->findInt32(KEY_VIDEO_QP_B_MAX, &bMax);
+            (void) sdkParams->findInt32(KEY_VIDEO_QP_B_MIN, &bMin);
+            if (bMax != INT32_MAX || bMin != INT32_MIN) {
+                qp->m.values[ix++] = {B_FRAME, bMin, bMax};
+            }
+
+            // adjust to reflect actual use.
+            qp->setFlexCount(ix);
+
+            configUpdate.push_back(std::move(qp));
         }
 
         err = config->setParameters(comp, configUpdate, C2_DONT_BLOCK);
@@ -1135,10 +1217,10 @@ void CCodec::configure(const sp<AMessage> &msg) {
         int32_t clientPrepend;
         if ((config->mDomain & Config::IS_VIDEO)
                 && (config->mDomain & Config::IS_ENCODER)
-                && msg->findInt32(KEY_PREPEND_HEADERS_TO_SYNC_FRAMES, &clientPrepend)
+                && msg->findInt32(KEY_PREPEND_HEADER_TO_SYNC_FRAMES, &clientPrepend)
                 && clientPrepend
                 && (!prepend || prepend.value != PREPEND_HEADER_TO_ALL_SYNC)) {
-            ALOGE("Failed to set KEY_PREPEND_HEADERS_TO_SYNC_FRAMES");
+            ALOGE("Failed to set KEY_PREPEND_HEADER_TO_SYNC_FRAMES");
             return BAD_VALUE;
         }
 
@@ -1532,6 +1614,7 @@ void CCodec::start() {
         outputFormat = config->mOutputFormat = config->mOutputFormat->dup();
         if (config->mInputSurface) {
             err2 = config->mInputSurface->start();
+            config->mInputSurfaceDataspace = config->mInputSurface->getDataspace();
         }
         buffersBoundToCodec = config->mBuffersBoundToCodec;
     }
@@ -1619,6 +1702,7 @@ void CCodec::stop() {
         if (config->mInputSurface) {
             config->mInputSurface->disconnect();
             config->mInputSurface = nullptr;
+            config->mInputSurfaceDataspace = HAL_DATASPACE_UNKNOWN;
         }
     }
     {
@@ -1668,6 +1752,7 @@ void CCodec::initiateRelease(bool sendCallback /* = true */) {
         if (config->mInputSurface) {
             config->mInputSurface->disconnect();
             config->mInputSurface = nullptr;
+            config->mInputSurfaceDataspace = HAL_DATASPACE_UNKNOWN;
         }
     }
 
@@ -1705,6 +1790,19 @@ void CCodec::release(bool sendCallback) {
 }
 
 status_t CCodec::setSurface(const sp<Surface> &surface) {
+    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+    const std::unique_ptr<Config> &config = *configLocked;
+    if (config->mTunneled && config->mSidebandHandle != nullptr) {
+        sp<ANativeWindow> nativeWindow = static_cast<ANativeWindow *>(surface.get());
+        status_t err = native_window_set_sideband_stream(
+                nativeWindow.get(),
+                const_cast<native_handle_t *>(config->mSidebandHandle->handle()));
+        if (err != OK) {
+            ALOGE("NativeWindow(%p) native_window_set_sideband_stream(%p) failed! (err %d).",
+                    nativeWindow.get(), config->mSidebandHandle->handle(), err);
+            return err;
+        }
+    }
     return mChannel->setSurface(surface);
 }
 
@@ -1908,6 +2006,39 @@ void CCodec::signalRequestIDRFrame() {
     config->setParameters(comp, params, C2_MAY_BLOCK);
 }
 
+status_t CCodec::querySupportedParameters(std::vector<std::string> *names) {
+    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+    const std::unique_ptr<Config> &config = *configLocked;
+    return config->querySupportedParameters(names);
+}
+
+status_t CCodec::describeParameter(
+        const std::string &name, CodecParameterDescriptor *desc) {
+    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+    const std::unique_ptr<Config> &config = *configLocked;
+    return config->describe(name, desc);
+}
+
+status_t CCodec::subscribeToParameters(const std::vector<std::string> &names) {
+    std::shared_ptr<Codec2Client::Component> comp = mState.lock()->comp;
+    if (!comp) {
+        return INVALID_OPERATION;
+    }
+    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+    const std::unique_ptr<Config> &config = *configLocked;
+    return config->subscribeToVendorConfigUpdate(comp, names);
+}
+
+status_t CCodec::unsubscribeFromParameters(const std::vector<std::string> &names) {
+    std::shared_ptr<Codec2Client::Component> comp = mState.lock()->comp;
+    if (!comp) {
+        return INVALID_OPERATION;
+    }
+    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+    const std::unique_ptr<Config> &config = *configLocked;
+    return config->unsubscribeFromVendorConfigUpdate(comp, names);
+}
+
 void CCodec::onWorkDone(std::list<std::unique_ptr<C2Work>> &workItems) {
     if (!workItems.empty()) {
         Mutexed<std::list<std::unique_ptr<C2Work>>>::Locked queue(mWorkDoneQueue);
@@ -2106,6 +2237,51 @@ void CCodec::setDeadline(
     deadline->set(now + (timeout * mult), name);
 }
 
+status_t CCodec::configureTunneledVideoPlayback(
+        std::shared_ptr<Codec2Client::Component> comp,
+        sp<NativeHandle> *sidebandHandle,
+        const sp<AMessage> &msg) {
+    std::vector<std::unique_ptr<C2SettingResult>> failures;
+
+    std::unique_ptr<C2PortTunneledModeTuning::output> tunneledPlayback =
+        C2PortTunneledModeTuning::output::AllocUnique(
+            1,
+            C2PortTunneledModeTuning::Struct::SIDEBAND,
+            C2PortTunneledModeTuning::Struct::REALTIME,
+            0);
+    // TODO: use KEY_AUDIO_HW_SYNC, KEY_HARDWARE_AV_SYNC_ID when they are in MediaCodecConstants.h
+    if (msg->findInt32("audio-hw-sync", &tunneledPlayback->m.syncId[0])) {
+        tunneledPlayback->m.syncType = C2PortTunneledModeTuning::Struct::sync_type_t::AUDIO_HW_SYNC;
+    } else if (msg->findInt32("hw-av-sync-id", &tunneledPlayback->m.syncId[0])) {
+        tunneledPlayback->m.syncType = C2PortTunneledModeTuning::Struct::sync_type_t::HW_AV_SYNC;
+    } else {
+        tunneledPlayback->m.syncType = C2PortTunneledModeTuning::Struct::sync_type_t::REALTIME;
+        tunneledPlayback->setFlexCount(0);
+    }
+    c2_status_t c2err = comp->config({ tunneledPlayback.get() }, C2_MAY_BLOCK, &failures);
+    if (c2err != C2_OK) {
+        return UNKNOWN_ERROR;
+    }
+
+    std::vector<std::unique_ptr<C2Param>> params;
+    c2err = comp->query({}, {C2PortTunnelHandleTuning::output::PARAM_TYPE}, C2_DONT_BLOCK, &params);
+    if (c2err == C2_OK && params.size() == 1u) {
+        C2PortTunnelHandleTuning::output *videoTunnelSideband =
+            C2PortTunnelHandleTuning::output::From(params[0].get());
+        // Currently, Codec2 only supports non-fd case for sideband native_handle.
+        native_handle_t *handle = native_handle_create(0, videoTunnelSideband->flexCount());
+        *sidebandHandle = NativeHandle::create(handle, true /* ownsHandle */);
+        if (handle != nullptr && videoTunnelSideband->flexCount()) {
+            memcpy(handle->data, videoTunnelSideband->m.values,
+                    sizeof(int32_t) * videoTunnelSideband->flexCount());
+            return OK;
+        } else {
+            return NO_MEMORY;
+        }
+    }
+    return UNKNOWN_ERROR;
+}
+
 void CCodec::initiateReleaseIfStuck() {
     std::string name;
     bool pendingDeadline = false;
@@ -2118,7 +2294,9 @@ void CCodec::initiateReleaseIfStuck() {
             pendingDeadline = true;
         }
     }
-    if (name.empty()) {
+    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+    const std::unique_ptr<Config> &config = *configLocked;
+    if (config->mTunneled == false && name.empty()) {
         constexpr std::chrono::steady_clock::duration kWorkDurationThreshold = 3s;
         std::chrono::steady_clock::duration elapsed = mChannel->elapsed();
         if (elapsed >= kWorkDurationThreshold) {
@@ -2511,4 +2689,3 @@ std::shared_ptr<C2GraphicBlock> CCodec::FetchGraphicBlock(
 }
 
 }  // namespace android
-

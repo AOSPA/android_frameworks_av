@@ -1228,9 +1228,10 @@ status_t CCodecBufferChannel::start(
     if (outputFormat != nullptr) {
         sp<IGraphicBufferProducer> outputSurface;
         uint32_t outputGeneration;
+        int maxDequeueCount = 0;
         {
             Mutexed<OutputSurface>::Locked output(mOutputSurface);
-            output->maxDequeueBuffers = numOutputSlots +
+            maxDequeueCount = output->maxDequeueBuffers = numOutputSlots +
                     reorderDepth.value + kRenderingDepth;
             bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
             if (!isHW) {
@@ -1244,6 +1245,9 @@ status_t CCodecBufferChannel::start(
                 output->surface->setMaxDequeuedBufferCount(output->maxDequeueBuffers);
             }
             outputGeneration = output->generation;
+        }
+        if (maxDequeueCount > 0) {
+            mComponent->setOutputSurfaceMaxDequeueCount(maxDequeueCount);
         }
 
         bool graphic = (oStreamFormat.value == C2BufferData::GRAPHIC);
@@ -1810,6 +1814,17 @@ bool CCodecBufferChannel::handleWork(
                 }
                 break;
             }
+            case C2PortTunnelSystemTime::CORE_INDEX: {
+                C2PortTunnelSystemTime::output frameRenderTime;
+                if (frameRenderTime.updateFrom(*param)) {
+                    ALOGV("[%s] onWorkDone: frame rendered (sys:%lld ns, media:%lld us)",
+                          mName, (long long)frameRenderTime.value,
+                          (long long)worklet->output.ordinal.timestamp.peekll());
+                    mCCodecCallback->onOutputFramesRendered(
+                            worklet->output.ordinal.timestamp.peek(), frameRenderTime.value);
+                }
+                break;
+            }
             default:
                 ALOGV("[%s] onWorkDone: unrecognized config update (%08X)",
                       mName, param->index());
@@ -1835,19 +1850,31 @@ bool CCodecBufferChannel::handleWork(
         }
     }
     if (needMaxDequeueBufferCountUpdate) {
-        uint32_t depth = mOutput.lock()->buffers->getReorderDepth();
-        Mutexed<OutputSurface>::Locked output(mOutputSurface);
         size_t numOutputSlots = 0;
         bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
         size_t numInputSlots = mInput.lock()->numSlots;
-        output->maxDequeueBuffers = numOutputSlots + depth + kRenderingDepth;
-        if (!isHW) {
-            output->maxDequeueBuffers += numInputSlots;
+        uint32_t reorderDepth = 0;
+        int maxDequeueCount = 0;
+        {
+            Mutexed<Output>::Locked output(mOutput);
+            numOutputSlots = output->numSlots;
+            reorderDepth = output->buffers->getReorderDepth();
         }
-        if (output->surface) {
-            ALOGI("[%s] onWorkDone: updating max output delay %u",
-                    mName, output->maxDequeueBuffers);
-            output->surface->setMaxDequeuedBufferCount(output->maxDequeueBuffers);
+        {
+            Mutexed<OutputSurface>::Locked output(mOutputSurface);
+            maxDequeueCount = output->maxDequeueBuffers =
+                    numOutputSlots + reorderDepth + kRenderingDepth;
+            if (!isHW) {
+                output->maxDequeueBuffers += numInputSlots;
+            }
+            if (output->surface) {
+                ALOGI("[%s] onWorkDone: updating max output delay %u",
+                        mName, output->maxDequeueBuffers);
+                output->surface->setMaxDequeuedBufferCount(output->maxDequeueBuffers);
+            }
+        }
+        if (maxDequeueCount > 0) {
+            mComponent->setOutputSurfaceMaxDequeueCount(maxDequeueCount);
         }
     }
 

@@ -50,6 +50,7 @@ struct AString;
 struct BatteryChecker;
 class BufferChannelBase;
 struct CodecBase;
+struct CodecParameterDescriptor;
 class IBatteryStats;
 struct ICrypto;
 class MediaCodecBuffer;
@@ -129,6 +130,8 @@ struct MediaCodec : public AHandler {
     status_t setCallback(const sp<AMessage> &callback);
 
     status_t setOnFrameRenderedNotification(const sp<AMessage> &notify);
+
+    status_t setOnFirstTunnelFrameReadyNotification(const sp<AMessage> &notify);
 
     status_t createInputSurface(sp<IGraphicBufferProducer>* bufferProducer);
 
@@ -248,6 +251,11 @@ struct MediaCodec : public AHandler {
 
     status_t setParameters(const sp<AMessage> &params);
 
+    status_t querySupportedVendorParameters(std::vector<std::string> *names);
+    status_t describeParameter(const std::string &name, CodecParameterDescriptor *desc);
+    status_t subscribeToVendorParameters(const std::vector<std::string> &names);
+    status_t unsubscribeFromVendorParameters(const std::vector<std::string> &names);
+
     // Create a MediaCodec notification message from a list of rendered or dropped render infos
     // by adding rendered frame information to a base notification message. Returns the number
     // of frames that were rendered.
@@ -363,6 +371,22 @@ private:
         bool mOwnedByClient;
     };
 
+    // This type is used to track the tunnel mode video peek state machine:
+    //
+    // DisabledNoBuffer -> EnabledNoBuffer  when tunnel-peek = true
+    // EnabledNoBuffer  -> DisabledNoBuffer when tunnel-peek = false
+    // DisabledNoBuffer -> BufferDecoded    when kWhatFirstTunnelFrameReady
+    // EnabledNoBuffer  -> BufferDecoded    when kWhatFirstTunnelFrameReady
+    // BufferDecoded    -> BufferRendered   when kWhatFrameRendered
+    // <all states>     -> EnabledNoBuffer  when flush
+    // <all states>     -> EnabledNoBuffer  when stop then configure then start
+    enum struct TunnelPeekState {
+        kDisabledNoBuffer,
+        kEnabledNoBuffer,
+        kBufferDecoded,
+        kBufferRendered,
+    };
+
     struct ResourceManagerServiceProxy;
 
     State mState;
@@ -389,12 +413,15 @@ private:
     void flushMediametrics();
     void updateEphemeralMediametrics(mediametrics_handle_t item);
     void updateLowLatency(const sp<AMessage> &msg);
+    constexpr const char *asString(TunnelPeekState state, const char *default_string="?");
+    void updateTunnelPeek(const sp<AMessage> &msg);
 
     sp<AMessage> mOutputFormat;
     sp<AMessage> mInputFormat;
     sp<AMessage> mCallback;
     sp<AMessage> mOnFrameRenderedNotification;
     sp<AMessage> mAsyncReleaseCompleteNotification;
+    sp<AMessage> mOnFirstTunnelFrameReadyNotification;
 
     sp<ResourceManagerServiceProxy> mResourceManagerProxy;
 
@@ -409,6 +436,17 @@ private:
 
     // configure parameter
     sp<AMessage> mConfigureMsg;
+
+    // rewrites the format description during configure() for encoding.
+    // format and flags as they exist within configure()
+    // the (possibly) updated format is returned in place.
+    status_t shapeMediaFormat(
+            const sp<AMessage> &format,
+            uint32_t flags);
+
+    // populate the format shaper library with information for this codec encoding
+    // for the indicated media type
+    status_t setupFormatShaper(AString mediaType);
 
     // Used only to synchronize asynchronous getBufferAndFormat
     // across all the other (synchronous) buffer state change
@@ -430,6 +468,7 @@ private:
     int32_t mTunneledInputWidth;
     int32_t mTunneledInputHeight;
     bool mTunneled;
+    TunnelPeekState mTunnelPeekState;
 
     sp<IDescrambler> mDescrambler;
 

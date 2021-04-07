@@ -92,12 +92,10 @@ struct AVFactory {
             bool storeMetaDataInVideoBuffers = true);
     virtual AudioSource* createAudioSource(
             const audio_attributes_t *attr,
-            const String16 &opPackageName,
+            const media::permission::Identity& clientIdentity,
             uint32_t sampleRate,
             uint32_t channels,
             uint32_t outSampleRate = 0,
-            uid_t clientUid = -1,
-            pid_t clientPid = -1,
             audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE,
             audio_microphone_direction_t selectedMicDirection = MIC_DIRECTION_UNSPECIFIED,
             float selectedMicFieldDimension = MIC_FIELD_DIMENSION_NORMAL);

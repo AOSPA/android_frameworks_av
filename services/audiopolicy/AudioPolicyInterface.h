@@ -21,6 +21,7 @@
 #include <media/AudioSystem.h>
 #include <media/AudioPolicy.h>
 #include <media/DeviceDescriptorBase.h>
+#include <android/media/permission/Identity.h>
 #include <utils/String8.h>
 
 namespace android {
@@ -122,7 +123,7 @@ public:
                                         audio_io_handle_t *output,
                                         audio_session_t session,
                                         audio_stream_type_t *stream,
-                                        uid_t uid,
+                                        const media::permission::Identity& identity,
                                         const audio_config_t *config,
                                         audio_output_flags_t *flags,
                                         audio_port_handle_t *selectedDeviceId,
@@ -141,7 +142,7 @@ public:
                                      audio_io_handle_t *input,
                                      audio_unique_id_t riid,
                                      audio_session_t session,
-                                     uid_t uid,
+                                     const media::permission::Identity& identity,
                                      const audio_config_base_t *config,
                                      audio_input_flags_t flags,
                                      audio_port_handle_t *selectedDeviceId,
@@ -272,8 +273,11 @@ public:
 
     virtual status_t getSurroundFormats(unsigned int *numSurroundFormats,
                                         audio_format_t *surroundFormats,
-                                        bool *surroundFormatsEnabled,
-                                        bool reported) = 0;
+                                        bool *surroundFormatsEnabled) = 0;
+
+    virtual status_t getReportedSurroundFormats(unsigned int *numSurroundFormats,
+                                                audio_format_t *surroundFormats) = 0;
+
     virtual status_t setSurroundFormatEnabled(audio_format_t audioFormat, bool enabled) = 0;
 
     virtual bool     isHapticPlaybackSupported() = 0;
