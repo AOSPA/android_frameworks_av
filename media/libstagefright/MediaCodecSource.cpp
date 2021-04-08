@@ -189,16 +189,11 @@ status_t MediaCodecSource::Puller::start(const sp<MetaData> &meta, const sp<AMes
 }
 
 void MediaCodecSource::Puller::stop() {
-    bool interrupt = false;
-    {
-        // mark stopping before actually reaching kWhatStop on the looper, so the pulling will
-        // stop.
-        Mutexed<Queue>::Locked queue(mQueue);
-        queue->mPulling = false;
-        interrupt = queue->mReadPendingSince && (queue->mReadPendingSince < ALooper::GetNowUs() - 1000000);
-        queue->flush(); // flush any unprocessed pulled buffers
-    }
-
+    // mark stopping before actually reaching kWhatStop on the looper, so the pulling will
+    // stop.
+    Mutexed<Queue>::Locked queue(mQueue);
+    queue->mPulling = false;
+    queue->flush(); // flush any unprocessed pulled buffers
 }
 
 void MediaCodecSource::Puller::interruptSource() {
@@ -691,9 +686,9 @@ void MediaCodecSource::signalEOS(status_t err) {
     if (mStopping && reachedEOS) {
         ALOGI("encoder (%s) stopped", mIsVideo ? "video" : "audio");
         if (mPuller != NULL) {
-            mPuller->stopSource();
+            mPuller->interruptSource();
         }
-        ALOGV("source (%s) stopped", mIsVideo ? "video" : "audio");
+        ALOGI("source (%s) stopped", mIsVideo ? "video" : "audio");
         // posting reply to everyone that's waiting
         List<sp<AReplyToken>>::iterator it;
         for (it = mStopReplyIDQueue.begin();
@@ -721,6 +716,9 @@ void MediaCodecSource::resume(int64_t resumeStartTimeUs) {
 status_t MediaCodecSource::feedEncoderInputBuffers() {
     MediaBufferBase* mbuf = NULL;
     while (!mAvailEncoderInputIndices.empty() && mPuller->readBuffer(&mbuf)) {
+        if (!mEncoder) {
+            return BAD_VALUE;
+        }
         size_t bufferIndex = *mAvailEncoderInputIndices.begin();
         mAvailEncoderInputIndices.erase(mAvailEncoderInputIndices.begin());
 
@@ -903,7 +901,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
     {
         int32_t eos = 0;
         if (msg->findInt32("eos", &eos) && eos) {
-            ALOGV("puller (%s) reached EOS", mIsVideo ? "video" : "audio");
+            ALOGI("puller (%s) reached EOS", mIsVideo ? "video" : "audio");
             signalEOS();
             break;
         }
@@ -1127,11 +1125,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
 
         releaseEncoder();
 
-        if (!(mFlags & FLAG_USE_SURFACE_INPUT)) {
-            ALOGV("source (%s) stopping", mIsVideo ? "video" : "audio");
-            mPuller->interruptSource();
-            ALOGV("source (%s) stopped", mIsVideo ? "video" : "audio");
-        }
+        ALOGD("source (%s) stopping stalled", mIsVideo ? "video" : "audio");
         signalEOS();
         break;
     }
@@ -1163,7 +1157,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         if (mFlags & FLAG_USE_SURFACE_INPUT) {
             sp<AMessage> params = new AMessage;
             params->setInt64(PARAMETER_KEY_OFFSET_TIME, mInputBufferTimeOffsetUs);
-            err = mEncoder->setParameters(params);
+            err = mEncoder ? mEncoder->setParameters(params) : BAD_VALUE;
         }
 
         sp<AMessage> response = new AMessage;
@@ -1183,7 +1177,7 @@ void MediaCodecSource::onMessageReceived(const sp<AMessage> &msg) {
         if (mFlags & FLAG_USE_SURFACE_INPUT) {
             sp<AMessage> params = new AMessage;
             params->setInt64("stop-time-us", stopTimeUs);
-            err = mEncoder->setParameters(params);
+            err = mEncoder ? mEncoder->setParameters(params) : BAD_VALUE;
         } else {
             err = mPuller->setStopTimeUs(stopTimeUs);
         }
