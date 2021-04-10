@@ -434,6 +434,30 @@ struct TestClientCallback : public BnTranscodingClientCallback,
                                    session.request.destinationFilePath == destinationFilePath));
     }
 
+    template <bool expectation = success>
+    bool addClientUid(int32_t sessionId, uid_t clientUid) {
+        constexpr bool shouldSucceed = (expectation == success);
+        bool result;
+        Status status = mClient->addClientUid(sessionId, clientUid, &result);
+
+        EXPECT_TRUE(status.isOk());
+        EXPECT_EQ(result, shouldSucceed);
+
+        return status.isOk() && (result == shouldSucceed);
+    }
+
+    template <bool expectation = success>
+    bool getClientUids(int32_t sessionId, std::vector<int32_t>* clientUids) {
+        constexpr bool shouldSucceed = (expectation == success);
+        bool result;
+        Status status = mClient->getClientUids(sessionId, clientUids, &result);
+
+        EXPECT_TRUE(status.isOk());
+        EXPECT_EQ(result, shouldSucceed);
+
+        return status.isOk() && (result == shouldSucceed);
+    }
+
     int32_t mClientId;
     pid_t mClientPid;
     uid_t mClientUid;
@@ -500,7 +524,23 @@ public:
         EXPECT_TRUE(mClient3->unregisterClient().isOk());
     }
 
+    const char* prepareOutputFile(const char* path) {
+        deleteFile(path);
+        return path;
+    }
+
     void deleteFile(const char* path) { unlink(path); }
+
+    void dismissKeyguard() {
+        EXPECT_TRUE(ShellHelper::RunCmd("input keyevent KEYCODE_WAKEUP"));
+        EXPECT_TRUE(ShellHelper::RunCmd("wm dismiss-keyguard"));
+    }
+
+    void stopAppPackages() {
+        EXPECT_TRUE(ShellHelper::Stop(kClientPackageA));
+        EXPECT_TRUE(ShellHelper::Stop(kClientPackageB));
+        EXPECT_TRUE(ShellHelper::Stop(kClientPackageC));
+    }
 
     std::shared_ptr<IMediaTranscodingService> mService;
     std::shared_ptr<TestClientCallback> mClient1;
