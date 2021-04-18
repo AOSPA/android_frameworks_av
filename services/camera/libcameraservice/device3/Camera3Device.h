@@ -35,6 +35,7 @@
 #include <android/hardware/camera/device/3.4/ICameraDeviceSession.h>
 #include <android/hardware/camera/device/3.5/ICameraDeviceSession.h>
 #include <android/hardware/camera/device/3.6/ICameraDeviceSession.h>
+#include <android/hardware/camera/device/3.7/ICameraDeviceSession.h>
 #include <android/hardware/camera/device/3.2/ICameraDeviceCallback.h>
 #include <android/hardware/camera/device/3.4/ICameraDeviceCallback.h>
 #include <android/hardware/camera/device/3.5/ICameraDeviceCallback.h>
@@ -52,6 +53,7 @@
 #include "device3/InFlightRequest.h"
 #include "device3/Camera3OutputInterface.h"
 #include "device3/Camera3OfflineSession.h"
+#include "device3/Camera3StreamInterface.h"
 #include "utils/TagMonitor.h"
 #include "utils/LatencyHistogram.h"
 #include <camera_metadata_hidden.h>
@@ -71,7 +73,6 @@ namespace camera3 {
 
 class Camera3Stream;
 class Camera3ZslStream;
-class Camera3OutputStreamInterface;
 class Camera3StreamInterface;
 
 } // namespace camera3
@@ -131,19 +132,24 @@ class Camera3Device :
             uint32_t width, uint32_t height, int format,
             android_dataspace dataSpace, camera_stream_rotation_t rotation, int *id,
             const String8& physicalCameraId,
+            const std::unordered_set<int32_t> &sensorPixelModesUsed,
             std::vector<int> *surfaceIds = nullptr,
             int streamSetId = camera3::CAMERA3_STREAM_SET_ID_INVALID,
-            bool isShared = false, uint64_t consumerUsage = 0) override;
+            bool isShared = false, bool isMultiResolution = false,
+            uint64_t consumerUsage = 0) override;
+
     status_t createStream(const std::vector<sp<Surface>>& consumers,
             bool hasDeferredConsumer, uint32_t width, uint32_t height, int format,
             android_dataspace dataSpace, camera_stream_rotation_t rotation, int *id,
             const String8& physicalCameraId,
+            const std::unordered_set<int32_t> &sensorPixelModesUsed,
             std::vector<int> *surfaceIds = nullptr,
             int streamSetId = camera3::CAMERA3_STREAM_SET_ID_INVALID,
-            bool isShared = false, uint64_t consumerUsage = 0) override;
+            bool isShared = false, bool isMultiResolution = false,
+            uint64_t consumerUsage = 0) override;
 
     status_t createInputStream(
-            uint32_t width, uint32_t height, int format,
+            uint32_t width, uint32_t height, int format, bool isMultiResolution,
             int *id) override;
 
     status_t getStreamInfo(int id, StreamInfo *streamInfo) override;
@@ -187,7 +193,7 @@ class Camera3Device :
 
     ssize_t getJpegBufferSize(uint32_t width, uint32_t height) const override;
     ssize_t getPointCloudBufferSize() const;
-    ssize_t getRawOpaqueBufferSize(int32_t width, int32_t height) const;
+    ssize_t getRawOpaqueBufferSize(int32_t width, int32_t height, bool maxResolution) const;
 
     // Methods called by subclasses
     void             notifyStatus(bool idle); // updates from StatusTracker
@@ -418,6 +424,8 @@ class Camera3Device :
         sp<hardware::camera::device::V3_5::ICameraDeviceSession> mHidlSession_3_5;
         // Valid if ICameraDeviceSession is @3.6 or newer
         sp<hardware::camera::device::V3_6::ICameraDeviceSession> mHidlSession_3_6;
+        // Valid if ICameraDeviceSession is @3.7 or newer
+        sp<hardware::camera::device::V3_7::ICameraDeviceSession> mHidlSession_3_7;
 
         std::shared_ptr<RequestMetadataQueue> mRequestMetadataQueue;
 
@@ -470,8 +478,6 @@ class Camera3Device :
         uint32_t height;
         explicit Size(uint32_t w = 0, uint32_t h = 0) : width(w), height(h){}
     };
-    // Map from format to size.
-    Vector<Size>               mSupportedOpaqueInputSizes;
 
     enum Status {
         STATUS_ERROR,
@@ -492,7 +498,10 @@ class Camera3Device :
 
     camera3::StreamSet         mOutputStreams;
     sp<camera3::Camera3Stream> mInputStream;
+    bool                       mIsInputStreamMultiResolution;
     SessionStatsBuilder        mSessionStatsBuilder;
+    // Map from stream group ID to physical cameras backing the stream group
+    std::map<int32_t, std::set<String8>> mGroupIdPhysicalCameraMap;
 
     int                        mNextStreamId;
     bool                       mNeedConfig;
@@ -525,6 +534,7 @@ class Camera3Device :
         PhysicalCameraSettingsList          mSettingsList;
         sp<camera3::Camera3Stream>          mInputStream;
         camera_stream_buffer_t              mInputBuffer;
+        camera3::Size                       mInputBufferSize;
         Vector<sp<camera3::Camera3OutputStreamInterface> >
                                             mOutputStreams;
         SurfaceMap                          mOutputSurfaces;
@@ -750,7 +760,7 @@ class Camera3Device :
      * Helper function to get the largest Jpeg resolution (in area)
      * Return Size(0, 0) if static metatdata is invalid
      */
-    Size getMaxJpegResolution() const;
+    camera3::Size getMaxJpegResolution() const;
 
     /**
      * Helper function to get the offset between MONOTONIC and BOOTTIME
@@ -795,7 +805,8 @@ class Camera3Device :
          * Call after stream (re)-configuration is completed.
          */
         void     configurationComplete(bool isConstrainedHighSpeed,
-                const CameraMetadata& sessionParams);
+                const CameraMetadata& sessionParams,
+                const std::map<int32_t, std::set<String8>>& groupIdPhysicalCameraMap);
 
         /**
          * Set or clear the list of repeating requests. Does not block
@@ -1052,6 +1063,8 @@ class Camera3Device :
         Vector<int32_t>    mSessionParamKeys;
         CameraMetadata     mLatestSessionParams;
 
+        std::map<int32_t, std::set<String8>> mGroupIdPhysicalCameraMap;
+
         const bool         mUseHalBufManager;
     };
     sp<RequestThread> mRequestThread;
@@ -1071,7 +1084,8 @@ class Camera3Device :
 
     status_t registerInFlight(uint32_t frameNumber,
             int32_t numBuffers, CaptureResultExtras resultExtras, bool hasInput,
-            bool callback, nsecs_t maxExpectedDuration, std::set<String8>& physicalCameraIds,
+            bool callback, nsecs_t maxExpectedDuration,
+            const std::set<std::set<String8>>& physicalCameraIds,
             bool isStillCapture, bool isZslCapture, bool rotateAndCropAuto,
             const std::set<std::string>& cameraIdsWithZoom, const SurfaceMap& outputSurfaces,
             nsecs_t requestTimeNs);

@@ -27,6 +27,8 @@
 #include <media/MediaTranscoder.h>
 #include <media/NdkCommon.h>
 
+#include "TranscoderTestUtils.h"
+
 namespace android {
 
 #define DEFINE_FORMAT_VALUE_EQUAL_FUNC(_type, _typeName)                                  \
@@ -53,60 +55,6 @@ static const FormatVerifierEntry kFieldsToPreserve[] = {
         {AMEDIAFORMAT_KEY_SAR_HEIGHT, equalInt32},     {AMEDIAFORMAT_KEY_ROTATION, equalInt32},
 };
 
-class TestCallbacks : public MediaTranscoder::CallbackInterface {
-public:
-    virtual void onFinished(const MediaTranscoder* transcoder __unused) override {
-        std::unique_lock<std::mutex> lock(mMutex);
-        EXPECT_FALSE(mFinished);
-        mFinished = true;
-        mCondition.notify_all();
-    }
-
-    virtual void onError(const MediaTranscoder* transcoder __unused,
-                         media_status_t error) override {
-        std::unique_lock<std::mutex> lock(mMutex);
-        EXPECT_NE(error, AMEDIA_OK);
-        EXPECT_FALSE(mFinished);
-        mFinished = true;
-        mStatus = error;
-        mCondition.notify_all();
-    }
-
-    virtual void onProgressUpdate(const MediaTranscoder* transcoder __unused,
-                                  int32_t progress) override {
-        std::unique_lock<std::mutex> lock(mMutex);
-        if (progress > 0 && !mProgressMade) {
-            mProgressMade = true;
-            mCondition.notify_all();
-        }
-    }
-
-    virtual void onCodecResourceLost(const MediaTranscoder* transcoder __unused,
-                                     const std::shared_ptr<ndk::ScopedAParcel>& pausedState
-                                             __unused) override {}
-
-    void waitForTranscodingFinished() {
-        std::unique_lock<std::mutex> lock(mMutex);
-        while (!mFinished) {
-            mCondition.wait(lock);
-        }
-    }
-
-    void waitForProgressMade() {
-        std::unique_lock<std::mutex> lock(mMutex);
-        while (!mProgressMade && !mFinished) {
-            mCondition.wait(lock);
-        }
-    }
-    media_status_t mStatus = AMEDIA_OK;
-    bool mFinished = false;
-
-private:
-    std::mutex mMutex;
-    std::condition_variable mCondition;
-    bool mProgressMade = false;
-};
-
 // Write-only, create file if non-existent, don't overwrite existing file.
 static constexpr int kOpenFlags = O_WRONLY | O_CREAT | O_EXCL;
 // User R+W permission.
@@ -119,7 +67,7 @@ public:
 
     void SetUp() override {
         LOG(DEBUG) << "MediaTranscoderTests set up";
-        mCallbacks = std::make_shared<TestCallbacks>();
+        mCallbacks = std::make_shared<TestTranscoderCallbacks>();
         ABinderProcess_startThreadPool();
     }
 
@@ -143,6 +91,7 @@ public:
 
     typedef enum {
         kRunToCompletion,
+        kCheckHeartBeat,
         kCancelAfterProgress,
         kCancelAfterStart,
         kPauseAfterProgress,
@@ -152,8 +101,9 @@ public:
     using FormatConfigurationCallback = std::function<AMediaFormat*(AMediaFormat*)>;
     media_status_t transcodeHelper(const char* srcPath, const char* destPath,
                                    FormatConfigurationCallback formatCallback,
-                                   TranscodeExecutionControl executionControl = kRunToCompletion) {
-        auto transcoder = MediaTranscoder::create(mCallbacks);
+                                   TranscodeExecutionControl executionControl = kRunToCompletion,
+                                   int64_t heartBeatIntervalUs = -1) {
+        auto transcoder = MediaTranscoder::create(mCallbacks, heartBeatIntervalUs);
         EXPECT_NE(transcoder, nullptr);
 
         const int srcFd = open(srcPath, O_RDONLY);
@@ -200,6 +150,18 @@ public:
             case kPauseAfterStart:
                 transcoder->pause(&pausedState);
                 break;
+            case kCheckHeartBeat: {
+                mCallbacks->waitForProgressMade();
+                auto startTime = std::chrono::system_clock::now();
+                mCallbacks->waitForTranscodingFinished();
+                auto finishTime = std::chrono::system_clock::now();
+                int32_t expectedCount =
+                        (finishTime - startTime) / std::chrono::microseconds(heartBeatIntervalUs);
+                // Here we relax the expected count by 1, in case the last heart-beat just
+                // missed the window, other than that the count should be exact.
+                EXPECT_GE(mCallbacks->mHeartBeatCount, expectedCount - 1);
+                break;
+            }
             case kRunToCompletion:
             default:
                 mCallbacks->waitForTranscodingFinished();
@@ -305,7 +267,7 @@ public:
         close(dstFd);
     }
 
-    std::shared_ptr<TestCallbacks> mCallbacks;
+    std::shared_ptr<TestTranscoderCallbacks> mCallbacks;
     std::shared_ptr<AMediaFormat> mSourceVideoFormat;
 };
 
@@ -360,7 +322,7 @@ TEST_F(MediaTranscoderTests, TestCustomBitrate) {
     const char* destPath1 = "/data/local/tmp/MediaTranscoder_CustomBitrate_2Mbps.MP4";
     const char* destPath2 = "/data/local/tmp/MediaTranscoder_CustomBitrate_8Mbps.MP4";
     testTranscodeVideo(srcPath, destPath1, AMEDIA_MIMETYPE_VIDEO_AVC, 2 * 1000 * 1000);
-    mCallbacks = std::make_shared<TestCallbacks>();
+    mCallbacks = std::make_shared<TestTranscoderCallbacks>();
     testTranscodeVideo(srcPath, destPath2, AMEDIA_MIMETYPE_VIDEO_AVC, 8 * 1000 * 1000);
 
     // The source asset is very short and heavily compressed from the beginning so don't expect the
@@ -390,7 +352,7 @@ TEST_F(MediaTranscoderTests, TestCancelAfterProgress) {
         EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kCancelAfterProgress),
                   AMEDIA_OK);
         EXPECT_FALSE(mCallbacks->mFinished);
-        mCallbacks = std::make_shared<TestCallbacks>();
+        mCallbacks = std::make_shared<TestTranscoderCallbacks>();
     }
 }
 
@@ -402,7 +364,7 @@ TEST_F(MediaTranscoderTests, TestCancelAfterStart) {
         EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kCancelAfterStart),
                   AMEDIA_OK);
         EXPECT_FALSE(mCallbacks->mFinished);
-        mCallbacks = std::make_shared<TestCallbacks>();
+        mCallbacks = std::make_shared<TestTranscoderCallbacks>();
     }
 }
 
@@ -414,7 +376,7 @@ TEST_F(MediaTranscoderTests, TestPauseAfterProgress) {
         EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kPauseAfterProgress),
                   AMEDIA_OK);
         EXPECT_FALSE(mCallbacks->mFinished);
-        mCallbacks = std::make_shared<TestCallbacks>();
+        mCallbacks = std::make_shared<TestTranscoderCallbacks>();
     }
 }
 
@@ -426,8 +388,20 @@ TEST_F(MediaTranscoderTests, TestPauseAfterStart) {
         EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kPauseAfterStart),
                   AMEDIA_OK);
         EXPECT_FALSE(mCallbacks->mFinished);
-        mCallbacks = std::make_shared<TestCallbacks>();
+        mCallbacks = std::make_shared<TestTranscoderCallbacks>();
     }
+}
+
+TEST_F(MediaTranscoderTests, TestHeartBeat) {
+    const char* srcPath = "/data/local/tmp/TranscodingTestAssets/longtest_15s.mp4";
+    const char* destPath = "/data/local/tmp/MediaTranscoder_HeartBeat.MP4";
+
+    // Use a shorter value of 500ms than the default 1000ms to get more heart beat for testing.
+    const int64_t heartBeatIntervalUs = 500000LL;
+    EXPECT_EQ(transcodeHelper(srcPath, destPath, getAVCVideoFormat, kCheckHeartBeat,
+                              heartBeatIntervalUs),
+              AMEDIA_OK);
+    EXPECT_TRUE(mCallbacks->mFinished);
 }
 
 }  // namespace android

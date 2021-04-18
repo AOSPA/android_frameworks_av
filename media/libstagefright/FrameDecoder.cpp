@@ -67,6 +67,12 @@ sp<IMemory> allocVideoFrame(const sp<MetaData>& trackMeta,
     if (trackMeta->findInt32(kKeySARWidth, &sarWidth)
             && trackMeta->findInt32(kKeySARHeight, &sarHeight)
             && sarHeight != 0) {
+        int32_t multVal;
+        if (width < 0 || sarWidth < 0 ||
+            __builtin_mul_overflow(width, sarWidth, &multVal)) {
+            ALOGE("displayWidth overflow %dx%d", width, sarWidth);
+            return NULL;
+        }
         displayWidth = (width * sarWidth) / sarHeight;
         displayHeight = height;
     } else if (trackMeta->findInt32(kKeyDisplayWidth, &displayWidth)
@@ -87,6 +93,16 @@ sp<IMemory> allocVideoFrame(const sp<MetaData>& trackMeta,
     }
     if (allocRotated)
         rotationAngle = 0;
+
+    if (!metaOnly) {
+        int32_t multVal;
+        if (width < 0 || height < 0 || dstBpp < 0 ||
+            __builtin_mul_overflow(dstBpp, width, &multVal) ||
+            __builtin_mul_overflow(multVal, height, &multVal)) {
+            ALOGE("Frame size overflow %dx%d bpp %d", width, height, dstBpp);
+            return NULL;
+        }
+    }
 
     VideoFrame frame(width, height, displayWidth, displayHeight,
             tileWidth, tileHeight, rotationAngle, dstBpp, !metaOnly, iccSize);
@@ -645,6 +661,10 @@ status_t VideoFrameDecoder::onOutputReceived(
                 0,
                 dstBpp(),
                 mCaptureLayer != nullptr /*allocRotated*/);
+        if (frameMem == nullptr) {
+            return NO_MEMORY;
+        }
+
         mFrame = static_cast<VideoFrame*>(frameMem->unsecurePointer());
 
         setFrame(frameMem);
@@ -864,8 +884,8 @@ sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
         videoFormat->setInt32("thumbnail-mode", 1);
         videoFormat->setInt32("vendor.qti-ext-dec-thumbnail-mode.value", 1);
     } else {
-        ALOGD("Enable multi-thread for Heif");
-        mUseMultiThread = true;
+        ALOGD("Disable multi-thread for Heif");
+        mUseMultiThread = false;
     }
     return videoFormat;
 }
@@ -928,6 +948,11 @@ status_t MediaImageDecoder::onOutputReceived(
     if (mFrame == NULL) {
         sp<IMemory> frameMem = allocVideoFrame(
                 trackMeta(), mWidth, mHeight, mTileWidth, mTileHeight, dstBpp());
+
+        if (frameMem == nullptr) {
+            return NO_MEMORY;
+        }
+
         mFrame = static_cast<VideoFrame*>(frameMem->unsecurePointer());
 
         setFrame(frameMem);

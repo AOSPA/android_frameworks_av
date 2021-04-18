@@ -128,10 +128,9 @@ static const String16
 static const String16 sCameraOpenCloseListenerPermission(
         "android.permission.CAMERA_OPEN_CLOSE_LISTENER");
 
-// Matches with PERCEPTIBLE_APP_ADJ in ProcessList.java
-static constexpr int32_t kVendorClientScore = 200;
-// Matches with PROCESS_STATE_PERSISTENT_UI in ActivityManager.java
-static constexpr int32_t kVendorClientState = 1;
+static constexpr int32_t kVendorClientScore = resource_policy::PERCEPTIBLE_APP_ADJ;
+static constexpr int32_t kVendorClientState = ActivityManager::PROCESS_STATE_PERSISTENT_UI;
+
 const String8 CameraService::kOfflineDevice("offline-");
 
 CameraService::CameraService() :
@@ -744,7 +743,7 @@ Status CameraService::getCameraVendorTagCache(
     return Status::ok();
 }
 
-int CameraService::getDeviceVersion(const String8& cameraId, int* facing) {
+int CameraService::getDeviceVersion(const String8& cameraId, int* facing, int* orientation) {
     ATRACE_CALL();
 
     int deviceVersion = 0;
@@ -761,6 +760,9 @@ int CameraService::getDeviceVersion(const String8& cameraId, int* facing) {
         res = mCameraProviderManager->getCameraInfo(cameraId.string(), &info);
         if (res != OK) return -1;
         *facing = info.facing;
+        if (orientation) {
+            *orientation = info.orientation;
+        }
     }
 
     return deviceVersion;
@@ -805,6 +807,7 @@ Status CameraService::makeClient(const sp<CameraService>& cameraService,
         case CAMERA_DEVICE_API_VERSION_3_4:
         case CAMERA_DEVICE_API_VERSION_3_5:
         case CAMERA_DEVICE_API_VERSION_3_6:
+        case CAMERA_DEVICE_API_VERSION_3_7:
             if (effectiveApiLevel == API_1) { // Camera1 API route
                 sp<ICameraClient> tmp = static_cast<ICameraClient*>(cameraCb.get());
                 *client = new Camera2Client(cameraService, tmp, packageName, featureId,
@@ -1555,6 +1558,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
 
     sp<CLIENT> client = nullptr;
     int facing = -1;
+    int orientation = 0;
     bool isNdk = (clientPackageName.size() == 0);
     {
         // Acquire mServiceLock and prevent other clients from connecting
@@ -1620,7 +1624,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
         // give flashlight a chance to close devices if necessary.
         mFlashlight->prepareDeviceOpen(cameraId);
 
-        int deviceVersion = getDeviceVersion(cameraId, /*out*/&facing);
+        int deviceVersion = getDeviceVersion(cameraId, /*out*/&facing, /*out*/&orientation);
         if (facing == -1) {
             ALOGE("%s: Unable to get camera device \"%s\"  facing", __FUNCTION__, cameraId.string());
             return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION,
@@ -1688,6 +1692,9 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
         // Set rotate-and-crop override behavior
         if (mOverrideRotateAndCropMode != ANDROID_SCALER_ROTATE_AND_CROP_AUTO) {
             client->setRotateAndCropOverride(mOverrideRotateAndCropMode);
+        } else if (CameraServiceProxyWrapper::isRotateAndCropOverrideNeeded(clientPackageName,
+                    orientation, facing)) {
+            client->setRotateAndCropOverride(ANDROID_SCALER_ROTATE_AND_CROP_90);
         }
 
         // Set camera muting behavior
@@ -2271,6 +2278,7 @@ Status CameraService::supportsCameraApi(const String16& cameraId, int apiVersion
         case CAMERA_DEVICE_API_VERSION_3_4:
         case CAMERA_DEVICE_API_VERSION_3_5:
         case CAMERA_DEVICE_API_VERSION_3_6:
+        case CAMERA_DEVICE_API_VERSION_3_7:
             ALOGV("%s: Camera id %s uses HAL3.2 or newer, supports api1/api2 directly",
                     __FUNCTION__, id.string());
             *isSupported = true;

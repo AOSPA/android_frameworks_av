@@ -24,7 +24,6 @@
 #include <stdlib.h>
 #include "LVEQNB.h"
 #include "LVEQNB_Private.h"
-#include "InstAlloc.h"
 #include <string.h> /* For memset */
 
 /****************************************************************************************/
@@ -52,10 +51,7 @@ LVEQNB_ReturnStatus_en LVEQNB_Init(LVEQNB_Handle_t* phInstance,
                                    LVEQNB_Capabilities_t* pCapabilities, void* pScratch) {
     LVEQNB_Instance_t* pInstance;
 
-    *phInstance = calloc(1, sizeof(*pInstance));
-    if (phInstance == LVM_NULL) {
-        return LVEQNB_NULLADDRESS;
-    }
+    *phInstance = new LVEQNB_Instance_t{};
     pInstance = (LVEQNB_Instance_t*)*phInstance;
 
     pInstance->Capabilities = *pCapabilities;
@@ -146,6 +142,6 @@ void LVEQNB_DeInit(LVEQNB_Handle_t* phInstance) {
         free(pInstance->pBiquadType);
         pInstance->pBiquadType = LVM_NULL;
     }
-    free(pInstance);
+    delete pInstance;
     *phInstance = LVM_NULL;
 }

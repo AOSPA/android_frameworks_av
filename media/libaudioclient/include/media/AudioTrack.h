@@ -26,6 +26,7 @@
 #include <media/Modulo.h>
 #include <media/VolumeShaper.h>
 #include <utils/threads.h>
+#include <android/media/permission/Identity.h>
 
 #include <string>
 
@@ -181,7 +182,7 @@ public:
      */
                         AudioTrack();
 
-                        AudioTrack(const std::string& opPackageName);
+                        AudioTrack(const media::permission::Identity& identity);
 
     /* Creates an AudioTrack object and registers it with AudioFlinger.
      * Once created, the track needs to be started before it can be used.
@@ -229,10 +230,9 @@ public:
      * transferType:       How data is transferred to AudioTrack.
      * offloadInfo:        If not NULL, provides offload parameters for
      *                     AudioSystem::getOutputForAttr().
-     * uid:                User ID of the app which initially requested this AudioTrack
-     *                     for power management tracking, or -1 for current user ID.
-     * pid:                Process ID of the app which initially requested this AudioTrack
-     *                     for power management tracking, or -1 for current process ID.
+     * identity:           The identity of the app which initiallly requested this AudioTrack.
+     *                     Includes the UID and PID for power management tracking, or -1 for
+     *                     current user/process ID, plus the package name.
      * pAttributes:        If not NULL, supersedes streamType for use case selection.
      * doNotReconnect:     If set to true, AudioTrack won't automatically recreate the IAudioTrack
                            binder to AudioFlinger.
@@ -259,13 +259,12 @@ public:
                                     audio_session_t sessionId  = AUDIO_SESSION_ALLOCATE,
                                     transfer_type transferType = TRANSFER_DEFAULT,
                                     const audio_offload_info_t *offloadInfo = NULL,
-                                    uid_t uid = AUDIO_UID_INVALID,
-                                    pid_t pid = -1,
+                                    const media::permission::Identity& identity =
+                                        media::permission::Identity(),
                                     const audio_attributes_t* pAttributes = NULL,
                                     bool doNotReconnect = false,
                                     float maxRequiredSpeed = 1.0f,
-                                    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE,
-                                    const std::string& opPackageName = "");
+                                    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE);
 
     /* Creates an audio track and registers it with AudioFlinger.
      * With this constructor, the track is configured for static buffer mode.
@@ -291,12 +290,11 @@ public:
                                     audio_session_t sessionId   = AUDIO_SESSION_ALLOCATE,
                                     transfer_type transferType = TRANSFER_DEFAULT,
                                     const audio_offload_info_t *offloadInfo = NULL,
-                                    uid_t uid = AUDIO_UID_INVALID,
-                                    pid_t pid = -1,
+                                    const media::permission::Identity& identity =
+                                        media::permission::Identity(),
                                     const audio_attributes_t* pAttributes = NULL,
                                     bool doNotReconnect = false,
-                                    float maxRequiredSpeed = 1.0f,
-                                    const std::string& opPackageName = "");
+                                    float maxRequiredSpeed = 1.0f);
 
     /* Terminates the AudioTrack and unregisters it from AudioFlinger.
      * Also destroys all resources associated with the AudioTrack.
@@ -340,8 +338,8 @@ public:
                             audio_session_t sessionId  = AUDIO_SESSION_ALLOCATE,
                             transfer_type transferType = TRANSFER_DEFAULT,
                             const audio_offload_info_t *offloadInfo = NULL,
-                            uid_t uid = AUDIO_UID_INVALID,
-                            pid_t pid = -1,
+                            const media::permission::Identity& identity =
+                                media::permission::Identity(),
                             const audio_attributes_t* pAttributes = NULL,
                             bool doNotReconnect = false,
                             float maxRequiredSpeed = 1.0f,
@@ -430,6 +428,19 @@ public:
      * or does not support variable sizes.
      */
             ssize_t     setBufferSizeInFrames(size_t size);
+
+    /* Returns the start threshold on the buffer for audio streaming
+     * or a negative value if the AudioTrack is not initialized.
+     */
+            ssize_t     getStartThresholdInFrames() const;
+
+    /* Sets the start threshold in frames on the buffer for audio streaming.
+     *
+     * May be clamped internally. Returns the actual value set, or a negative
+     * value if the AudioTrack is not initialized or if the input
+     * is zero or greater than INT_MAX.
+     */
+            ssize_t     setStartThresholdInFrames(size_t startThresholdInFrames);
 
     /* Return the static buffer specified in constructor or set(), or 0 for streaming mode */
             sp<IMemory> sharedBuffer() const { return mSharedBuffer; }
@@ -987,6 +998,23 @@ public:
      */
             audio_port_handle_t getPortId() const { return mPortId; };
 
+    /* Sets the LogSessionId field which is used for metrics association of
+     * this object with other objects. A nullptr or empty string clears
+     * the logSessionId.
+     */
+            void setLogSessionId(const char *logSessionId);
+
+    /* Sets the playerIId field to associate the AudioTrack with an interface managed by
+     * AudioService.
+     *
+     * If this value is not set, then the playerIId is reported as -1
+     * (not associated with an AudioService player interface).
+     *
+     * For metrics purposes, we keep the playerIId association in the native
+     * client AudioTrack to improve the robustness under track restoration.
+     */
+            void setPlayerIId(int playerIId);
+
             void setAudioTrackCallback(const sp<media::IAudioTrackCallback>& callback) {
                 mAudioTrackCallback->setAudioTrackCallback(callback);
             }
@@ -1258,6 +1286,19 @@ public:
     int                     mAuxEffectId;
     audio_port_handle_t     mPortId;                    // Id from Audio Policy Manager
 
+    /**
+     * mPlayerIId is the player id of the AudioTrack used by AudioManager.
+     * For an AudioTrack created by the Java interface, this is generally set once.
+     */
+    int                     mPlayerIId = -1;  // AudioManager.h PLAYER_PIID_INVALID
+
+    /**
+     * mLogSessionId is a string identifying this AudioTrack for the metrics service.
+     * It may be unique or shared with other objects.  An empty string means the
+     * logSessionId is not set.
+     */
+    std::string             mLogSessionId{};
+
     mutable Mutex           mLock;
 
     int                     mPreviousPriority;          // before start()
@@ -1284,7 +1325,6 @@ public:
 
     sp<media::VolumeHandler>       mVolumeHandler;
 
-    const std::string      mOpPackageName;
     int64_t                mPauseTimeRealUs;
 
 private:
@@ -1299,8 +1339,7 @@ private:
 
     sp<DeathNotifier>       mDeathNotifier;
     uint32_t                mSequence;              // incremented for each new IAudioTrack attempt
-    uid_t                   mClientUid;
-    pid_t                   mClientPid;
+    media::permission::Identity mClientIdentity;
 
     wp<AudioSystem::AudioDeviceCallback> mDeviceCallback;
 

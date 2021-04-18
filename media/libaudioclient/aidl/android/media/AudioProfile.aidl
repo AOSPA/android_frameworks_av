@@ -16,6 +16,7 @@
 
 package android.media;
 
+import android.media.AudioEncapsulationType;
 import android.media.audio.common.AudioFormat;
 
 /**
@@ -31,4 +32,5 @@ parcelable AudioProfile {
     boolean isDynamicFormat;
     boolean isDynamicChannels;
     boolean isDynamicRate;
+    AudioEncapsulationType encapsulationType;
 }

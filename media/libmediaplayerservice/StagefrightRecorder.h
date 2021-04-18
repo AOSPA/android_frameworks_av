@@ -25,6 +25,9 @@
 #include <system/audio.h>
 
 #include <media/hardware/MetadataBufferType.h>
+#include <android/media/permission/Identity.h>
+
+using namespace android::media::permission;
 
 namespace android {
 
@@ -42,7 +45,7 @@ struct ALooper;
 struct AMessage;
 
 struct StagefrightRecorder : public MediaRecorderBase {
-    explicit StagefrightRecorder(const String16 &opPackageName);
+    explicit StagefrightRecorder(const Identity& clientIdentity);
     virtual ~StagefrightRecorder();
     virtual status_t init();
     virtual status_t setAudioSource(audio_source_t as);
@@ -82,6 +85,7 @@ struct StagefrightRecorder : public MediaRecorderBase {
     virtual status_t setPreferredMicrophoneDirection(audio_microphone_direction_t direction);
     virtual status_t setPreferredMicrophoneFieldDimension(float zoom);
             status_t getPortId(audio_port_handle_t *portId) const override;
+    virtual status_t getRtpDataUsage(uint64_t *bytes);
 
 protected:
 
@@ -97,9 +101,6 @@ protected:
     sp<IGraphicBufferProducer> mPreviewSurface;
     sp<PersistentSurface> mPersistentSurface;
     sp<IMediaRecorderClient> mListener;
-    String16 mClientName;
-    uid_t mClientUid;
-    pid_t mClientPid;
     sp<MediaWriter> mWriter;
     int mOutputFd;
     sp<AudioSource> mAudioSourceNode;

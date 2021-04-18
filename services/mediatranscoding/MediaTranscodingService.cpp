@@ -24,6 +24,7 @@
 #include <cutils/properties.h>
 #include <media/TranscoderWrapper.h>
 #include <media/TranscodingClientManager.h>
+#include <media/TranscodingLogger.h>
 #include <media/TranscodingResourcePolicy.h>
 #include <media/TranscodingSessionController.h>
 #include <media/TranscodingThermalPolicy.h>
@@ -41,16 +42,50 @@ namespace android {
             errorCode,                                \
             String8::format("%s:%d: " errorString, __FUNCTION__, __LINE__, ##__VA_ARGS__))
 
-MediaTranscodingService::MediaTranscodingService(
-        const std::shared_ptr<TranscoderInterface>& transcoder)
+static constexpr int64_t kTranscoderHeartBeatIntervalUs = 1000000LL;
+
+MediaTranscodingService::MediaTranscodingService()
       : mUidPolicy(new TranscodingUidPolicy()),
         mResourcePolicy(new TranscodingResourcePolicy()),
         mThermalPolicy(new TranscodingThermalPolicy()),
-        mSessionController(new TranscodingSessionController(transcoder, mUidPolicy, mResourcePolicy,
-                                                            mThermalPolicy)),
-        mClientManager(new TranscodingClientManager(mSessionController)) {
+        mLogger(new TranscodingLogger()) {
     ALOGV("MediaTranscodingService is created");
-    transcoder->setCallback(mSessionController);
+    bool simulated = property_get_bool("debug.transcoding.simulated_transcoder", false);
+    if (simulated) {
+        // Overrid default config params with shorter values for testing.
+        TranscodingSessionController::ControllerConfig config = {
+                .pacerBurstThresholdMs = 500,
+                .pacerBurstCountQuota = 10,
+                .pacerBurstTimeQuotaSeconds = 3,
+        };
+        mSessionController.reset(new TranscodingSessionController(
+                [](const std::shared_ptr<TranscoderCallbackInterface>& cb)
+                        -> std::shared_ptr<TranscoderInterface> {
+                    return std::make_shared<SimulatedTranscoder>(cb);
+                },
+                mUidPolicy, mResourcePolicy, mThermalPolicy, &config));
+    } else {
+        int32_t overrideBurstCountQuota =
+                property_get_int32("persist.transcoding.burst_count_quota", -1);
+        int32_t pacerBurstTimeQuotaSeconds =
+                property_get_int32("persist.transcoding.burst_time_quota_seconds", -1);
+        // Override default config params with properties if present.
+        TranscodingSessionController::ControllerConfig config;
+        if (overrideBurstCountQuota > 0) {
+            config.pacerBurstCountQuota = overrideBurstCountQuota;
+        }
+        if (pacerBurstTimeQuotaSeconds > 0) {
+            config.pacerBurstTimeQuotaSeconds = pacerBurstTimeQuotaSeconds;
+        }
+        mSessionController.reset(new TranscodingSessionController(
+                [logger = mLogger](const std::shared_ptr<TranscoderCallbackInterface>& cb)
+                        -> std::shared_ptr<TranscoderInterface> {
+                    return std::make_shared<TranscoderWrapper>(cb, logger,
+                                                               kTranscoderHeartBeatIntervalUs);
+                },
+                mUidPolicy, mResourcePolicy, mThermalPolicy, &config));
+    }
+    mClientManager.reset(new TranscodingClientManager(mSessionController));
     mUidPolicy->setCallback(mSessionController);
     mResourcePolicy->setCallback(mSessionController);
     mThermalPolicy->setCallback(mSessionController);
@@ -94,15 +129,8 @@ binder_status_t MediaTranscodingService::dump(int fd, const char** /*args*/, uin
 
 //static
 void MediaTranscodingService::instantiate() {
-    std::shared_ptr<TranscoderInterface> transcoder;
-    if (property_get_bool("debug.transcoding.simulated_transcoder", false)) {
-        transcoder = std::make_shared<SimulatedTranscoder>();
-    } else {
-        transcoder = std::make_shared<TranscoderWrapper>();
-    }
-
     std::shared_ptr<MediaTranscodingService> service =
-            ::ndk::SharedRefBase::make<MediaTranscodingService>(transcoder);
+            ::ndk::SharedRefBase::make<MediaTranscodingService>();
     binder_status_t status =
             AServiceManager_addService(service->asBinder().get(), getServiceName());
     if (status != STATUS_OK) {

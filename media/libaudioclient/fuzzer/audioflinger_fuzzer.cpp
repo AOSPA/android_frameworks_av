@@ -23,8 +23,10 @@
  */
 
 #include <android_audio_policy_configuration_V7_0-enums.h>
+#include <android/media/permission/Identity.h>
 #include <binder/IServiceManager.h>
 #include <binder/MemoryDealer.h>
+#include <media/AidlConversion.h>
 #include <media/AudioEffect.h>
 #include <media/AudioRecord.h>
 #include <media/AudioSystem.h>
@@ -35,12 +37,18 @@
 #define MAX_STRING_LENGTH 256
 #define MAX_ARRAY_LENGTH 256
 
+constexpr int32_t kMinSampleRateHz = 4000;
+constexpr int32_t kMaxSampleRateHz = 192000;
+constexpr int32_t kSampleRateUnspecified = 0;
+
 using namespace std;
 using namespace android;
 
 namespace xsd {
 using namespace ::android::audio::policy::configuration::V7_0;
 }
+
+using media::permission::Identity;
 
 constexpr audio_unique_id_use_t kUniqueIds[] = {
     AUDIO_UNIQUE_ID_USE_UNSPECIFIED, AUDIO_UNIQUE_ID_USE_SESSION, AUDIO_UNIQUE_ID_USE_MODULE,
@@ -130,29 +138,20 @@ static const std::vector<audio_output_flags_t> kOutputFlags =
         xsdc_enum_range<xsd::AudioInOutFlag>{}, audio_output_flag_from_string, "_OUTPUT_");
 
 template <typename T, size_t size>
-T getValueFromArray(FuzzedDataProvider *fdp, const T (&arr)[size]) {
-    return arr[fdp->ConsumeIntegralInRange<int32_t>(0, size - 1)];
-}
-
-template <typename T, size_t size>
 T getValue(FuzzedDataProvider *fdp, const T (&arr)[size]) {
-    if (fdp->ConsumeBool()) {
-        return static_cast<T>(fdp->ConsumeIntegral<int32_t>());
-    }
-    return getValueFromArray(fdp, arr);
-}
-
-template <typename T>
-T getValueFromVector(FuzzedDataProvider *fdp, std::vector<T> vec) {
-    return vec[fdp->ConsumeIntegralInRange<int32_t>(0, vec.size() - 1)];
+    return arr[fdp->ConsumeIntegralInRange<int32_t>(0, size - 1)];
 }
 
 template <typename T>
 T getValue(FuzzedDataProvider *fdp, std::vector<T> vec) {
+    return vec[fdp->ConsumeIntegralInRange<int32_t>(0, vec.size() - 1)];
+}
+
+int32_t getSampleRate(FuzzedDataProvider *fdp) {
     if (fdp->ConsumeBool()) {
-        return static_cast<T>(fdp->ConsumeIntegral<int32_t>());
+        return fdp->ConsumeIntegralInRange<int32_t>(kMinSampleRateHz, kMaxSampleRateHz);
     }
-    return getValueFromVector(fdp, vec);
+    return kSampleRateUnspecified;
 }
 
 class DeathNotifier : public IBinder::DeathRecipient {
@@ -189,7 +188,7 @@ AudioFlingerFuzzer::AudioFlingerFuzzer(const uint8_t *data, size_t size) : mFdp(
 }
 
 void AudioFlingerFuzzer::invokeAudioTrack() {
-    uint32_t sampleRate = mFdp.ConsumeIntegral<uint32_t>();
+    uint32_t sampleRate = getSampleRate(&mFdp);
     audio_format_t format = getValue(&mFdp, kFormats);
     audio_channel_mask_t channelMask = getValue(&mFdp, kChannelMasks);
     size_t frameCount = static_cast<size_t>(mFdp.ConsumeIntegral<uint32_t>());
@@ -226,11 +225,15 @@ void AudioFlingerFuzzer::invokeAudioTrack() {
     attributes.usage = usage;
     sp<AudioTrack> track = new AudioTrack();
 
+    // TODO b/182392769: use identity util
+    Identity i;
+    i.uid = VALUE_OR_FATAL(legacy2aidl_uid_t_int32_t(getuid()));
+    i.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(getpid()));
     track->set(AUDIO_STREAM_DEFAULT, sampleRate, format, channelMask, frameCount, flags, nullptr,
                nullptr, notificationFrames, sharedBuffer, false, sessionId,
                ((fast && sharedBuffer == 0) || offload) ? AudioTrack::TRANSFER_CALLBACK
                                                         : AudioTrack::TRANSFER_DEFAULT,
-               offload ? &offloadInfo : nullptr, getuid(), getpid(), &attributes, false, 1.0f,
+               offload ? &offloadInfo : nullptr, i, &attributes, false, 1.0f,
                AUDIO_PORT_HANDLE_NONE);
 
     status_t status = track->initCheck();
@@ -259,7 +262,7 @@ void AudioFlingerFuzzer::invokeAudioTrack() {
 
     float auxEffectSendLevel;
     track->getAuxEffectSendLevel(&auxEffectSendLevel);
-    track->setSampleRate(mFdp.ConsumeIntegral<uint32_t>());
+    track->setSampleRate(getSampleRate(&mFdp));
     track->getSampleRate();
     track->getOriginalSampleRate();
 
@@ -292,7 +295,7 @@ void AudioFlingerFuzzer::invokeAudioTrack() {
 
 void AudioFlingerFuzzer::invokeAudioRecord() {
     int32_t notificationFrames = mFdp.ConsumeIntegral<int32_t>();
-    uint32_t sampleRate = mFdp.ConsumeIntegral<uint32_t>();
+    uint32_t sampleRate = getSampleRate(&mFdp);
     size_t frameCount = static_cast<size_t>(mFdp.ConsumeIntegral<uint32_t>());
     audio_format_t format = getValue(&mFdp, kFormats);
     audio_channel_mask_t channelMask = getValue(&mFdp, kChannelMasks);
@@ -305,7 +308,10 @@ void AudioFlingerFuzzer::invokeAudioRecord() {
 
     attributes.source = inputSource;
 
-    sp<AudioRecord> record = new AudioRecord(String16(mFdp.ConsumeRandomLengthString().c_str()));
+    // TODO b/182392769: use identity util
+    Identity i;
+    i.packageName = std::string(mFdp.ConsumeRandomLengthString().c_str());
+    sp<AudioRecord> record = new AudioRecord(i);
     record->set(AUDIO_SOURCE_DEFAULT, sampleRate, format, channelMask, frameCount, nullptr, nullptr,
                 notificationFrames, false, sessionId,
                 fast ? AudioRecord::TRANSFER_CALLBACK : AudioRecord::TRANSFER_DEFAULT, flags,
@@ -396,7 +402,7 @@ status_t AudioFlingerFuzzer::invokeAudioEffect() {
     const int32_t priority = mFdp.ConsumeIntegral<int32_t>();
     audio_session_t sessionId = static_cast<audio_session_t>(mFdp.ConsumeIntegral<int32_t>());
     const audio_io_handle_t io = mFdp.ConsumeIntegral<int32_t>();
-    String16 opPackageName = static_cast<String16>(mFdp.ConsumeRandomLengthString().c_str());
+    std::string opPackageName = static_cast<std::string>(mFdp.ConsumeRandomLengthString().c_str());
     AudioDeviceTypeAddr device;
 
     sp<IAudioFlinger> af = AudioSystem::get_audio_flinger();
@@ -412,8 +418,9 @@ status_t AudioFlingerFuzzer::invokeAudioEffect() {
     request.output = io;
     request.sessionId = sessionId;
     request.device = VALUE_OR_RETURN_STATUS(legacy2aidl_AudioDeviceTypeAddress(device));
-    request.opPackageName = VALUE_OR_RETURN_STATUS(legacy2aidl_String16_string(opPackageName));
-    request.pid = getpid();
+    // TODO b/182392769: use identity util
+    request.identity.packageName = opPackageName;
+    request.identity.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(getpid()));
     request.probe = false;
 
     media::CreateEffectResponse response{};
@@ -518,7 +525,7 @@ void AudioFlingerFuzzer::invokeAudioSystem() {
     AudioSystem::getFrameCountHAL(mFdp.ConsumeIntegral<int32_t>(), &frameCount);
 
     size_t buffSize;
-    uint32_t sampleRate = mFdp.ConsumeIntegral<uint32_t>();
+    uint32_t sampleRate = getSampleRate(&mFdp);
     audio_format_t format = getValue(&mFdp, kFormats);
     audio_channel_mask_t channelMask = getValue(&mFdp, kChannelMasks);
     AudioSystem::getInputBufferSize(sampleRate, format, channelMask, &buffSize);
@@ -572,12 +579,12 @@ status_t AudioFlingerFuzzer::invokeAudioInputDevice() {
     config.offload_info.format = getValue(&mFdp, kFormats);
     config.offload_info.has_video = mFdp.ConsumeBool();
     config.offload_info.is_streaming = mFdp.ConsumeBool();
-    config.offload_info.sample_rate = (mFdp.ConsumeIntegral<uint32_t>());
+    config.offload_info.sample_rate = getSampleRate(&mFdp);
     config.offload_info.sync_id = mFdp.ConsumeIntegral<uint32_t>();
     config.offload_info.stream_type = getValue(&mFdp, kStreamtypes);
     config.offload_info.usage = getValue(&mFdp, kUsages);
 
-    config.sample_rate = mFdp.ConsumeIntegral<uint32_t>();
+    config.sample_rate = getSampleRate(&mFdp);
 
     audio_devices_t device = getValue(&mFdp, kDevices);
     audio_source_t source = getValue(&mFdp, kInputSources);
@@ -628,13 +635,13 @@ status_t AudioFlingerFuzzer::invokeAudioOutputDevice() {
     config.offload_info.format = getValue(&mFdp, kFormats);
     config.offload_info.has_video = mFdp.ConsumeBool();
     config.offload_info.is_streaming = mFdp.ConsumeBool();
-    config.offload_info.sample_rate = mFdp.ConsumeIntegral<uint32_t>();
+    config.offload_info.sample_rate = getSampleRate(&mFdp);
     config.offload_info.stream_type = getValue(&mFdp, kStreamtypes);
     config.offload_info.sync_id = mFdp.ConsumeIntegral<uint32_t>();
     config.offload_info.usage = getValue(&mFdp, kUsages);
 
     config.format = getValue(&mFdp, kFormats);
-    config.sample_rate = mFdp.ConsumeIntegral<uint32_t>();
+    config.sample_rate = getSampleRate(&mFdp);
 
     sp<DeviceDescriptorBase> device = new DeviceDescriptorBase(getValue(&mFdp, kDevices));
     audio_output_flags_t flags = getValue(&mFdp, kOutputFlags);
@@ -683,7 +690,7 @@ void AudioFlingerFuzzer::invokeAudioPatch() {
         patch.sources[i].gain.ramp_duration_ms = mFdp.ConsumeIntegral<uint32_t>();
         patch.sources[i].id = static_cast<audio_format_t>(mFdp.ConsumeIntegral<int32_t>());
         patch.sources[i].role = getValue(&mFdp, kPortRoles);
-        patch.sources[i].sample_rate = mFdp.ConsumeIntegral<uint32_t>();
+        patch.sources[i].sample_rate = getSampleRate(&mFdp);
         patch.sources[i].type = getValue(&mFdp, kPortTypes);
 
         patch.sinks[i].config_mask = mFdp.ConsumeIntegral<uint32_t>();
@@ -695,7 +702,7 @@ void AudioFlingerFuzzer::invokeAudioPatch() {
         patch.sinks[i].gain.ramp_duration_ms = mFdp.ConsumeIntegral<uint32_t>();
         patch.sinks[i].id = static_cast<audio_format_t>(mFdp.ConsumeIntegral<int32_t>());
         patch.sinks[i].role = getValue(&mFdp, kPortRoles);
-        patch.sinks[i].sample_rate = mFdp.ConsumeIntegral<uint32_t>();
+        patch.sinks[i].sample_rate = getSampleRate(&mFdp);
         patch.sinks[i].type = getValue(&mFdp, kPortTypes);
     }
 

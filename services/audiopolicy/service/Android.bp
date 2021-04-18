@@ -1,3 +1,12 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_av_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
 cc_library_shared {
     name: "libaudiopolicyservice",
 
@@ -35,10 +44,12 @@ cc_library_shared {
         "audiopolicy-aidl-cpp",
         "audiopolicy-types-aidl-cpp",
         "capture_state_listener-aidl-cpp",
+        "media_permission-aidl-cpp",
     ],
 
     static_libs: [
         "libaudiopolicycomponents",
+        "media_permission-aidl-cpp",
     ],
 
     header_libs: [
@@ -57,5 +68,6 @@ cc_library_shared {
 
     export_shared_lib_headers: [
         "libsensorprivacy",
+        "media_permission-aidl-cpp",
     ],
 }

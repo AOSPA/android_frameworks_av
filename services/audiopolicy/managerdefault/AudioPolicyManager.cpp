@@ -52,6 +52,8 @@
 
 namespace android {
 
+using media::permission::Identity;
+
 //FIXME: workaround for truncated touch sounds
 // to be removed when the problem is handled by system UI
 #define TOUCH_SOUND_FIXED_DELAY_MS 100
@@ -64,11 +66,11 @@ static const unsigned int DEFAULT_MUTE_LATENCY_FACTOR = 2;
 static const unsigned int DEFAULT_ROUTING_LATENCY_MS = 50;
 
 // Compressed formats for MSD module, ordered from most preferred to least preferred.
-static const std::vector<audio_format_t> compressedFormatsOrder = {{
-        AUDIO_FORMAT_MAT_2_1, AUDIO_FORMAT_MAT_2_0, AUDIO_FORMAT_E_AC3,
+static const std::vector<audio_format_t> msdCompressedFormatsOrder = {{
+        AUDIO_FORMAT_IEC60958, AUDIO_FORMAT_MAT_2_1, AUDIO_FORMAT_MAT_2_0, AUDIO_FORMAT_E_AC3,
         AUDIO_FORMAT_AC3, AUDIO_FORMAT_PCM_16_BIT }};
 // Channel masks for MSD module, 3D > 2D > 1D ordering (most preferred to least preferred).
-static const std::vector<audio_channel_mask_t> surroundChannelMasksOrder = {{
+static const std::vector<audio_channel_mask_t> msdSurroundChannelMasksOrder = {{
         AUDIO_CHANNEL_OUT_3POINT1POINT2, AUDIO_CHANNEL_OUT_3POINT0POINT2,
         AUDIO_CHANNEL_OUT_2POINT1POINT2, AUDIO_CHANNEL_OUT_2POINT0POINT2,
         AUDIO_CHANNEL_OUT_5POINT1, AUDIO_CHANNEL_OUT_STEREO }};
@@ -296,11 +298,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
         } else {
             checkCloseOutputs();
         }
-
-        if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL && hasPrimaryOutput()) {
-            DeviceVector newDevices = getNewOutputDevices(mPrimaryOutput, false /*fromCache*/);
-            updateCallRouting(newDevices);
-        }
+        (void)updateCallRouting(false /*fromCache*/);
         std::vector<audio_io_handle_t> outputsToReopen;
         const DeviceVector msdOutDevices = getMsdAudioOutDevices();
         const DeviceVector activeMediaDevices =
@@ -417,10 +415,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
         // getDeviceForStrategy() cache
         updateDevicesAndOutputs();
 
-        if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL && hasPrimaryOutput()) {
-            DeviceVector newDevices = getNewOutputDevices(mPrimaryOutput, false /*fromCache*/);
-            updateCallRouting(newDevices);
-        }
+        (void)updateCallRouting(false /*fromCache*/);
         // Reconnect Audio Source
         for (const auto &strategy : mEngine->getOrderedProductStrategies()) {
             auto attributes = mEngine->getAllAttributesForProductStrategy(strategy).front();
@@ -607,23 +602,58 @@ status_t AudioPolicyManager::getHwOffloadEncodingFormatsSupportedForA2DP(
     return status;
 }
 
-uint32_t AudioPolicyManager::updateCallRouting(const DeviceVector &rxDevices, uint32_t delayMs)
+DeviceVector AudioPolicyManager::selectBestRxSinkDevicesForCall(bool fromCache)
+{
+    DeviceVector rxSinkdevices{};
+    rxSinkdevices = mEngine->getOutputDevicesForAttributes(
+                attributes_initializer(AUDIO_USAGE_VOICE_COMMUNICATION), nullptr, fromCache);
+    if (!rxSinkdevices.isEmpty() && mAvailableOutputDevices.contains(rxSinkdevices.itemAt(0))) {
+        auto rxSinkDevice = rxSinkdevices.itemAt(0);
+        auto telephonyRxModule = mHwModules.getModuleForDeviceType(
+                    AUDIO_DEVICE_IN_TELEPHONY_RX, AUDIO_FORMAT_DEFAULT);
+        // retrieve Rx Source device descriptor
+        sp<DeviceDescriptor> rxSourceDevice = mAvailableInputDevices.getDevice(
+                    AUDIO_DEVICE_IN_TELEPHONY_RX, String8(), AUDIO_FORMAT_DEFAULT);
+
+        // RX Telephony and Rx sink devices are declared by Primary Audio HAL
+        if (isPrimaryModule(telephonyRxModule) && (telephonyRxModule->getHalVersionMajor() >= 3) &&
+                telephonyRxModule->supportsPatch(rxSourceDevice, rxSinkDevice)) {
+            ALOGW("%s() device %s using HW Bridge", __func__, rxSinkDevice->toString().c_str());
+            return DeviceVector(rxSinkDevice);
+        }
+    }
+    // Note that despite the fact that getNewOutputDevices() is called on the primary output,
+    // the device returned is not necessarily reachable via this output
+    // (filter later by setOutputDevices())
+    return getNewOutputDevices(mPrimaryOutput, fromCache);
+}
+
+status_t AudioPolicyManager::updateCallRouting(bool fromCache, uint32_t delayMs, uint32_t *waitMs)
+{
+    if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL && hasPrimaryOutput()) {
+        DeviceVector rxDevices = selectBestRxSinkDevicesForCall(fromCache);
+        return updateCallRoutingInternal(rxDevices, delayMs, waitMs);
+    }
+    return INVALID_OPERATION;
+}
+
+status_t AudioPolicyManager::updateCallRoutingInternal(
+        const DeviceVector &rxDevices, uint32_t delayMs, uint32_t *waitMs)
 {
     bool createTxPatch = false;
     bool createRxPatch = false;
     uint32_t muteWaitMs = 0;
-
     if(!hasPrimaryOutput() ||
             mPrimaryOutput->devices().onlyContainsDevicesWithType(AUDIO_DEVICE_OUT_STUB)) {
-        return muteWaitMs;
+        return INVALID_OPERATION;
     }
-    ALOG_ASSERT(!rxDevices.isEmpty(), "updateCallRouting() no selected output device");
+    ALOG_ASSERT(!rxDevices.isEmpty(), "%s() no selected output device", __func__);
 
     audio_attributes_t attr = { .source = AUDIO_SOURCE_VOICE_COMMUNICATION };
     auto txSourceDevice = mEngine->getInputDeviceForAttributes(attr);
-    ALOG_ASSERT(txSourceDevice != 0, "updateCallRouting() input selected device not available");
+    ALOG_ASSERT(txSourceDevice != 0, "%s() input selected device not available", __func__);
 
-    ALOGV("updateCallRouting device rxDevice %s txDevice %s",
+    ALOGV("%s device rxDevice %s txDevice %s", __func__,
           rxDevices.itemAt(0)->toString().c_str(), txSourceDevice->toString().c_str());
 
     disconnectTelephonyRxAudioSource();
@@ -652,8 +682,8 @@ uint32_t AudioPolicyManager::updateCallRouting(const DeviceVector &rxDevices, ui
             (telephonyRxModule->getHalVersionMajor() >= 3)) {
         if (rxSourceDevice == 0 || txSinkDevice == 0) {
             // RX / TX Telephony device(s) is(are) not currently available
-            ALOGE("updateCallRouting() no telephony Tx and/or RX device");
-            return muteWaitMs;
+            ALOGE("%s() no telephony Tx and/or RX device", __func__);
+            return INVALID_OPERATION;
         }
         // createAudioPatchInternal now supports both HW / SW bridging
         createRxPatch = true;
@@ -691,8 +721,10 @@ uint32_t AudioPolicyManager::updateCallRouting(const DeviceVector &rxDevices, ui
         }
         mCallTxPatch = createTelephonyPatch(false /*isRx*/, txSourceDevice, delayMs);
     }
-
-    return muteWaitMs;
+    if (waitMs != nullptr) {
+        *waitMs = muteWaitMs;
+    }
+    return NO_ERROR;
 }
 
 sp<AudioPatch> AudioPolicyManager::createTelephonyPatch(
@@ -826,25 +858,22 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
     }
 
     if (hasPrimaryOutput()) {
-        // Note that despite the fact that getNewOutputDevices() is called on the primary output,
-        // the device returned is not necessarily reachable via this output
-        DeviceVector rxDevices = getNewOutputDevices(mPrimaryOutput, false /*fromCache*/);
-        // force routing command to audio hardware when ending call
-        // even if no device change is needed
-        if (isStateInCall(oldState) && rxDevices.isEmpty()) {
-            rxDevices = mPrimaryOutput->devices();
-        }
-
         if (state == AUDIO_MODE_IN_CALL) {
-            updateCallRouting(rxDevices, delayMs);
-        } else if (oldState == AUDIO_MODE_IN_CALL) {
-            disconnectTelephonyRxAudioSource();
-            if (mCallTxPatch != 0) {
-                releaseAudioPatchInternal(mCallTxPatch->getHandle());
-                mCallTxPatch.clear();
-            }
-            setOutputDevices(mPrimaryOutput, rxDevices, force, 0);
+            (void)updateCallRouting(false /*fromCache*/, delayMs);
         } else {
+            DeviceVector rxDevices = getNewOutputDevices(mPrimaryOutput, false /*fromCache*/);
+            // force routing command to audio hardware when ending call
+            // even if no device change is needed
+            if (isStateInCall(oldState) && rxDevices.isEmpty()) {
+                rxDevices = mPrimaryOutput->devices();
+            }
+            if (oldState == AUDIO_MODE_IN_CALL) {
+                disconnectTelephonyRxAudioSource();
+                if (mCallTxPatch != 0) {
+                    releaseAudioPatchInternal(mCallTxPatch->getHandle());
+                    mCallTxPatch.clear();
+                }
+            }
             setOutputDevices(mPrimaryOutput, rxDevices, force, 0);
         }
     }
@@ -1148,7 +1177,7 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     *output = AUDIO_IO_HANDLE_NONE;
     if (!msdDevices.isEmpty()) {
         *output = getOutputForDevices(msdDevices, session, *stream, config, flags);
-        if (*output != AUDIO_IO_HANDLE_NONE && setMsdPatches(&outputDevices) == NO_ERROR) {
+        if (*output != AUDIO_IO_HANDLE_NONE && setMsdOutputPatches(&outputDevices) == NO_ERROR) {
             ALOGV("%s() Using MSD devices %s instead of devices %s",
                   __func__, msdDevices.toString().c_str(), outputDevices.toString().c_str());
         } else {
@@ -1210,7 +1239,7 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
                                               audio_io_handle_t *output,
                                               audio_session_t session,
                                               audio_stream_type_t *stream,
-                                              uid_t uid,
+                                              const Identity& identity,
                                               const audio_config_t *config,
                                               audio_output_flags_t *flags,
                                               audio_port_handle_t *selectedDeviceId,
@@ -1222,6 +1251,8 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
     if (*portId != AUDIO_PORT_HANDLE_NONE) {
         return INVALID_OPERATION;
     }
+    const uid_t uid = VALUE_OR_RETURN_STATUS(
+        aidl2legacy_int32_t_uid_t(identity.uid));
     const audio_port_handle_t requestedPortId = *selectedDeviceId;
     audio_attributes_t resultAttr;
     bool isRequestedDeviceForExclusiveUse = false;
@@ -1373,7 +1404,7 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
 
     // An MSD patch may be using the only output stream that can service this request. Release
     // all MSD patches to prioritize this request over any active output on MSD.
-    releaseMsdPatches(devices);
+    releaseMsdOutputPatches(devices);
 
     status_t status = outputDesc->open(config, devices, stream, flags, output);
 
@@ -1556,7 +1587,7 @@ DeviceVector AudioPolicyManager::getMsdAudioOutDevices() const {
                                                         mAvailableOutputDevices);
 }
 
-const AudioPatchCollection AudioPolicyManager::getMsdPatches() const {
+const AudioPatchCollection AudioPolicyManager::getMsdOutputPatches() const {
     AudioPatchCollection msdPatches;
     sp<HwModule> msdModule = mHwModules.getModuleFromName(AUDIO_HARDWARE_MODULE_ID_MSD);
     if (msdModule != 0) {
@@ -1574,50 +1605,47 @@ const AudioPatchCollection AudioPolicyManager::getMsdPatches() const {
     return msdPatches;
 }
 
-status_t AudioPolicyManager::getBestMsdAudioProfileFor(const sp<DeviceDescriptor> &outputDevice,
-        bool hwAvSync, audio_port_config *sourceConfig, audio_port_config *sinkConfig) const
-{
-    sp<HwModule> msdModule = mHwModules.getModuleFromName(AUDIO_HARDWARE_MODULE_ID_MSD);
-    if (msdModule == nullptr) {
-        ALOGE("%s() unable to get MSD module", __func__);
-        return NO_INIT;
-    }
-    sp<HwModule> deviceModule = mHwModules.getModuleForDevice(outputDevice, AUDIO_FORMAT_DEFAULT);
-    if (deviceModule == nullptr) {
-        ALOGE("%s() unable to get module for %s", __func__, outputDevice->toString().c_str());
-        return NO_INIT;
-    }
-    const InputProfileCollection &inputProfiles = msdModule->getInputProfiles();
+status_t AudioPolicyManager::getMsdProfiles(bool hwAvSync,
+                                            const InputProfileCollection &inputProfiles,
+                                            const OutputProfileCollection &outputProfiles,
+                                            const sp<DeviceDescriptor> &sourceDevice,
+                                            const sp<DeviceDescriptor> &sinkDevice,
+                                            AudioProfileVector& sourceProfiles,
+                                            AudioProfileVector& sinkProfiles) const {
     if (inputProfiles.isEmpty()) {
-        ALOGE("%s() no input profiles for MSD module", __func__);
+        ALOGE("%s() no input profiles for source module", __func__);
         return NO_INIT;
     }
-    const OutputProfileCollection &outputProfiles = deviceModule->getOutputProfiles();
     if (outputProfiles.isEmpty()) {
-        ALOGE("%s() no output profiles for device %s", __func__, outputDevice->toString().c_str());
+        ALOGE("%s() no output profiles for sink module", __func__);
         return NO_INIT;
     }
-    AudioProfileVector msdProfiles;
-    // Each IOProfile represents a MixPort from audio_policy_configuration.xml
     for (const auto &inProfile : inputProfiles) {
-        if (hwAvSync == ((inProfile->getFlags() & AUDIO_INPUT_FLAG_HW_AV_SYNC) != 0)) {
-            appendAudioProfiles(msdProfiles, inProfile->getAudioProfiles());
+        if (hwAvSync == ((inProfile->getFlags() & AUDIO_INPUT_FLAG_HW_AV_SYNC) != 0) &&
+                inProfile->supportsDevice(sourceDevice)) {
+            appendAudioProfiles(sourceProfiles, inProfile->getAudioProfiles());
         }
     }
-    AudioProfileVector deviceProfiles;
     for (const auto &outProfile : outputProfiles) {
         if (hwAvSync == ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) &&
-                outProfile->supportsDevice(outputDevice)) {
-            appendAudioProfiles(deviceProfiles, outProfile->getAudioProfiles());
+                outProfile->supportsDevice(sinkDevice)) {
+            appendAudioProfiles(sinkProfiles, outProfile->getAudioProfiles());
         }
     }
+    return NO_ERROR;
+}
+
+status_t AudioPolicyManager::getBestMsdConfig(bool hwAvSync,
+        const AudioProfileVector &sourceProfiles, const AudioProfileVector &sinkProfiles,
+        audio_port_config *sourceConfig, audio_port_config *sinkConfig) const
+{
     struct audio_config_base bestSinkConfig;
-    status_t result = findBestMatchingOutputConfig(msdProfiles, deviceProfiles,
-            compressedFormatsOrder, surroundChannelMasksOrder, true /*preferHigherSamplingRates*/,
-            bestSinkConfig);
+    status_t result = findBestMatchingOutputConfig(sourceProfiles, sinkProfiles,
+            msdCompressedFormatsOrder, msdSurroundChannelMasksOrder,
+            true /*preferHigherSamplingRates*/, bestSinkConfig);
     if (result != NO_ERROR) {
-        ALOGD("%s() no matching profiles found for device: %s, hwAvSync: %d",
-                __func__, outputDevice->toString().c_str(), hwAvSync);
+        ALOGD("%s() no matching config found for sink, hwAvSync: %d",
+                __func__, hwAvSync);
         return result;
     }
     sinkConfig->sample_rate = bestSinkConfig.sample_rate;
@@ -1628,7 +1656,7 @@ status_t AudioPolicyManager::getBestMsdAudioProfileFor(const sp<DeviceDescriptor
             sinkConfig->flags.output | AUDIO_OUTPUT_FLAG_DIRECT);
     if (audio_is_iec61937_compatible(sinkConfig->format)) {
         // For formats compatible with IEC61937 encapsulation, assume that
-        // the record thread input from MSD is IEC61937 framed (for proportional buffer sizing).
+        // the input is IEC61937 framed (for proportional buffer sizing).
         // Add the AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO flag so downstream HAL can distinguish between
         // raw and IEC61937 framed streams.
         sinkConfig->flags.output = static_cast<audio_output_flags_t>(
@@ -1654,28 +1682,50 @@ status_t AudioPolicyManager::getBestMsdAudioProfileFor(const sp<DeviceDescriptor
     return NO_ERROR;
 }
 
-PatchBuilder AudioPolicyManager::buildMsdPatch(const sp<DeviceDescriptor> &outputDevice) const
+PatchBuilder AudioPolicyManager::buildMsdPatch(bool msdIsSource,
+                                               const sp<DeviceDescriptor> &device) const
 {
     PatchBuilder patchBuilder;
-    patchBuilder.addSource(getMsdAudioInDevice()).addSink(outputDevice);
+    sp<HwModule> msdModule = mHwModules.getModuleFromName(AUDIO_HARDWARE_MODULE_ID_MSD);
+    ALOG_ASSERT(msdModule != nullptr, "MSD module not available");
+    sp<HwModule> deviceModule = mHwModules.getModuleForDevice(device, AUDIO_FORMAT_DEFAULT);
+    if (deviceModule == nullptr) {
+        ALOGE("%s() unable to get module for %s", __func__, device->toString().c_str());
+        return patchBuilder;
+    }
+    const InputProfileCollection inputProfiles = msdIsSource ?
+            msdModule->getInputProfiles() : deviceModule->getInputProfiles();
+    const OutputProfileCollection outputProfiles = msdIsSource ?
+            deviceModule->getOutputProfiles() : msdModule->getOutputProfiles();
+
+    const sp<DeviceDescriptor> sourceDevice = msdIsSource ? getMsdAudioInDevice() : device;
+    const sp<DeviceDescriptor> sinkDevice = msdIsSource ?
+            device : getMsdAudioOutDevices().itemAt(0);
+    patchBuilder.addSource(sourceDevice).addSink(sinkDevice);
+
     audio_port_config sourceConfig = patchBuilder.patch()->sources[0];
     audio_port_config sinkConfig = patchBuilder.patch()->sinks[0];
+    AudioProfileVector sourceProfiles;
+    AudioProfileVector sinkProfiles;
     // TODO: Figure out whether MSD module has HW_AV_SYNC flag set in the AP config file.
     // For now, we just forcefully try with HwAvSync first.
-    status_t res = getBestMsdAudioProfileFor(outputDevice, true /*hwAvSync*/,
-            &sourceConfig, &sinkConfig) == NO_ERROR ? NO_ERROR :
-            getBestMsdAudioProfileFor(
-                    outputDevice, false /*hwAvSync*/, &sourceConfig, &sinkConfig);
-    if (res == NO_ERROR) {
-        // Found a matching profile for encoded audio. Re-create PatchBuilder with this config.
-        return (PatchBuilder()).addSource(sourceConfig).addSink(sinkConfig);
+    for (auto hwAvSync : { true, false }) {
+        if (getMsdProfiles(hwAvSync, inputProfiles, outputProfiles, sourceDevice, sinkDevice,
+                sourceProfiles, sinkProfiles) != NO_ERROR) {
+            continue;
+        }
+        if (getBestMsdConfig(hwAvSync, sourceProfiles, sinkProfiles, &sourceConfig,
+                &sinkConfig) == NO_ERROR) {
+            // Found a matching config. Re-create PatchBuilder with this config.
+            return (PatchBuilder()).addSource(sourceConfig).addSink(sinkConfig);
+        }
     }
-    ALOGV("%s() no matching profile found. Fall through to default PCM patch"
+    ALOGV("%s() no matching config found. Fall through to default PCM patch"
             " supporting PCM format conversion.", __func__);
     return patchBuilder;
 }
 
-status_t AudioPolicyManager::setMsdPatches(const DeviceVector *outputDevices) {
+status_t AudioPolicyManager::setMsdOutputPatches(const DeviceVector *outputDevices) {
     DeviceVector devices;
     if (outputDevices != nullptr && outputDevices->size() > 0) {
         devices.add(*outputDevices);
@@ -1690,11 +1740,11 @@ status_t AudioPolicyManager::setMsdPatches(const DeviceVector *outputDevices) {
     std::vector<PatchBuilder> patchesToCreate;
     for (auto i = 0u; i < devices.size(); ++i) {
         ALOGV("%s() for device %s", __func__, devices[i]->toString().c_str());
-        patchesToCreate.push_back(buildMsdPatch(devices[i]));
+        patchesToCreate.push_back(buildMsdPatch(true /*msdIsSource*/, devices[i]));
     }
     // Retain only the MSD patches associated with outputDevices request.
     // Tear down the others, and create new ones as needed.
-    AudioPatchCollection patchesToRemove = getMsdPatches();
+    AudioPatchCollection patchesToRemove = getMsdOutputPatches();
     for (auto it = patchesToCreate.begin(); it != patchesToCreate.end(); ) {
         auto retainedPatch = false;
         for (auto i = 0u; i < patchesToRemove.size(); ++i) {
@@ -1739,8 +1789,8 @@ status_t AudioPolicyManager::setMsdPatches(const DeviceVector *outputDevices) {
     return status;
 }
 
-void AudioPolicyManager::releaseMsdPatches(const DeviceVector& devices) {
-    AudioPatchCollection msdPatches = getMsdPatches();
+void AudioPolicyManager::releaseMsdOutputPatches(const DeviceVector& devices) {
+    AudioPatchCollection msdPatches = getMsdOutputPatches();
     for (size_t i = 0; i < msdPatches.size(); i++) {
         const auto& patch = msdPatches[i];
         for (size_t j = 0; j < patch->mPatch.num_sinks; ++j) {
@@ -2265,7 +2315,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
                                              audio_io_handle_t *input,
                                              audio_unique_id_t riid,
                                              audio_session_t session,
-                                             uid_t uid,
+                                             const Identity& identity,
                                              const audio_config_base_t *config,
                                              audio_input_flags_t flags,
                                              audio_port_handle_t *selectedDeviceId,
@@ -2284,6 +2334,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
     sp<AudioInputDescriptor> inputDesc;
     sp<RecordClientDescriptor> clientDesc;
     audio_port_handle_t requestedDeviceId = *selectedDeviceId;
+    uid_t uid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_uid_t(identity.uid));
     bool isSoundTrigger = attributes.source == AUDIO_SOURCE_HOTWORD &&
                                 mSoundTriggerSessions.indexOfKey(session) >= 0;
     DeviceVector usbDevices;
@@ -2394,7 +2445,9 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
             status = BAD_VALUE;
             goto error;
         }
-        if (policyMix) {
+        if (device->type() == AUDIO_DEVICE_IN_ECHO_REFERENCE) {
+            *inputType = API_INPUT_MIX_CAPTURE;
+        } else if (policyMix) {
             ALOG_ASSERT(policyMix->mMixType == MIX_TYPE_RECORDERS, "Invalid Mix Type");
             // there is an external policy, but this input is attached to a mix of recorders,
             // meaning it receives audio injected into the framework, so the recorder doesn't
@@ -3499,9 +3552,7 @@ status_t AudioPolicyManager::setDevicesRoleForStrategy(product_strategy_t strate
 void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint32_t delayMs)
 {
     uint32_t waitMs = 0;
-    if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL && hasPrimaryOutput()) {
-        DeviceVector newDevices = getNewOutputDevices(mPrimaryOutput, true /*fromCache*/);
-        waitMs = updateCallRouting(newDevices, delayMs);
+    if (updateCallRouting(true /*fromCache*/, delayMs, &waitMs) == NO_ERROR) {
         // Only apply special touch sound delay once
         delayMs = 0;
     }
@@ -4184,6 +4235,15 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
             // be incomplete.
             PatchBuilder patchBuilder;
             audio_port_config sourcePortConfig = {};
+
+            // if first sink is to MSD, establish single MSD patch
+            if (getMsdAudioOutDevices().contains(
+                        mAvailableOutputDevices.getDeviceFromId(patch->sinks[0].id))) {
+                ALOGV("%s patching to MSD", __FUNCTION__);
+                patchBuilder = buildMsdPatch(false /*msdIsSource*/, srcDevice);
+                goto installPatch;
+            }
+
             srcDevice->toAudioPortConfig(&sourcePortConfig, &patch->sources[0]);
             patchBuilder.addSource(sourcePortConfig);
 
@@ -4279,6 +4339,7 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
             }
             // TODO: check from routing capabilities in config file and other conflicting patches
 
+installPatch:
             status_t status = installPatch(
                         __func__, index, handle, patchBuilder.patch(), delayMs, uid, &patchDesc);
             if (status != NO_ERROR) {
@@ -4753,68 +4814,28 @@ float AudioPolicyManager::getStreamVolumeDB(
 
 status_t AudioPolicyManager::getSurroundFormats(unsigned int *numSurroundFormats,
                                                 audio_format_t *surroundFormats,
-                                                bool *surroundFormatsEnabled,
-                                                bool reported)
+                                                bool *surroundFormatsEnabled)
 {
-    if (numSurroundFormats == NULL || (*numSurroundFormats != 0 &&
-            (surroundFormats == NULL || surroundFormatsEnabled == NULL))) {
+    if (numSurroundFormats == nullptr || (*numSurroundFormats != 0 &&
+            (surroundFormats == nullptr || surroundFormatsEnabled == nullptr))) {
         return BAD_VALUE;
     }
-    ALOGV("%s() numSurroundFormats %d surroundFormats %p surroundFormatsEnabled %p reported %d",
-            __func__, *numSurroundFormats, surroundFormats, surroundFormatsEnabled, reported);
+    ALOGV("%s() numSurroundFormats %d surroundFormats %p surroundFormatsEnabled %p",
+            __func__, *numSurroundFormats, surroundFormats, surroundFormatsEnabled);
 
     size_t formatsWritten = 0;
     size_t formatsMax = *numSurroundFormats;
-    std::unordered_set<audio_format_t> formats; // Uses primary surround formats only
-    if (reported) {
-        // Return formats from all device profiles that have already been resolved by
-        // checkOutputsForDevice().
-        for (size_t i = 0; i < mAvailableOutputDevices.size(); i++) {
-            sp<DeviceDescriptor> device = mAvailableOutputDevices[i];
-            audio_devices_t deviceType = device->type();
-            // Enabling/disabling formats are applied to only HDMI devices. So, this function
-            // returns formats reported by HDMI devices.
-            if (deviceType != AUDIO_DEVICE_OUT_HDMI) {
-                continue;
-            }
-            // Formats reported by sink devices
-            std::unordered_set<audio_format_t> formatset;
-            if (auto it = mReportedFormatsMap.find(device); it != mReportedFormatsMap.end()) {
-                formatset.insert(it->second.begin(), it->second.end());
-            }
 
-            // Formats hard-coded in the in policy configuration file (if any).
-            FormatVector encodedFormats = device->encodedFormats();
-            formatset.insert(encodedFormats.begin(), encodedFormats.end());
-            // Filter the formats which are supported by the vendor hardware.
-            for (auto it = formatset.begin(); it != formatset.end(); ++it) {
-                if (mConfig.getSurroundFormats().count(*it) != 0) {
-                    formats.insert(*it);
-                } else {
-                    for (const auto& pair : mConfig.getSurroundFormats()) {
-                        if (pair.second.count(*it) != 0) {
-                            formats.insert(pair.first);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        for (const auto& pair : mConfig.getSurroundFormats()) {
-            formats.insert(pair.first);
-        }
-    }
-    *numSurroundFormats = formats.size();
+    *numSurroundFormats = mConfig.getSurroundFormats().size();
     audio_policy_forced_cfg_t forceUse = mEngine->getForceUse(
             AUDIO_POLICY_FORCE_FOR_ENCODED_SURROUND);
-    for (const auto& format: formats) {
+    for (const auto& format: mConfig.getSurroundFormats()) {
         if (formatsWritten < formatsMax) {
-            surroundFormats[formatsWritten] = format;
+            surroundFormats[formatsWritten] = format.first;
             bool formatEnabled = true;
             switch (forceUse) {
                 case AUDIO_POLICY_FORCE_ENCODED_SURROUND_MANUAL:
-                    formatEnabled = mManualSurroundFormats.count(format) != 0;
+                    formatEnabled = mManualSurroundFormats.count(format.first) != 0;
                     break;
                 case AUDIO_POLICY_FORCE_ENCODED_SURROUND_NEVER:
                     formatEnabled = false;
@@ -4823,6 +4844,60 @@ status_t AudioPolicyManager::getSurroundFormats(unsigned int *numSurroundFormats
                     break;
             }
             surroundFormatsEnabled[formatsWritten++] = formatEnabled;
+        }
+    }
+    return NO_ERROR;
+}
+
+status_t AudioPolicyManager::getReportedSurroundFormats(unsigned int *numSurroundFormats,
+                                                        audio_format_t *surroundFormats) {
+    if (numSurroundFormats == nullptr || (*numSurroundFormats != 0 && surroundFormats == nullptr)) {
+        return BAD_VALUE;
+    }
+    ALOGV("%s() numSurroundFormats %d surroundFormats %p",
+            __func__, *numSurroundFormats, surroundFormats);
+
+    size_t formatsWritten = 0;
+    size_t formatsMax = *numSurroundFormats;
+    std::unordered_set<audio_format_t> formats; // Uses primary surround formats only
+
+    // Return formats from all device profiles that have already been resolved by
+    // checkOutputsForDevice().
+    for (size_t i = 0; i < mAvailableOutputDevices.size(); i++) {
+        sp<DeviceDescriptor> device = mAvailableOutputDevices[i];
+        audio_devices_t deviceType = device->type();
+        // Enabling/disabling formats are applied to only HDMI devices. So, this function
+        // returns formats reported by HDMI devices.
+        if (deviceType != AUDIO_DEVICE_OUT_HDMI) {
+            continue;
+        }
+        // Formats reported by sink devices
+        std::unordered_set<audio_format_t> formatset;
+        if (auto it = mReportedFormatsMap.find(device); it != mReportedFormatsMap.end()) {
+            formatset.insert(it->second.begin(), it->second.end());
+        }
+
+        // Formats hard-coded in the in policy configuration file (if any).
+        FormatVector encodedFormats = device->encodedFormats();
+        formatset.insert(encodedFormats.begin(), encodedFormats.end());
+        // Filter the formats which are supported by the vendor hardware.
+        for (auto it = formatset.begin(); it != formatset.end(); ++it) {
+            if (mConfig.getSurroundFormats().count(*it) != 0) {
+                formats.insert(*it);
+            } else {
+                for (const auto& pair : mConfig.getSurroundFormats()) {
+                    if (pair.second.count(*it) != 0) {
+                        formats.insert(pair.first);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    *numSurroundFormats = formats.size();
+    for (const auto& format: formats) {
+        if (formatsWritten < formatsMax) {
+            surroundFormats[formatsWritten++] = format;
         }
     }
     return NO_ERROR;
@@ -5653,7 +5728,7 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
             // arguments to mEngine->getOutputDevicesForAttributes() when resolving which output
             // devices to patch to. This may be complicated by the fact that devices may become
             // unavailable.
-            setMsdPatches();
+            setMsdOutputPatches();
         }
     }
 }
@@ -5726,7 +5801,7 @@ void AudioPolicyManager::checkForDeviceAndOutputChanges(std::function<bool()> on
         // unnecessary rerouting by caching and reusing the arguments to
         // mEngine->getOutputDevicesForAttributes() when resolving which output devices to patch to.
         // This may be complicated by the fact that devices may become unavailable.
-        setMsdPatches();
+        setMsdOutputPatches();
     }
     // an event that changed routing likely occurred, inform upper layers
     mpClientInterface->onRoutingUpdated();

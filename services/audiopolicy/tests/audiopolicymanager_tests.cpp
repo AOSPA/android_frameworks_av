@@ -25,6 +25,7 @@
 #define LOG_TAG "APM_Test"
 #include <Serializer.h>
 #include <android-base/file.h>
+#include <android/media/permission/Identity.h>
 #include <media/AudioPolicy.h>
 #include <media/PatchBuilder.h>
 #include <media/RecordingActivityTracker.h>
@@ -39,6 +40,7 @@
 
 using namespace android;
 using testing::UnorderedElementsAre;
+using media::permission::Identity;
 
 TEST(AudioPolicyManagerTestInit, EngineFailure) {
     AudioPolicyTestClient client;
@@ -214,8 +216,11 @@ void AudioPolicyManagerTest::getOutputForAttr(
     if (!portId) portId = &localPortId;
     *portId = AUDIO_PORT_HANDLE_NONE;
     AudioPolicyInterface::output_type_t outputType;
+    // TODO b/182392769: use identity util
+    Identity i = Identity();
+    i.uid = 0;
     ASSERT_EQ(OK, mManager->getOutputForAttr(
-                    &attr, output, AUDIO_SESSION_NONE, &stream, 0 /*uid*/, &config, &flags,
+                    &attr, output, AUDIO_SESSION_NONE, &stream, i, &config, &flags,
                     selectedDeviceId, portId, {}, &outputType));
     ASSERT_NE(AUDIO_PORT_HANDLE_NONE, *portId);
     ASSERT_NE(AUDIO_IO_HANDLE_NONE, *output);
@@ -239,8 +244,11 @@ void AudioPolicyManagerTest::getInputForAttr(
     if (!portId) portId = &localPortId;
     *portId = AUDIO_PORT_HANDLE_NONE;
     AudioPolicyInterface::input_type_t inputType;
+    // TODO b/182392769: use identity util
+    Identity i = Identity();
+    i.uid = 0;
     ASSERT_EQ(OK, mManager->getInputForAttr(
-            &attr, &input, riid, AUDIO_SESSION_NONE, 0 /*uid*/, &config, flags,
+            &attr, &input, riid, AUDIO_SESSION_NONE, i, &config, flags,
             selectedDeviceId, &inputType, portId));
     ASSERT_NE(AUDIO_PORT_HANDLE_NONE, *portId);
 }
@@ -370,6 +378,8 @@ class AudioPolicyManagerTestMsd : public AudioPolicyManagerTest,
 
     const size_t mExpectedAudioPatchCount;
     sp<DeviceDescriptor> mSpdifDevice;
+
+    sp<DeviceDescriptor> mHdmiInputDevice;
 };
 
 AudioPolicyManagerTestMsd::AudioPolicyManagerTestMsd()
@@ -396,8 +406,11 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
             AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, 48000);
     sp<AudioProfile> ac3OutputProfile = new AudioProfile(
             AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, 48000);
+    sp<AudioProfile> iec958OutputProfile = new AudioProfile(
+            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_OUT_STEREO, 48000);
     mMsdOutputDevice->addAudioProfile(pcmOutputProfile);
     mMsdOutputDevice->addAudioProfile(ac3OutputProfile);
+    mMsdOutputDevice->addAudioProfile(iec958OutputProfile);
     mMsdInputDevice = new DeviceDescriptor(AUDIO_DEVICE_IN_BUS);
     // Match output profile from AudioPolicyConfig::setDefault.
     sp<AudioProfile> pcmInputProfile = new AudioProfile(
@@ -435,6 +448,11 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
             AUDIO_OUTPUT_FLAG_NON_BLOCKING);
     msdCompressedOutputProfile->addSupportedDevice(mMsdOutputDevice);
     msdModule->addOutputProfile(msdCompressedOutputProfile);
+    sp<OutputProfile> msdIec958OutputProfile = new OutputProfile("msd iec958 input");
+    msdIec958OutputProfile->addAudioProfile(iec958OutputProfile);
+    msdIec958OutputProfile->setFlags(AUDIO_OUTPUT_FLAG_DIRECT);
+    msdIec958OutputProfile->addSupportedDevice(mMsdOutputDevice);
+    msdModule->addOutputProfile(msdIec958OutputProfile);
 
     sp<InputProfile> msdInputProfile = new InputProfile("msd output");
     msdInputProfile->addAudioProfile(pcmInputProfile);
@@ -458,6 +476,19 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
         mSpdifDevice->addAudioProfile(dtsOutputProfile);
         primaryEncodedOutputProfile->addSupportedDevice(mSpdifDevice);
     }
+
+    // Add HDMI input device with IEC60958 profile for HDMI in -> MSD patching.
+    mHdmiInputDevice = new DeviceDescriptor(AUDIO_DEVICE_IN_HDMI);
+    sp<AudioProfile> iec958InputProfile = new AudioProfile(
+            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_IN_STEREO, 48000);
+    mHdmiInputDevice->addAudioProfile(iec958InputProfile);
+    config.addDevice(mHdmiInputDevice);
+    sp<InputProfile> hdmiInputProfile = new InputProfile("hdmi input");
+    hdmiInputProfile->addAudioProfile(iec958InputProfile);
+    hdmiInputProfile->setFlags(AUDIO_INPUT_FLAG_DIRECT);
+    hdmiInputProfile->addSupportedDevice(mHdmiInputDevice);
+    config.getHwModules().getModuleFromName(AUDIO_HARDWARE_MODULE_ID_PRIMARY)->
+            addInputProfile(hdmiInputProfile);
 }
 
 void AudioPolicyManagerTestMsd::TearDown() {
@@ -465,6 +496,7 @@ void AudioPolicyManagerTestMsd::TearDown() {
     mMsdInputDevice.clear();
     mDefaultOutputDevice.clear();
     mSpdifDevice.clear();
+    mHdmiInputDevice.clear();
     AudioPolicyManagerTest::TearDown();
 }
 
@@ -485,21 +517,21 @@ TEST_P(AudioPolicyManagerTestMsd, PatchCreationOnSetForceUse) {
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
 }
 
-TEST_P(AudioPolicyManagerTestMsd, PatchCreationSetReleaseMsdPatches) {
+TEST_P(AudioPolicyManagerTestMsd, PatchCreationSetReleaseMsdOutputPatches) {
     const PatchCountCheck patchCount = snapshotPatchCount();
     DeviceVector devices = mManager->getAvailableOutputDevices();
     // Remove MSD output device to avoid patching to itself
     devices.remove(mMsdOutputDevice);
     ASSERT_EQ(mExpectedAudioPatchCount, devices.size());
-    mManager->setMsdPatches(&devices);
+    mManager->setMsdOutputPatches(&devices);
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
     // Dual patch: exercise creating one new audio patch and reusing another existing audio patch.
     DeviceVector singleDevice(devices[0]);
-    mManager->releaseMsdPatches(singleDevice);
+    mManager->releaseMsdOutputPatches(singleDevice);
     ASSERT_EQ(mExpectedAudioPatchCount - 1, patchCount.deltaFromSnapshot());
-    mManager->setMsdPatches(&devices);
+    mManager->setMsdOutputPatches(&devices);
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
-    mManager->releaseMsdPatches(devices);
+    mManager->releaseMsdOutputPatches(devices);
     ASSERT_EQ(0, patchCount.deltaFromSnapshot());
 }
 
@@ -578,6 +610,34 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrFormatSwitching) {
         ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
         ASSERT_EQ(0, patchCount.deltaFromSnapshot());
     }
+}
+
+TEST_P(AudioPolicyManagerTestMsd, PatchCreationFromHdmiInToMsd) {
+    audio_patch_handle_t handle = AUDIO_PATCH_HANDLE_NONE;
+    uid_t uid = 42;
+    const PatchCountCheck patchCount = snapshotPatchCount();
+    ASSERT_FALSE(mManager->getAvailableInputDevices().isEmpty());
+    PatchBuilder patchBuilder;
+    patchBuilder.
+            addSource(mManager->getAvailableInputDevices().
+                    getDevice(AUDIO_DEVICE_IN_HDMI, String8(""), AUDIO_FORMAT_DEFAULT)).
+            addSink(mManager->getAvailableOutputDevices().
+                    getDevice(AUDIO_DEVICE_OUT_BUS, String8(""), AUDIO_FORMAT_DEFAULT));
+    ASSERT_EQ(NO_ERROR, mManager->createAudioPatch(patchBuilder.patch(), &handle, uid));
+    ASSERT_NE(AUDIO_PATCH_HANDLE_NONE, handle);
+    AudioPatchCollection patches = mManager->getAudioPatches();
+    sp<AudioPatch> patch = patches.valueFor(handle);
+    ASSERT_EQ(1, patch->mPatch.num_sources);
+    ASSERT_EQ(1, patch->mPatch.num_sinks);
+    ASSERT_EQ(AUDIO_PORT_ROLE_SOURCE, patch->mPatch.sources[0].role);
+    ASSERT_EQ(AUDIO_PORT_ROLE_SINK, patch->mPatch.sinks[0].role);
+    ASSERT_EQ(AUDIO_FORMAT_IEC60958, patch->mPatch.sources[0].format);
+    ASSERT_EQ(AUDIO_FORMAT_IEC60958, patch->mPatch.sinks[0].format);
+    ASSERT_EQ(AUDIO_CHANNEL_IN_STEREO, patch->mPatch.sources[0].channel_mask);
+    ASSERT_EQ(AUDIO_CHANNEL_OUT_STEREO, patch->mPatch.sinks[0].channel_mask);
+    ASSERT_EQ(48000, patch->mPatch.sources[0].sample_rate);
+    ASSERT_EQ(48000, patch->mPatch.sinks[0].sample_rate);
+    ASSERT_EQ(1, patchCount.deltaFromSnapshot());
 }
 
 class AudioPolicyManagerTestWithConfigurationFile : public AudioPolicyManagerTest {
@@ -745,7 +805,8 @@ class AudioPolicyManagerTestForHdmi
 protected:
     void SetUp() override;
     std::string getConfigFile() override { return sTvConfig; }
-    std::map<audio_format_t, bool> getSurroundFormatsHelper(bool reported);
+    std::map<audio_format_t, bool> getSurroundFormatsHelper();
+    std::vector<audio_format_t> getReportedSurroundFormatsHelper();
     std::unordered_set<audio_format_t> getFormatsFromPorts();
     AudioPolicyManagerTestClient* getClient() override {
         return new AudioPolicyManagerTestClientForHdmi;
@@ -776,12 +837,12 @@ void AudioPolicyManagerTestForHdmi::TearDown() {
 }
 
 std::map<audio_format_t, bool>
-        AudioPolicyManagerTestForHdmi::getSurroundFormatsHelper(bool reported) {
+        AudioPolicyManagerTestForHdmi::getSurroundFormatsHelper() {
     unsigned int numSurroundFormats = 0;
     std::map<audio_format_t, bool> surroundFormatsMap;
     status_t ret = mManager->getSurroundFormats(
             &numSurroundFormats, nullptr /* surroundFormats */,
-            nullptr /* surroundFormatsEnabled */, reported);
+            nullptr /* surroundFormatsEnabled */);
     EXPECT_EQ(NO_ERROR, ret);
     if (ret != NO_ERROR) {
         return surroundFormatsMap;
@@ -791,7 +852,7 @@ std::map<audio_format_t, bool>
     bool surroundFormatsEnabled[numSurroundFormats];
     memset(surroundFormatsEnabled, 0, sizeof(bool) * numSurroundFormats);
     ret = mManager->getSurroundFormats(
-            &numSurroundFormats, surroundFormats, surroundFormatsEnabled, reported);
+            &numSurroundFormats, surroundFormats, surroundFormatsEnabled);
     EXPECT_EQ(NO_ERROR, ret);
     if (ret != NO_ERROR) {
         return surroundFormatsMap;
@@ -800,6 +861,28 @@ std::map<audio_format_t, bool>
         surroundFormatsMap[surroundFormats[i]] = surroundFormatsEnabled[i];
     }
     return surroundFormatsMap;
+}
+
+std::vector<audio_format_t> AudioPolicyManagerTestForHdmi::getReportedSurroundFormatsHelper() {
+    unsigned int numSurroundFormats = 0;
+    std::vector<audio_format_t>  surroundFormatsVector;
+    status_t ret = mManager->getReportedSurroundFormats(
+            &numSurroundFormats, nullptr /* surroundFormats */);
+    EXPECT_EQ(NO_ERROR, ret);
+    if (ret != NO_ERROR) {
+        return surroundFormatsVector;
+    }
+    audio_format_t surroundFormats[numSurroundFormats];
+    memset(surroundFormats, 0, sizeof(audio_format_t) * numSurroundFormats);
+    ret = mManager->getReportedSurroundFormats(&numSurroundFormats, surroundFormats);
+    EXPECT_EQ(NO_ERROR, ret);
+    if (ret != NO_ERROR) {
+        return surroundFormatsVector;
+    }
+    for (const auto &surroundFormat : surroundFormats) {
+        surroundFormatsVector.push_back(surroundFormat);
+    }
+    return surroundFormatsVector;
 }
 
 std::unordered_set<audio_format_t>
@@ -832,7 +915,7 @@ std::unordered_set<audio_format_t>
 TEST_F(AudioPolicyManagerTestForHdmi, GetSurroundFormatsReturnsSupportedFormats) {
     mManager->setForceUse(
             AUDIO_POLICY_FORCE_FOR_ENCODED_SURROUND, AUDIO_POLICY_FORCE_ENCODED_SURROUND_ALWAYS);
-    auto surroundFormats = getSurroundFormatsHelper(false /*reported*/);
+    auto surroundFormats = getSurroundFormatsHelper();
     ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
 }
 
@@ -844,19 +927,19 @@ TEST_F(AudioPolicyManagerTestForHdmi,
     status_t ret =
             mManager->setSurroundFormatEnabled(AUDIO_FORMAT_E_AC3, false /*enabled*/);
     ASSERT_EQ(NO_ERROR, ret);
-    auto surroundFormats = getSurroundFormatsHelper(false /*reported*/);
+    auto surroundFormats = getSurroundFormatsHelper();
     ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
     ASSERT_FALSE(surroundFormats[AUDIO_FORMAT_E_AC3]);
 
     ret = mManager->setSurroundFormatEnabled(AUDIO_FORMAT_E_AC3, true /*enabled*/);
     ASSERT_EQ(NO_ERROR, ret);
-    surroundFormats = getSurroundFormatsHelper(false /*reported*/);
+    surroundFormats = getSurroundFormatsHelper();
     ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
     ASSERT_TRUE(surroundFormats[AUDIO_FORMAT_E_AC3]);
 
     ret = mManager->setSurroundFormatEnabled(AUDIO_FORMAT_E_AC3, false /*enabled*/);
     ASSERT_EQ(NO_ERROR, ret);
-    surroundFormats = getSurroundFormatsHelper(false /*reported*/);
+    surroundFormats = getSurroundFormatsHelper();
     ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
     ASSERT_FALSE(surroundFormats[AUDIO_FORMAT_E_AC3]);
 }
@@ -879,8 +962,8 @@ TEST_F(AudioPolicyManagerTestForHdmi,
         GetReportedSurroundFormatsReturnsHdmiReportedFormats) {
     mManager->setForceUse(
             AUDIO_POLICY_FORCE_FOR_ENCODED_SURROUND, AUDIO_POLICY_FORCE_ENCODED_SURROUND_ALWAYS);
-    auto surroundFormats = getSurroundFormatsHelper(true /*reported*/);
-    ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
+    auto surroundFormats = getReportedSurroundFormatsHelper();
+    ASSERT_EQ(1, std::count(surroundFormats.begin(), surroundFormats.end(), AUDIO_FORMAT_E_AC3));
 }
 
 TEST_F(AudioPolicyManagerTestForHdmi,
@@ -890,13 +973,13 @@ TEST_F(AudioPolicyManagerTestForHdmi,
 
     status_t ret = mManager->setSurroundFormatEnabled(AUDIO_FORMAT_E_AC3, false /*enabled*/);
     ASSERT_EQ(NO_ERROR, ret);
-    auto surroundFormats = getSurroundFormatsHelper(true /*reported*/);
-    ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
+    auto surroundFormats = getReportedSurroundFormatsHelper();
+    ASSERT_EQ(1, std::count(surroundFormats.begin(), surroundFormats.end(), AUDIO_FORMAT_E_AC3));
 
     ret = mManager->setSurroundFormatEnabled(AUDIO_FORMAT_E_AC3, true /*enabled*/);
     ASSERT_EQ(NO_ERROR, ret);
-    surroundFormats = getSurroundFormatsHelper(true /*reported*/);
-    ASSERT_EQ(1, surroundFormats.count(AUDIO_FORMAT_E_AC3));
+    surroundFormats = getReportedSurroundFormatsHelper();
+    ASSERT_EQ(1, std::count(surroundFormats.begin(), surroundFormats.end(), AUDIO_FORMAT_E_AC3));
 }
 
 class AudioPolicyManagerTestDPNoRemoteSubmixModule : public AudioPolicyManagerTestDynamicPolicy {

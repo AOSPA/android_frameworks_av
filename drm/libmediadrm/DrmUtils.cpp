@@ -27,6 +27,8 @@
 #include <android/hardware/drm/1.2/IDrmFactory.h>
 #include <android/hardware/drm/1.3/ICryptoFactory.h>
 #include <android/hardware/drm/1.3/IDrmFactory.h>
+#include <android/hardware/drm/1.4/ICryptoFactory.h>
+#include <android/hardware/drm/1.4/IDrmFactory.h>
 #include <android/hidl/manager/1.2/IServiceManager.h>
 #include <hidl/HidlSupport.h>
 
@@ -40,6 +42,9 @@
 #include <mediadrm/DrmUtils.h>
 #include <mediadrm/ICrypto.h>
 #include <mediadrm/IDrm.h>
+
+#include <map>
+#include <string>
 
 using HServiceManager = ::android::hidl::manager::V1_2::IServiceManager;
 using ::android::hardware::hidl_array;
@@ -64,25 +69,31 @@ Hal *MakeObject(status_t *pstatus) {
     return obj;
 }
 
-template <typename Hal, typename V>
-void MakeHidlFactories(const uint8_t uuid[16], V &factories) {
+template <typename Hal, typename V, typename M>
+void MakeHidlFactories(const uint8_t uuid[16], V &factories, M& instances) {
     sp<HServiceManager> serviceManager = HServiceManager::getService();
     if (serviceManager == nullptr) {
-        ALOGE("Failed to get service manager");
-        exit(-1);
+        LOG2BE("Failed to get service manager");
+        return;
     }
 
     serviceManager->listManifestByInterface(Hal::descriptor, [&](const hidl_vec<hidl_string> &registered) {
         for (const auto &instance : registered) {
             auto factory = Hal::getService(instance);
             if (factory != nullptr) {
-                ALOGI("found %s %s", Hal::descriptor, instance.c_str());
+                instances[instance.c_str()] = Hal::descriptor;
                 if (!uuid || factory->isCryptoSchemeSupported(uuid)) {
                     factories.push_back(factory);
                 }
             }
         }
     });
+}
+
+template <typename Hal, typename V>
+void MakeHidlFactories(const uint8_t uuid[16], V &factories) {
+    std::map<std::string, std::string> instances;
+    MakeHidlFactories<Hal>(uuid, factories, instances);
 }
 
 hidl_vec<uint8_t> toHidlVec(const void *ptr, size_t size) {
@@ -106,6 +117,7 @@ sp<::V1_0::IDrmPlugin> MakeDrmPlugin(const sp<::V1_0::IDrmFactory> &factory,
     factory->createPlugin(toHidlArray16(uuid), hidl_string(appPackageName),
                           [&](::V1_0::Status status, const sp<::V1_0::IDrmPlugin> &hPlugin) {
                               if (status != ::V1_0::Status::OK) {
+                                  LOG2BE(uuid, "MakeDrmPlugin failed: %d", status);
                                   return;
                               }
                               plugin = hPlugin;
@@ -120,6 +132,7 @@ sp<::V1_0::ICryptoPlugin> MakeCryptoPlugin(const sp<::V1_0::ICryptoFactory> &fac
     factory->createPlugin(toHidlArray16(uuid), toHidlVec(initData, initDataSize),
                           [&](::V1_0::Status status, const sp<::V1_0::ICryptoPlugin> &hPlugin) {
                               if (status != ::V1_0::Status::OK) {
+                                  LOG2BE(uuid, "MakeCryptoPlugin failed: %d", status);
                                   return;
                               }
                               plugin = hPlugin;
@@ -143,10 +156,15 @@ sp<ICrypto> MakeCrypto(status_t *pstatus) {
 
 std::vector<sp<::V1_0::IDrmFactory>> MakeDrmFactories(const uint8_t uuid[16]) {
     std::vector<sp<::V1_0::IDrmFactory>> drmFactories;
-    MakeHidlFactories<::V1_0::IDrmFactory>(uuid, drmFactories);
-    MakeHidlFactories<::V1_1::IDrmFactory>(uuid, drmFactories);
-    MakeHidlFactories<::V1_2::IDrmFactory>(uuid, drmFactories);
-    MakeHidlFactories<::V1_3::IDrmFactory>(uuid, drmFactories);
+    std::map<std::string, std::string> instances;
+    MakeHidlFactories<::V1_0::IDrmFactory>(uuid, drmFactories, instances);
+    MakeHidlFactories<::V1_1::IDrmFactory>(uuid, drmFactories, instances);
+    MakeHidlFactories<::V1_2::IDrmFactory>(uuid, drmFactories, instances);
+    MakeHidlFactories<::V1_3::IDrmFactory>(uuid, drmFactories, instances);
+    MakeHidlFactories<::V1_4::IDrmFactory>(uuid, drmFactories, instances);
+    for (auto const& entry : instances) {
+        LOG2BI("found instance=%s version=%s", entry.first.c_str(), entry.second.c_str());
+    }
     return drmFactories;
 }
 
@@ -165,6 +183,7 @@ std::vector<sp<::V1_0::ICryptoFactory>> MakeCryptoFactories(const uint8_t uuid[1
     MakeHidlFactories<::V1_1::ICryptoFactory>(uuid, cryptoFactories);
     MakeHidlFactories<::V1_2::ICryptoFactory>(uuid, cryptoFactories);
     MakeHidlFactories<::V1_3::ICryptoFactory>(uuid, cryptoFactories);
+    MakeHidlFactories<::V1_4::ICryptoFactory>(uuid, cryptoFactories);
     return cryptoFactories;
 }
 
@@ -249,6 +268,8 @@ status_t toStatusT_1_4(::V1_4::Status status) {
         return ERROR_DRM_PROVISIONING_CONFIG;
     case ::V1_4::Status::PROVISIONING_PARSE_ERROR:
         return ERROR_DRM_PROVISIONING_PARSE;
+    case ::V1_4::Status::PROVISIONING_REQUEST_REJECTED:
+        return ERROR_DRM_PROVISIONING_REQUEST_REJECTED;
     case ::V1_4::Status::RETRYABLE_PROVISIONING_ERROR:
         return ERROR_DRM_PROVISIONING_RETRY;
     case ::V1_4::Status::SECURE_STOP_RELEASE_ERROR:
@@ -265,5 +286,65 @@ status_t toStatusT_1_4(::V1_4::Status status) {
     return ERROR_DRM_UNKNOWN;
 }
 
+namespace {
+char logPriorityToChar(::V1_4::LogPriority priority) {
+    char p = 'U';
+    switch (priority) {
+        case ::V1_4::LogPriority::VERBOSE:  p = 'V'; break;
+        case ::V1_4::LogPriority::DEBUG:    p = 'D'; break;
+        case ::V1_4::LogPriority::INFO:     p = 'I'; break;
+        case ::V1_4::LogPriority::WARN:     p = 'W'; break;
+        case ::V1_4::LogPriority::ERROR:    p = 'E'; break;
+        case ::V1_4::LogPriority::FATAL:    p = 'F'; break;
+        default: p = 'U'; break;
+    }
+    return p;
+}
+}  // namespace
+
+std::string GetExceptionMessage(status_t err, const char *msg,
+                                const Vector<::V1_4::LogMessage> &logs) {
+    String8 msg8;
+    if (msg) {
+        msg8 += msg;
+        msg8 += ": ";
+    }
+    auto errStr = StrCryptoError(err);
+    msg8 += errStr.c_str();
+
+    for (auto log : logs) {
+        time_t seconds = log.timeMs / 1000;
+        int ms = log.timeMs % 1000;
+        char buf[64] = {0};
+        std::string timeStr = "00-00 00:00:00";
+        if (strftime(buf, sizeof buf, "%m-%d %H:%M:%S", std::localtime(&seconds))) {
+            timeStr = buf;
+        }
+
+        char p = logPriorityToChar(log.priority);
+        msg8 += String8::format("\n%s.%03d %c %s", timeStr.c_str(), ms, p, log.message.c_str());
+    }
+
+    return msg8.c_str();
+}
+
+void LogBuffer::addLog(const ::V1_4::LogMessage &log) {
+    std::unique_lock<std::mutex> lock(mMutex);
+    mBuffer.push_back(log);
+    while (mBuffer.size() > MAX_CAPACITY) {
+        mBuffer.pop_front();
+    }
+}
+
+Vector<::V1_4::LogMessage> LogBuffer::getLogs() {
+    std::unique_lock<std::mutex> lock(mMutex);
+    Vector<::V1_4::LogMessage> logs;
+    for (auto log : mBuffer) {
+        logs.push_back(log);
+    }
+    return logs;
+}
+
+LogBuffer gLogBuf;
 }  // namespace DrmUtils
 }  // namespace android

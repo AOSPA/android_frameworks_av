@@ -759,6 +759,7 @@ static std::vector<std::pair<const char *, uint32_t>> int32Mappings {
         { "thumbnail-height", kKeyThumbnailHeight },
         { "track-id", kKeyTrackID },
         { "valid-samples", kKeyValidSamples },
+        { "vendor.qti-ext-enc-nal-length-bs.num-bytes",  kKeyVendorFeatureNalLength },
     }
 };
 
@@ -1683,7 +1684,7 @@ status_t convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
     if (msg->findString("mime", &mime)) {
         meta->setCString(kKeyMIMEType, mime.c_str());
     } else {
-        ALOGE("did not find mime type");
+        ALOGI("did not find mime type");
         return BAD_VALUE;
     }
 
@@ -1733,7 +1734,7 @@ status_t convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
             meta->setInt32(kKeyWidth, width);
             meta->setInt32(kKeyHeight, height);
         } else {
-            ALOGE("did not find width and/or height");
+            ALOGI("did not find width and/or height");
             return BAD_VALUE;
         }
 
@@ -1822,7 +1823,7 @@ status_t convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
         int32_t numChannels, sampleRate;
         if (!msg->findInt32("channel-count", &numChannels) ||
                 !msg->findInt32("sample-rate", &sampleRate)) {
-            ALOGE("did not find channel-count and/or sample-rate");
+            ALOGI("did not find channel-count and/or sample-rate");
             return BAD_VALUE;
         }
         meta->setInt32(kKeyChannelCount, numChannels);
@@ -1892,7 +1893,9 @@ status_t convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
 
     // reassemble the csd data into its original form
     int32_t nalLengthBitstream = 0;
-    msg->findInt32("feature-nal-length-bitstream", &nalLengthBitstream);
+    if (! msg->findInt32("feature-nal-length-bitstream", &nalLengthBitstream)) {
+        msg->findInt32("vendor.qti-ext-enc-nal-length-bs.num-bytes", &nalLengthBitstream);
+    }
     sp<ABuffer> csd0, csd1, csd2;
     if (msg->findBuffer("csd-0", &csd0)) {
         uint8_t* data = csd0->data();
@@ -2218,7 +2221,7 @@ status_t getAudioOffloadInfo(const sp<MetaData>& meta, bool hasVideo,
     }
     info->duration_us = duration;
 
-    int32_t brate = -1;
+    int32_t brate = 0;
     if (!meta->findInt32(kKeyBitRate, &brate)) {
         ALOGV("track of type '%s' does not publish bitrate", mime);
     }

@@ -33,7 +33,8 @@ Camera3InputStream::Camera3InputStream(int id,
         uint32_t width, uint32_t height, int format) :
         Camera3IOStreamBase(id, CAMERA_STREAM_INPUT, width, height, /*maxSize*/0,
                             format, HAL_DATASPACE_UNKNOWN, CAMERA_STREAM_ROTATION_0,
-                            FAKE_ID) {
+                            FAKE_ID,
+                            std::unordered_set<int32_t>{ANDROID_SENSOR_PIXEL_MODE_DEFAULT}) {
 
     if (format == HAL_PIXEL_FORMAT_BLOB) {
         ALOGE("%s: Bad format, BLOB not supported", __FUNCTION__);
@@ -46,10 +47,14 @@ Camera3InputStream::~Camera3InputStream() {
 }
 
 status_t Camera3InputStream::getInputBufferLocked(
-        camera_stream_buffer *buffer) {
+        camera_stream_buffer *buffer, Size *size) {
     ATRACE_CALL();
     status_t res;
 
+    if (size == nullptr) {
+        ALOGE("%s: size must not be null", __FUNCTION__);
+        return BAD_VALUE;
+    }
     // FIXME: will not work in (re-)registration
     if (mState == STATE_IN_CONFIG || mState == STATE_IN_RECONFIG) {
         ALOGE("%s: Stream %d: Buffer registration for input streams"
@@ -77,10 +82,12 @@ status_t Camera3InputStream::getInputBufferLocked(
         return res;
     }
 
+    size->width  = bufferItem.mGraphicBuffer->getWidth();
+    size->height = bufferItem.mGraphicBuffer->getHeight();
+
     anb = bufferItem.mGraphicBuffer->getNativeBuffer();
     assert(anb != NULL);
     fenceFd = bufferItem.mFence->dup();
-
     /**
      * FenceFD now owned by HAL except in case of error,
      * in which case we reassign it to acquire_fence

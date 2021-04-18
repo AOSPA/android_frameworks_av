@@ -116,7 +116,7 @@ public:
                                   audio_io_handle_t *output,
                                   audio_session_t session,
                                   audio_stream_type_t *stream,
-                                  uid_t uid,
+                                  const media::permission::Identity& identity,
                                   const audio_config_t *config,
                                   audio_output_flags_t *flags,
                                   audio_port_handle_t *selectedDeviceId,
@@ -130,7 +130,7 @@ public:
                                          audio_io_handle_t *input,
                                          audio_unique_id_t riid,
                                          audio_session_t session,
-                                         uid_t uid,
+                                         const media::permission::Identity& identity,
                                          const audio_config_base_t *config,
                                          audio_input_flags_t flags,
                                          audio_port_handle_t *selectedDeviceId,
@@ -314,8 +314,9 @@ public:
 
         virtual status_t getSurroundFormats(unsigned int *numSurroundFormats,
                                             audio_format_t *surroundFormats,
-                                            bool *surroundFormatsEnabled,
-                                            bool reported);
+                                            bool *surroundFormatsEnabled);
+        virtual status_t getReportedSurroundFormats(unsigned int *numSurroundFormats,
+                                                    audio_format_t *surroundFormats);
         virtual status_t setSurroundFormatEnabled(audio_format_t audioFormat, bool enabled);
 
         virtual status_t getHwOffloadEncodingFormatsSupportedForA2DP(
@@ -738,9 +739,22 @@ protected:
                     String8(devices.itemAt(0)->address().c_str()) : String8("");
         }
 
-        uint32_t updateCallRouting(const DeviceVector &rxDevices, uint32_t delayMs = 0);
+        status_t updateCallRouting(
+                bool fromCache, uint32_t delayMs = 0, uint32_t *waitMs = nullptr);
+        status_t updateCallRoutingInternal(
+                const DeviceVector &rxDevices, uint32_t delayMs, uint32_t *waitMs);
         sp<AudioPatch> createTelephonyPatch(bool isRx, const sp<DeviceDescriptor> &device,
                                             uint32_t delayMs);
+        /**
+         * @brief selectBestRxSinkDevicesForCall: if the primary module host both Telephony Rx/Tx
+         * devices, and it declares also supporting a HW bridge between the Telephony Rx and the
+         * given sink device for Voice Call audio attributes, select this device in prio.
+         * Otherwise, getNewOutputDevices() is called on the primary output to select sink device.
+         * @param fromCache true to prevent engine reconsidering all product strategies and retrieve
+         * from engine cache.
+         * @return vector of devices, empty if none is found.
+         */
+        DeviceVector selectBestRxSinkDevicesForCall(bool fromCache);
         bool isDeviceOfModule(const sp<DeviceDescriptor>& devDesc, const char *moduleId) const;
 
         virtual status_t startSource(const sp<SwAudioOutputDescriptor>& outputDesc,
@@ -868,14 +882,22 @@ protected:
         // Support for Multi-Stream Decoder (MSD) module
         sp<DeviceDescriptor> getMsdAudioInDevice() const;
         DeviceVector getMsdAudioOutDevices() const;
-        const AudioPatchCollection getMsdPatches() const;
-        status_t getBestMsdAudioProfileFor(const sp<DeviceDescriptor> &outputDevice,
-                                           bool hwAvSync,
-                                           audio_port_config *sourceConfig,
-                                           audio_port_config *sinkConfig) const;
-        PatchBuilder buildMsdPatch(const sp<DeviceDescriptor> &outputDevice) const;
-        status_t setMsdPatches(const DeviceVector *outputDevices = nullptr);
-        void releaseMsdPatches(const DeviceVector& devices);
+        const AudioPatchCollection getMsdOutputPatches() const;
+        status_t getMsdProfiles(bool hwAvSync,
+                const InputProfileCollection &inputProfiles,
+                const OutputProfileCollection &outputProfiles,
+                const sp<DeviceDescriptor> &sourceDevice,
+                const sp<DeviceDescriptor> &sinkDevice,
+                AudioProfileVector &sourceProfiles,
+                AudioProfileVector &sinkProfiles) const;
+        status_t getBestMsdConfig(bool hwAvSync,
+                const AudioProfileVector &sourceProfiles,
+                const AudioProfileVector &sinkProfiles,
+                audio_port_config *sourceConfig,
+                audio_port_config *sinkConfig) const;
+        PatchBuilder buildMsdPatch(bool msdIsSource, const sp<DeviceDescriptor> &device) const;
+        status_t setMsdOutputPatches(const DeviceVector *outputDevices = nullptr);
+        void releaseMsdOutputPatches(const DeviceVector& devices);
 
         // If any, resolve any "dynamic" fields of an Audio Profiles collection
         void updateAudioProfiles(const sp<DeviceDescriptor>& devDesc, audio_io_handle_t ioHandle,

@@ -53,6 +53,11 @@ constexpr const char* kInvalidClientOpPackageName = "";
 
 constexpr int64_t kPaddingUs = 1000000;
 constexpr int64_t kSessionWithPaddingUs = SimulatedTranscoder::kSessionDurationUs + kPaddingUs;
+constexpr int64_t kWatchdogTimeoutUs = 3000000;
+// Pacer settings used for simulated tests. Listed here for reference.
+constexpr int32_t kSimulatedPacerBurstThresholdMs = 500;
+//constexpr int32_t kSimulatedPacerBurstCountQuota = 10;
+//constexpr int32_t kSimulatedPacerBurstTimeQuotaSec = 3;
 
 constexpr const char* kClientOpPackageName = "TestClientPackage";
 
@@ -62,6 +67,25 @@ public:
 
     virtual ~MediaTranscodingServiceSimulatedTest() {
         ALOGI("MediaTranscodingServiceResourceTest destroyed");
+    }
+
+    void testPacerHelper(int numSubmits, int sessionDurationMs, int expectedSuccess) {
+        // Idle to clear out burst history.
+        usleep(kSimulatedPacerBurstThresholdMs * 2 * 1000);
+        for (int i = 0; i < numSubmits; i++) {
+            EXPECT_TRUE(mClient3->submit(i, "test_source_file_0", "test_destination_file_0",
+                                         TranscodingSessionPriority::kNormal, -1 /*bitrateBps*/,
+                                         -1 /*overridePid*/, -1 /*overrideUid*/,
+                                         sessionDurationMs));
+        }
+        for (int i = 0; i < expectedSuccess; i++) {
+            EXPECT_EQ(mClient3->pop(kPaddingUs), EventTracker::Start(CLIENT(3), i));
+            EXPECT_EQ(mClient3->pop(kSessionWithPaddingUs), EventTracker::Finished(CLIENT(3), i));
+        }
+        for (int i = expectedSuccess; i < numSubmits; i++) {
+            EXPECT_EQ(mClient3->pop(kPaddingUs), EventTracker::Failed(CLIENT(3), i));
+            EXPECT_EQ(mClient3->getLastError(), TranscodingErrorCode::kDroppedByService);
+        }
     }
 };
 
@@ -385,5 +409,64 @@ TEST_F(MediaTranscodingServiceSimulatedTest, TestTranscodingThermalPolicy) {
 
     ALOGD("TestTranscodingThermalPolicy finished.");
 }
+
+TEST_F(MediaTranscodingServiceSimulatedTest, TestTranscodingWatchdog) {
+    ALOGD("TestTranscodingWatchdog starting...");
+
+    registerMultipleClients();
+
+    // SimulatedTranscoder itself does not send heartbeat. Its sessions last 1sec
+    // by default, so timeout will not happen normally.
+    // Here we run a session of 4000ms with TranscodingTestConfig. This will trigger
+    // a watchdog timeout on server side. We use it to check that error code is correct.
+    EXPECT_TRUE(mClient1->submit(
+            0, "test_source_file_0", "test_destination_file_0", TranscodingSessionPriority::kNormal,
+            -1 /*bitrateBps*/, -1 /*overridePid*/, -1 /*overrideUid*/, 4000 /*sessionDurationMs*/));
+    EXPECT_EQ(mClient1->pop(100000), EventTracker::Start(CLIENT(1), 0));
+    EXPECT_EQ(mClient1->pop(kWatchdogTimeoutUs - 100000), EventTracker::NoEvent);
+    EXPECT_EQ(mClient1->pop(200000), EventTracker::Failed(CLIENT(1), 0));
+    EXPECT_EQ(mClient1->getLastError(), TranscodingErrorCode::kWatchdogTimeout);
+
+    // After the timeout, submit another request and check it's finished.
+    EXPECT_TRUE(mClient1->submit(1, "test_source_file_1", "test_destination_file_1"));
+    EXPECT_EQ(mClient1->pop(kPaddingUs), EventTracker::Start(CLIENT(1), 1));
+    EXPECT_EQ(mClient1->pop(kSessionWithPaddingUs), EventTracker::Finished(CLIENT(1), 1));
+
+    unregisterMultipleClients();
+
+    ALOGD("TestTranscodingWatchdog finished.");
+}
+
+TEST_F(MediaTranscodingServiceSimulatedTest, TestTranscodingPacerOverCountQuotaOnly) {
+    ALOGD("TestTranscodingPacerOverCountQuotaOnly starting...");
+
+    registerMultipleClients();
+    testPacerHelper(12 /*numSubmits*/, 100 /*sessionDurationMs*/, 12 /*expectedSuccess*/);
+    unregisterMultipleClients();
+
+    ALOGD("TestTranscodingPacerOverCountQuotaOnly finished.");
+}
+
+TEST_F(MediaTranscodingServiceSimulatedTest, TestTranscodingPacerOverTimeQuotaOnly) {
+    ALOGD("TestTranscodingPacerOverTimeQuotaOnly starting...");
+
+    registerMultipleClients();
+    testPacerHelper(5 /*numSubmits*/, 1000 /*sessionDurationMs*/, 5 /*expectedSuccess*/);
+    unregisterMultipleClients();
+
+    ALOGD("TestTranscodingPacerOverTimeQuotaOnly finished.");
+}
+
+TEST_F(MediaTranscodingServiceSimulatedTest, TestTranscodingPacerOverQuota) {
+    ALOGD("TestTranscodingPacerOverQuota starting...");
+
+    registerMultipleClients();
+    testPacerHelper(12 /*numSubmits*/, 400 /*sessionDurationMs*/, 10 /*expectedSuccess*/);
+    unregisterMultipleClients();
+
+    // Idle to clear out burst history. Since we expect it to actually fail, wait for cooldown.
+    ALOGD("TestTranscodingPacerOverQuota finished.");
+}
+
 }  // namespace media
 }  // namespace android

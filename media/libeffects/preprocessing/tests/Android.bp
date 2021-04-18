@@ -11,25 +11,29 @@ package {
 }
 
 cc_test {
-    name: "AudioPreProcessingTest",
-
-    vendor: true,
-
-    relative_install_path: "soundfx",
-
-    srcs: ["PreProcessingTest.cpp"],
-
-    shared_libs: [
+    name: "EffectPreprocessingTest",
+    defaults: ["libaudiopreprocessing-defaults"],
+    gtest: true,
+    test_suites: ["device-tests"],
+    srcs: [
+        "EffectPreprocessingTest.cpp",
+        "EffectTestHelper.cpp",
+    ],
+    static_libs: [
         "libaudiopreprocessing",
         "libaudioutils",
-        "liblog",
-        "libutils",
     ],
-    header_libs: [
-        "libaudioeffects",
-        "libhardware_headers",
-    ],
+}
+
+cc_test {
+    name: "AudioPreProcessingTest",
+    defaults: ["libaudiopreprocessing-defaults"],
     gtest: false,
+    srcs: ["PreProcessingTest.cpp"],
+    static_libs: [
+        "libaudiopreprocessing",
+        "libaudioutils",
+    ],
 }
 
 cc_test {

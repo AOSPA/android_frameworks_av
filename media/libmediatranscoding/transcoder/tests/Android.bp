@@ -1,4 +1,13 @@
 // Unit tests for libmediatranscoder.
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_av_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
 cc_defaults {
     name: "testdefaults",
 
@@ -78,6 +87,13 @@ cc_test {
     name: "MediaSampleWriterTests",
     defaults: ["testdefaults"],
     srcs: ["MediaSampleWriterTests.cpp"],
+}
+
+// HDR Transcode unit test
+cc_test {
+    name: "HdrTranscodeTests",
+    defaults: ["testdefaults"],
+    srcs: ["HdrTranscodeTests.cpp"],
 }
 
 // MediaTranscoder unit test

@@ -126,12 +126,10 @@ status_t MediaRecorderClient::setAudioSource(int as)
         ALOGE("Invalid audio source: %d", as);
         return BAD_VALUE;
     }
-    pid_t pid = IPCThreadState::self()->getCallingPid();
-    uid_t uid = IPCThreadState::self()->getCallingUid();
 
     if ((as == AUDIO_SOURCE_FM_TUNER
-            && !(captureAudioOutputAllowed(pid, uid) || captureTunerAudioInputAllowed(pid, uid)))
-            || !recordingAllowed(String16(""), pid, uid)) {
+            && !(captureAudioOutputAllowed(mIdentity) || captureTunerAudioInputAllowed(mIdentity)))
+            || !recordingAllowed(mIdentity)) {
         return PERMISSION_DENIED;
     }
     Mutex::Autolock lock(mLock);
@@ -380,12 +378,13 @@ status_t MediaRecorderClient::release()
     return NO_ERROR;
 }
 
-MediaRecorderClient::MediaRecorderClient(const sp<MediaPlayerService>& service, pid_t pid,
-        const String16& opPackageName)
+MediaRecorderClient::MediaRecorderClient(const sp<MediaPlayerService>& service,
+        const Identity& identity)
 {
     ALOGV("Client constructor");
-    mPid = pid;
-    mRecorder = AVMediaServiceFactory::get()->createStagefrightRecorder(opPackageName);
+    // identity already validated in createMediaRecorder
+    mIdentity = identity;
+    mRecorder = AVMediaServiceFactory::get()->createStagefrightRecorder(identity);
     mMediaPlayerService = service;
 }
 
@@ -591,6 +590,15 @@ status_t MediaRecorderClient::getPortId(audio_port_handle_t *portId) {
     Mutex::Autolock lock(mLock);
     if (mRecorder != NULL) {
         return mRecorder->getPortId(portId);
+    }
+    return NO_INIT;
+}
+
+status_t MediaRecorderClient::getRtpDataUsage(uint64_t *bytes) {
+    ALOGV("getRtpDataUsage");
+    Mutex::Autolock lock(mLock);
+    if (mRecorder != NULL) {
+        return mRecorder->getRtpDataUsage(bytes);
     }
     return NO_INIT;
 }

@@ -164,9 +164,11 @@ class CameraDeviceBase : public virtual FrameProducer {
             uint32_t width, uint32_t height, int format,
             android_dataspace dataSpace, camera_stream_rotation_t rotation, int *id,
             const String8& physicalCameraId,
+            const std::unordered_set<int32_t>  &sensorPixelModesUsed,
             std::vector<int> *surfaceIds = nullptr,
             int streamSetId = camera3::CAMERA3_STREAM_SET_ID_INVALID,
-            bool isShared = false, uint64_t consumerUsage = 0) = 0;
+            bool isShared = false, bool isMultiResolution = false,
+            uint64_t consumerUsage = 0) = 0;
 
     /**
      * Create an output stream of the requested size, format, rotation and
@@ -179,9 +181,11 @@ class CameraDeviceBase : public virtual FrameProducer {
             bool hasDeferredConsumer, uint32_t width, uint32_t height, int format,
             android_dataspace dataSpace, camera_stream_rotation_t rotation, int *id,
             const String8& physicalCameraId,
+            const std::unordered_set<int32_t> &sensorPixelModesUsed,
             std::vector<int> *surfaceIds = nullptr,
             int streamSetId = camera3::CAMERA3_STREAM_SET_ID_INVALID,
-            bool isShared = false, uint64_t consumerUsage = 0) = 0;
+            bool isShared = false, bool isMultiResolution = false,
+            uint64_t consumerUsage = 0) = 0;
 
     /**
      * Create an input stream of width, height, and format.
@@ -189,7 +193,7 @@ class CameraDeviceBase : public virtual FrameProducer {
      * Return value is the stream ID if non-negative and an error if negative.
      */
     virtual status_t createInputStream(uint32_t width, uint32_t height,
-            int32_t format, /*out*/ int32_t *id) = 0;
+            int32_t format, bool multiResolution, /*out*/ int32_t *id) = 0;
 
     struct StreamInfo {
         uint32_t width;

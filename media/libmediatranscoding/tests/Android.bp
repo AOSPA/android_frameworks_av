@@ -1,5 +1,4 @@
 // Build the unit tests for libmediatranscoding.
-
 package {
     // See: http://go/android-license-faq
     // A large-scale-change added 'default_applicable_licenses' to import
@@ -72,4 +71,16 @@ cc_test {
     defaults: ["libmediatranscoding_test_defaults"],
 
     srcs: ["AdjustableMaxPriorityQueue_tests.cpp"],
+}
+
+//
+// TranscodingLogger unit test
+//
+cc_test {
+    name: "TranscodingLogger_tests",
+    defaults: ["libmediatranscoding_test_defaults"],
+    shared_libs: ["libmediandk", "libstatssocket#30"],
+    static_libs: ["libmediatranscoder", "libstatslog_media"],
+
+    srcs: ["TranscodingLogger_tests.cpp"],
 }

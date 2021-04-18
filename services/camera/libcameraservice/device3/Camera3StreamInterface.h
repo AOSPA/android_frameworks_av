@@ -62,6 +62,8 @@ typedef struct camera_stream {
     android_dataspace_t data_space;
     camera_stream_rotation_t rotation;
     const char* physical_camera_id;
+
+    std::unordered_set<int32_t> sensor_pixel_modes_used;
 } camera_stream_t;
 
 typedef struct camera_stream_buffer {
@@ -71,6 +73,12 @@ typedef struct camera_stream_buffer {
     int acquire_fence;
     int release_fence;
 } camera_stream_buffer_t;
+
+struct Size {
+    uint32_t width;
+    uint32_t height;
+    explicit Size(uint32_t w = 0, uint32_t h = 0) : width(w), height(h){}
+};
 
 enum {
     /**
@@ -98,13 +106,15 @@ class OutputStreamInfo {
         uint64_t consumerUsage;
         bool finalized = false;
         bool supportsOffline = false;
+        std::unordered_set<int32_t> sensorPixelModesUsed;
         OutputStreamInfo() :
             width(-1), height(-1), format(-1), dataSpace(HAL_DATASPACE_UNKNOWN),
             consumerUsage(0) {}
         OutputStreamInfo(int _width, int _height, int _format, android_dataspace _dataSpace,
-                uint64_t _consumerUsage) :
+                uint64_t _consumerUsage, const std::unordered_set<int32_t>& _sensorPixelModesUsed) :
             width(_width), height(_height), format(_format),
-            dataSpace(_dataSpace), consumerUsage(_consumerUsage) {}
+            dataSpace(_dataSpace), consumerUsage(_consumerUsage),
+            sensorPixelModesUsed(_sensorPixelModesUsed) {}
 };
 
 /**
@@ -127,6 +137,16 @@ class Camera3StreamInterface : public virtual RefBase {
      * Get the output stream set id.
      */
     virtual int      getStreamSetId() const = 0;
+
+    /**
+     * Is this stream part of a multi-resolution stream set
+     */
+    virtual bool     isMultiResolution() const = 0;
+
+    /**
+     * Get the HAL stream group id for a multi-resolution stream set
+     */
+    virtual int      getHalStreamGroupId() const = 0;
 
     /**
      * Get the stream's dimensions and format
@@ -352,7 +372,8 @@ class Camera3StreamInterface : public virtual RefBase {
      * Normally this call will block until the handed out buffer count is less than the stream
      * max buffer count; if respectHalLimit is set to false, this is ignored.
      */
-    virtual status_t getInputBuffer(camera_stream_buffer *buffer, bool respectHalLimit = true) = 0;
+    virtual status_t getInputBuffer(camera_stream_buffer *buffer,
+            Size *size, bool respectHalLimit = true) = 0;
 
     /**
      * Return a buffer to the stream after use by the HAL.

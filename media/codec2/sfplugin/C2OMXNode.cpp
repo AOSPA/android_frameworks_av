@@ -33,12 +33,14 @@
 #include <OMX_IndexExt.h>
 
 #include <android/fdsan.h>
+#include <media/stagefright/foundation/ColorUtils.h>
 #include <media/stagefright/omx/OMXUtils.h>
 #include <media/stagefright/MediaErrors.h>
 #include <ui/Fence.h>
 #include <ui/GraphicBuffer.h>
 #include <utils/Thread.h>
 
+#include "utils/Codec2Mapper.h"
 #include "C2OMXNode.h"
 
 namespace android {
@@ -69,6 +71,23 @@ public:
         it->second.workList.emplace_back(
                 std::move(work), fenceFd, std::move(fd0), std::move(fd1));
         jobs->cond.broadcast();
+    }
+
+    void setDataspace(android_dataspace dataspace) {
+        Mutexed<Jobs>::Locked jobs(mJobs);
+        ColorUtils::convertDataSpaceToV0(dataspace);
+        jobs->configUpdate.emplace_back(new C2StreamDataSpaceInfo::input(0u, dataspace));
+        int32_t standard;
+        int32_t transfer;
+        int32_t range;
+        ColorUtils::getColorConfigFromDataSpace(dataspace, &range, &standard, &transfer);
+        std::unique_ptr<C2StreamColorAspectsInfo::input> colorAspects =
+            std::make_unique<C2StreamColorAspectsInfo::input>(0u);
+        if (C2Mapper::map(standard, &colorAspects->primaries, &colorAspects->matrix)
+                && C2Mapper::map(transfer, &colorAspects->transfer)
+                && C2Mapper::map(range, &colorAspects->range)) {
+            jobs->configUpdate.push_back(std::move(colorAspects));
+        }
     }
 
 protected:
@@ -102,6 +121,9 @@ protected:
                     uniqueFds.push_back(std::move(queue.workList.front().fd1));
                     queue.workList.pop_front();
                 }
+                for (const std::unique_ptr<C2Param> &param : jobs->configUpdate) {
+                    items.front()->input.configUpdate.emplace_back(C2Param::Copy(*param));
+                }
 
                 jobs.unlock();
                 for (int fenceFd : fenceFds) {
@@ -119,6 +141,7 @@ protected:
                 queued = true;
             }
             if (queued) {
+                jobs->configUpdate.clear();
                 return true;
             }
             if (i == 0) {
@@ -161,6 +184,7 @@ private:
         std::map<std::weak_ptr<Codec2Client::Component>,
                  Queue,
                  std::owner_less<std::weak_ptr<Codec2Client::Component>>> queues;
+        std::vector<std::unique_ptr<C2Param>> configUpdate;
         Condition cond;
     };
     Mutexed<Jobs> mJobs;
@@ -172,6 +196,9 @@ C2OMXNode::C2OMXNode(const std::shared_ptr<Codec2Client::Component> &comp)
       mQueueThread(new QueueThread) {
     android_fdsan_set_error_level(ANDROID_FDSAN_ERROR_LEVEL_WARN_ALWAYS);
     mQueueThread->run("C2OMXNode", PRIORITY_AUDIO);
+
+    Mutexed<android_dataspace>::Locked ds(mDataspace);
+    *ds = HAL_DATASPACE_UNKNOWN;
 }
 
 status_t C2OMXNode::freeNode() {
@@ -209,15 +236,23 @@ status_t C2OMXNode::getParameter(OMX_INDEXTYPE index, void *params, size_t size)
 
             pDef->nBufferCountActual = 16;
 
-            std::shared_ptr<Codec2Client::Component> comp = mComp.lock();
-            C2PortActualDelayTuning::input inputDelay(0);
-            C2ActualPipelineDelayTuning pipelineDelay(0);
-            c2_status_t c2err = comp->query(
-                    {&inputDelay, &pipelineDelay}, {}, C2_DONT_BLOCK, nullptr);
-            if (c2err == C2_OK || c2err == C2_BAD_INDEX) {
-                pDef->nBufferCountActual = 4;
-                pDef->nBufferCountActual += (inputDelay ? inputDelay.value : 0u);
-                pDef->nBufferCountActual += (pipelineDelay ? pipelineDelay.value : 0u);
+            // WORKAROUND: having more slots improve performance while consuming
+            // more memory. This is a temporary workaround to reduce memory for
+            // larger-than-4K scenario.
+            if (mWidth * mHeight > 4096 * 2340) {
+                std::shared_ptr<Codec2Client::Component> comp = mComp.lock();
+                C2PortActualDelayTuning::input inputDelay(0);
+                C2ActualPipelineDelayTuning pipelineDelay(0);
+                c2_status_t c2err = C2_NOT_FOUND;
+                if (comp) {
+                    c2err = comp->query(
+                            {&inputDelay, &pipelineDelay}, {}, C2_DONT_BLOCK, nullptr);
+                }
+                if (c2err == C2_OK || c2err == C2_BAD_INDEX) {
+                    pDef->nBufferCountActual = 4;
+                    pDef->nBufferCountActual += (inputDelay ? inputDelay.value : 0u);
+                    pDef->nBufferCountActual += (pipelineDelay ? pipelineDelay.value : 0u);
+                }
             }
 
             pDef->eDomain = OMX_PortDomainVideo;
@@ -384,6 +419,8 @@ status_t C2OMXNode::emptyBuffer(
         if (err != OK) {
             (void)fd0.release();
             (void)fd1.release();
+            native_handle_close(handle);
+            native_handle_delete(handle);
             return UNKNOWN_ERROR;
         }
         block = _C2BlockFactory::CreateGraphicBlock(alloc);
@@ -451,8 +488,11 @@ status_t C2OMXNode::dispatchMessage(const omx_message& msg) {
     android_dataspace dataSpace = (android_dataspace)msg.u.event_data.data1;
     uint32_t pixelFormat = msg.u.event_data.data3;
 
-    // TODO: set dataspace on component to see if it impacts color aspects
     ALOGD("dataspace changed to %#x pixel format: %#x", dataSpace, pixelFormat);
+    mQueueThread->setDataspace(dataSpace);
+
+    Mutexed<android_dataspace>::Locked ds(mDataspace);
+    *ds = dataSpace;
     return OK;
 }
 
@@ -483,6 +523,10 @@ void C2OMXNode::onInputBufferDone(c2_cntr64_t index) {
         (void)bufferIds->erase(it);
     }
     (void)mBufferSource->onInputBufferEmptied(bufferId, -1);
+}
+
+android_dataspace C2OMXNode::getDataspace() {
+    return *mDataspace.lock();
 }
 
 }  // namespace android

@@ -232,8 +232,7 @@ NuPlayer::NuPlayer(pid_t pid, const sp<MediaClock> &mediaClock)
       mPausedByClient(true),
       mPausedForBuffering(false),
       mIsDrmProtected(false),
-      mDataSourceType(DATA_SOURCE_TYPE_NONE),
-      mIsSeekPrerollMode(false) {
+      mDataSourceType(DATA_SOURCE_TYPE_NONE) {
     CHECK(mediaClock != NULL);
     clearFlushComplete();
 }
@@ -1072,8 +1071,8 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 }
 
                 // Pause the renderer till video queue pre-rolls
-                if (mVideoDecoder != NULL && mAudioDecoder != NULL
-                        && !mRenderer->isVideoSampleReceived()) {
+                if (!mPaused && mVideoDecoder != NULL && mAudioDecoder != NULL
+                   && !mRenderer->isVideoSampleReceived()) {
                     ALOGI("NOTE: Pausing Renderer after decoders instantiated..");
                     mRenderer->pause();
                     // wake up renderer if timed out
@@ -1384,14 +1383,6 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 // client, wait for client to resume NuPlayer
                 ALOGI("NOTE: Video preroll complete.. resume renderer..");
                 mRenderer->resume();
-            } else if (what == Renderer::kWhatSeekCompleteFromPreroll) {
-                if (mIsSeekPrerollMode) {
-                    // seek preroll is completed now
-                    mIsSeekPrerollMode = false;
-                    ALOGI("NOTE: Notify seek complete from seek preroll");
-                    notifyDriverSeekComplete();
-                }
-                // else, ignore it
             } else if (what == Renderer::kWhatAudioTearDown) {
                 int32_t reason;
                 CHECK(msg->findInt32("reason", &reason));
@@ -1478,17 +1469,6 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                     notifyDriverSeekComplete();
                 }
                 break;
-            }
-
-            if (!mPaused && mVideoDecoder != NULL && mAudioDecoder != NULL) {
-                // A/V track, pausing renderer for video pre-roll during seek
-                ALOGI("NOTE: Pausing Renderer for seek...");
-                mIsSeekPrerollMode = true;
-                mRenderer->pause();
-                // wake up renderer if timed out
-                sp<AMessage> msg = new AMessage(kWhatWakeupRendererFromPreroll, this);
-                // seek does more things, enlarge timeout threshold
-                msg->post(kDefaultVideoPrerollMaxUs + 2000000);
             }
 
             mDeferredActions.push_back(
@@ -1602,11 +1582,6 @@ void NuPlayer::onResume() {
         instantiateDecoder(true /* audio */, &mAudioDecoder);
     }
     if (mRenderer != NULL) {
-        if (mVideoDecoder != NULL && !mRenderer->isVideoPrerollCompleted()) {
-            // don't worry, resume will be issued again from renderer after preroll completed
-            ALOGI("NOTE: preroll in progress, delay renderer resume");
-            return;
-        }
         mRenderer->resume();
     } else {
         ALOGW("resume called when renderer is gone or not set");
@@ -2607,10 +2582,7 @@ void NuPlayer::performResumeDecoders(bool needNotify) {
 void NuPlayer::finishResume() {
     if (mResumePending) {
         mResumePending = false;
-        if (!mIsSeekPrerollMode || mRenderer->isVideoPrerollCompleted()) {
-            notifyDriverSeekComplete();
-        }
-        // else : seek preroll in progress. let renderer notify seek complete
+        notifyDriverSeekComplete();
     }
 }
 
@@ -2995,23 +2967,24 @@ void NuPlayer::sendIMSRxNotice(const sp<AMessage> &msg) {
     in.writeInt32(payloadType);
 
     switch (payloadType) {
-        case NuPlayer::RTPSource::RTCP_TSFB:   // RTCP TSFB
-        case NuPlayer::RTPSource::RTCP_PSFB:   // RTCP PSFB
-        case NuPlayer::RTPSource::RTP_AUTODOWN:
+        case ARTPSource::RTCP_TSFB:   // RTCP TSFB
+        case ARTPSource::RTCP_PSFB:   // RTCP PSFB
+        case ARTPSource::RTP_AUTODOWN:
         {
             int32_t feedbackType, id;
             CHECK(msg->findInt32("feedback-type", &feedbackType));
             CHECK(msg->findInt32("sender", &id));
             in.writeInt32(feedbackType);
             in.writeInt32(id);
-            if (payloadType == NuPlayer::RTPSource::RTCP_TSFB) {
+            if (payloadType == ARTPSource::RTCP_TSFB) {
                 int32_t bitrate;
                 CHECK(msg->findInt32("bit-rate", &bitrate));
                 in.writeInt32(bitrate);
             }
             break;
         }
-        case NuPlayer::RTPSource::RTP_QUALITY:
+        case ARTPSource::RTP_QUALITY:
+        case ARTPSource::RTP_QUALITY_EMC:
         {
             int32_t feedbackType, bitrate;
             int32_t highestSeqNum, baseSeqNum, prevExpected;
@@ -3032,7 +3005,7 @@ void NuPlayer::sendIMSRxNotice(const sp<AMessage> &msg) {
             in.writeInt32(prevNumBufRecv);
             break;
         }
-        case NuPlayer::RTPSource::RTP_CVO:
+        case ARTPSource::RTP_CVO:
         {
             int32_t cvo;
             CHECK(msg->findInt32("cvo", &cvo));

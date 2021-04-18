@@ -18,7 +18,6 @@
 #include <stdlib.h>
 #include "LVPSA.h"
 #include "LVPSA_Private.h"
-#include "InstAlloc.h"
 
 /************************************************************************************/
 /*                                                                                  */
@@ -49,10 +48,7 @@ LVPSA_RETURN LVPSA_Init(pLVPSA_Handle_t* phInstance, LVPSA_InitParams_t* pInitPa
     LVM_UINT32 BufferLength = 0;
 
     /* Set the instance handle if not already initialised */
-    *phInstance = calloc(1, sizeof(*pLVPSA_Inst));
-    if (*phInstance == LVM_NULL) {
-        return LVPSA_ERROR_NULLADDRESS;
-    }
+    *phInstance = new LVPSA_InstancePr_t{};
     pLVPSA_Inst = (LVPSA_InstancePr_t*)*phInstance;
 
     pLVPSA_Inst->pScratch = pScratch;
@@ -191,6 +187,6 @@ void LVPSA_DeInit(pLVPSA_Handle_t* phInstance) {
         free(pLVPSA_Inst->pQPD_Taps);
         pLVPSA_Inst->pQPD_Taps = LVM_NULL;
     }
-    free(pLVPSA_Inst);
+    delete pLVPSA_Inst;
     *phInstance = LVM_NULL;
 }
