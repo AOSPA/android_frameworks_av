@@ -104,6 +104,7 @@ static const uint32_t kWMASupportedMaxByteRates[kWmaStandardFrequencies][kWmaSta
     {20008, 32048},
     {20000, 48000},
     {48024, 320032},
+    {256008, 256008}
 };
 
 template <typename T>
