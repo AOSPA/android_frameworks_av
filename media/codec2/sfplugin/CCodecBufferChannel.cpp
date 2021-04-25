@@ -1238,9 +1238,6 @@ status_t CCodecBufferChannel::start(
             }
             outputGeneration = output->generation;
         }
-        if (maxDequeueCount > 0) {
-            mComponent->setOutputSurfaceMaxDequeueCount(maxDequeueCount);
-        }
 
         bool graphic = (oStreamFormat.value == C2BufferData::GRAPHIC);
         C2BlockPool::local_id_t outputPoolId_;
@@ -1380,7 +1377,8 @@ status_t CCodecBufferChannel::start(
             mComponent->setOutputSurface(
                     outputPoolId_,
                     outputSurface,
-                    outputGeneration);
+                    outputGeneration,
+                    maxDequeueCount);
         }
 
         if (oStreamFormat.value == C2BufferData::LINEAR) {
@@ -1523,14 +1521,14 @@ status_t CCodecBufferChannel::requestInitialInputBuffers() {
 void CCodecBufferChannel::stop() {
     mSync.stop();
     mFirstValidFrameIndex = mFrameIndex.load(std::memory_order_relaxed);
-    if (mInputSurface != nullptr) {
-        mInputSurface.reset();
-    }
-    mPipelineWatcher.lock()->flush();
 }
 
 void CCodecBufferChannel::reset() {
     stop();
+    if (mInputSurface != nullptr) {
+        mInputSurface.reset();
+    }
+    mPipelineWatcher.lock()->flush();
     {
         Mutexed<Input>::Locked input(mInput);
         input->buffers.reset(new DummyInputBuffers(""));
@@ -1558,8 +1556,10 @@ void CCodecBufferChannel::release() {
 
 void CCodecBufferChannel::flush(const std::list<std::unique_ptr<C2Work>> &flushedWork) {
     ALOGV("[%s] flush", mName);
+    std::vector<uint64_t> indices;
     std::list<std::unique_ptr<C2Work>> configs;
     for (const std::unique_ptr<C2Work> &work : flushedWork) {
+        indices.push_back(work->input.ordinal.frameIndex.peeku());
         if (!(work->input.flags & C2FrameData::FLAG_CODEC_CONFIG)) {
             continue;
         }
@@ -1572,6 +1572,7 @@ void CCodecBufferChannel::flush(const std::list<std::unique_ptr<C2Work>> &flushe
         std::unique_ptr<C2Work> copy(new C2Work);
         copy->input.flags = C2FrameData::flags_t(work->input.flags | C2FrameData::FLAG_DROP_FRAME);
         copy->input.ordinal = work->input.ordinal;
+        copy->input.ordinal.frameIndex = mFrameIndex++;
         copy->input.buffers.insert(
                 copy->input.buffers.begin(),
                 work->input.buffers.begin(),
@@ -1600,7 +1601,12 @@ void CCodecBufferChannel::flush(const std::list<std::unique_ptr<C2Work>> &flushe
             output->buffers->flushStash();
         }
     }
-    mPipelineWatcher.lock()->flush();
+    {
+        Mutexed<PipelineWatcher>::Locked watcher(mPipelineWatcher);
+        for (uint64_t index : indices) {
+            watcher->onWorkDone(index);
+        }
+    }
 }
 
 void CCodecBufferChannel::onWorkDone(
@@ -2002,10 +2008,11 @@ status_t CCodecBufferChannel::setSurface(const sp<Surface> &newSurface) {
                 & ((1 << 10) - 1));
 
     sp<IGraphicBufferProducer> producer;
+    int maxDequeueCount = mOutputSurface.lock()->maxDequeueBuffers;
     if (newSurface) {
         newSurface->setScalingMode(NATIVE_WINDOW_SCALING_MODE_SCALE_TO_WINDOW);
         newSurface->setDequeueTimeout(kDequeueTimeoutNs);
-        newSurface->setMaxDequeuedBufferCount(mOutputSurface.lock()->maxDequeueBuffers);
+        newSurface->setMaxDequeuedBufferCount(maxDequeueCount);
         producer = newSurface->getIGraphicBufferProducer();
         producer->setGenerationNumber(generation);
     } else {
@@ -2025,7 +2032,8 @@ status_t CCodecBufferChannel::setSurface(const sp<Surface> &newSurface) {
         if (mComponent->setOutputSurface(
                 outputPoolId,
                 producer,
-                generation) != C2_OK) {
+                generation,
+                maxDequeueCount) != C2_OK) {
             ALOGI("[%s] setSurface: component setOutputSurface failed", mName);
             return INVALID_OPERATION;
         }
