@@ -1378,22 +1378,25 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
                 }
                 if (desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
                     directSessionInUse = true;
-                    ALOGD("%s Direct PCM already in use", __func__);
+                    ALOGV("%s Direct PCM already in use", __func__);
                 }
                 if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
                     offloadSessionInUse = true;
-                    ALOGD("%s Compress Offload already in use", __func__);
+                    ALOGV("%s Compress Offload already in use", __func__);
                 }
             }
         }
-        if (outputDesc != nullptr) {
-            if ((((flags == AUDIO_OUTPUT_FLAG_DIRECT) && directSessionInUse) ||
-                ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse)) &&
-                 session != outputDesc->mDirectClientSession) {
-                 ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
-                       "is not the same as requesting client (%d) for different output conf",
-                 outputDesc->mDirectClientSession, session);
-                 return NAME_NOT_FOUND;
+        if (outputDesc != nullptr &&
+            ((flags == AUDIO_OUTPUT_FLAG_DIRECT && directSessionInUse) ||
+            ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse))) {
+            if (session != outputDesc->mDirectClientSession) {
+                ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
+                      "is not the same as requesting client (%d) for different output conf",
+                outputDesc->mDirectClientSession, session);
+                return NAME_NOT_FOUND;
+            } else {
+                ALOGV("%s close previous output on same client session %d ", __func__, session);
+                closeOutput(outputDesc->mIoHandle);
             }
         }
     }
