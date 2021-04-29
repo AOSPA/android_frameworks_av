@@ -64,13 +64,6 @@ AudioSource::AudioSource(
 {
   set(attr, identity, sampleRate, channelCount, outSampleRate, selectedDeviceId,
       selectedMicDirection, selectedMicFieldDimension);
-
-  bool bAggregate = AVUtils::get()->isAudioSourceAggregate(attr, channelCount);
-  if (bAggregate) {
-      mInitCheck = NO_INIT;
-      return;
-  }
-
 }
 
 void AudioSource::set(
@@ -99,6 +92,12 @@ void AudioSource::set(
         sampleRate, outSampleRate, channelCount);
   CHECK(channelCount == 1 || channelCount == 2);
   CHECK(sampleRate > 0);
+
+  bool bAggregate = AVUtils::get()->isAudioSourceAggregate(attr, channelCount);
+  if (bAggregate) {
+      mInitCheck = NO_INIT;
+      return;
+  }
 
   size_t minFrameCount;
   status_t status = AudioRecord::getMinFrameCount(&minFrameCount,
