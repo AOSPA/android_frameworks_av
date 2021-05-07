@@ -57,10 +57,10 @@ Status TunerFilter::getQueueDesc(AidlMQDesc* _aidl_return) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
 
-    MQDesc dvrMQDesc;
+    MQDesc filterMQDesc;
     Result res;
     mFilter->getQueueDesc([&](Result r, const MQDesc& desc) {
-        dvrMQDesc = desc;
+        filterMQDesc = desc;
         res = r;
     });
     if (res != Result::SUCCESS) {
@@ -69,7 +69,7 @@ Status TunerFilter::getQueueDesc(AidlMQDesc* _aidl_return) {
 
     AidlMQDesc aidlMQDesc;
     unsafeHidlToAidlMQDescriptor<uint8_t, int8_t, SynchronizedReadWrite>(
-                dvrMQDesc,  &aidlMQDesc);
+                filterMQDesc,  &aidlMQDesc);
     *_aidl_return = move(aidlMQDesc);
     return Status::ok();
 }
@@ -471,7 +471,7 @@ Status TunerFilter::getAvSharedHandleInfo(TunerFilterSharedHandleInfo* _aidl_ret
         res = r;
         if (res == Result::SUCCESS) {
             TunerFilterSharedHandleInfo info{
-                .handle = dupToAidl(hidl_handle(avMemory.getNativeHandle())),
+                .handle = dupToAidl(avMemory),
                 .size = static_cast<int64_t>(avMemSize),
             };
             *_aidl_return = move(info);
@@ -480,7 +480,10 @@ Status TunerFilter::getAvSharedHandleInfo(TunerFilterSharedHandleInfo* _aidl_ret
         }
     });
 
-    return Status::fromServiceSpecificError(static_cast<int32_t>(res));
+    if (res != Result::SUCCESS) {
+        return Status::fromServiceSpecificError(static_cast<int32_t>(res));
+    }
+    return Status::ok();
 }
 
 Status TunerFilter::releaseAvHandle(
@@ -496,7 +499,6 @@ Status TunerFilter::releaseAvHandle(
     }
     return Status::ok();
 }
-
 
 Status TunerFilter::start() {
     if (mFilter == nullptr) {
@@ -683,7 +685,7 @@ void TunerFilter::FilterCallback::getMediaEvent(
         DemuxFilterMediaEvent mediaEvent = e.media();
         TunerFilterMediaEvent tunerMedia;
 
-        tunerMedia.streamId = static_cast<int>(mediaEvent.streamId);
+        tunerMedia.streamId = static_cast<char16_t>(mediaEvent.streamId);
         tunerMedia.isPtsPresent = mediaEvent.isPtsPresent;
         tunerMedia.pts = static_cast<long>(mediaEvent.pts);
         tunerMedia.dataLength = static_cast<int>(mediaEvent.dataLength);
@@ -730,10 +732,10 @@ void TunerFilter::FilterCallback::getSectionEvent(
         DemuxFilterSectionEvent sectionEvent = e.section();
         TunerFilterSectionEvent tunerSection;
 
-        tunerSection.tableId = static_cast<char>(sectionEvent.tableId);
-        tunerSection.version = static_cast<char>(sectionEvent.version);
-        tunerSection.sectionNum = static_cast<char>(sectionEvent.sectionNum);
-        tunerSection.dataLength = static_cast<char>(sectionEvent.dataLength);
+        tunerSection.tableId = static_cast<char16_t>(sectionEvent.tableId);
+        tunerSection.version = static_cast<char16_t>(sectionEvent.version);
+        tunerSection.sectionNum = static_cast<char16_t>(sectionEvent.sectionNum);
+        tunerSection.dataLength = static_cast<char16_t>(sectionEvent.dataLength);
 
         TunerFilterEvent tunerEvent;
         tunerEvent.set<TunerFilterEvent::section>(move(tunerSection));
@@ -747,8 +749,8 @@ void TunerFilter::FilterCallback::getPesEvent(
         DemuxFilterPesEvent pesEvent = e.pes();
         TunerFilterPesEvent tunerPes;
 
-        tunerPes.streamId = static_cast<char>(pesEvent.streamId);
-        tunerPes.dataLength = static_cast<int>(pesEvent.dataLength);
+        tunerPes.streamId = static_cast<char16_t>(pesEvent.streamId);
+        tunerPes.dataLength = static_cast<char16_t>(pesEvent.dataLength);
         tunerPes.mpuSequenceNumber = static_cast<int>(pesEvent.mpuSequenceNumber);
 
         TunerFilterEvent tunerEvent;
@@ -775,9 +777,9 @@ void TunerFilter::FilterCallback::getTsRecordEvent(vector<DemuxFilterEvent::Even
         }
 
         if (tsRecordEvent.pid.getDiscriminator() == DemuxPid::hidl_discriminator::tPid) {
-            tunerTsRecord.pid = static_cast<char>(tsRecordEvent.pid.tPid());
+            tunerTsRecord.pid = static_cast<char16_t>(tsRecordEvent.pid.tPid());
         } else {
-            tunerTsRecord.pid = static_cast<char>(Constant::INVALID_TS_PID);
+            tunerTsRecord.pid = static_cast<char16_t>(Constant::INVALID_TS_PID);
         }
 
         tunerTsRecord.scIndexMask = scIndexMask;
@@ -837,7 +839,7 @@ void TunerFilter::FilterCallback::getDownloadEvent(
         tunerDownload.itemFragmentIndex = static_cast<int>(downloadEvent.itemFragmentIndex);
         tunerDownload.mpuSequenceNumber = static_cast<int>(downloadEvent.mpuSequenceNumber);
         tunerDownload.lastItemFragmentIndex = static_cast<int>(downloadEvent.lastItemFragmentIndex);
-        tunerDownload.dataLength = static_cast<char>(downloadEvent.dataLength);
+        tunerDownload.dataLength = static_cast<char16_t>(downloadEvent.dataLength);
 
         TunerFilterEvent tunerEvent;
         tunerEvent.set<TunerFilterEvent::download>(move(tunerDownload));
@@ -851,7 +853,7 @@ void TunerFilter::FilterCallback::getIpPayloadEvent(
         DemuxFilterIpPayloadEvent ipPayloadEvent = e.ipPayload();
         TunerFilterIpPayloadEvent tunerIpPayload;
 
-        tunerIpPayload.dataLength = static_cast<char>(ipPayloadEvent.dataLength);
+        tunerIpPayload.dataLength = static_cast<char16_t>(ipPayloadEvent.dataLength);
 
         TunerFilterEvent tunerEvent;
         tunerEvent.set<TunerFilterEvent::ipPayload>(move(tunerIpPayload));

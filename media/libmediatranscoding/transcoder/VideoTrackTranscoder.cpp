@@ -21,7 +21,7 @@
 #include <android-base/properties.h>
 #include <media/NdkCommon.h>
 #include <media/VideoTrackTranscoder.h>
-#include <utils/AndroidThreads.h>
+#include <sys/prctl.h>
 
 using namespace AMediaFormatUtils;
 
@@ -220,16 +220,15 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
         return AMEDIA_ERROR_INVALID_PARAMETER;
     }
 
-    int32_t bitrate;
-    if (!AMediaFormat_getInt32(encoderFormat, AMEDIAFORMAT_KEY_BIT_RATE, &bitrate)) {
-        status = mMediaSampleReader->getEstimatedBitrateForTrack(mTrackIndex, &bitrate);
+    if (!AMediaFormat_getInt32(encoderFormat, AMEDIAFORMAT_KEY_BIT_RATE, &mConfiguredBitrate)) {
+        status = mMediaSampleReader->getEstimatedBitrateForTrack(mTrackIndex, &mConfiguredBitrate);
         if (status != AMEDIA_OK) {
             LOG(ERROR) << "Unable to estimate bitrate. Using default " << kDefaultBitrateMbps;
-            bitrate = kDefaultBitrateMbps;
+            mConfiguredBitrate = kDefaultBitrateMbps;
         }
 
-        LOG(INFO) << "Configuring bitrate " << bitrate;
-        AMediaFormat_setInt32(encoderFormat, AMEDIAFORMAT_KEY_BIT_RATE, bitrate);
+        LOG(INFO) << "Configuring bitrate " << mConfiguredBitrate;
+        AMediaFormat_setInt32(encoderFormat, AMEDIAFORMAT_KEY_BIT_RATE, mConfiguredBitrate);
     }
 
     SetDefaultFormatValueFloat(AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, encoderFormat,
@@ -253,6 +252,10 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
     // Always encode without rotation. The rotation degree will be transferred directly to
     // MediaSampleWriter track format, and MediaSampleWriter will call AMediaMuxer_setOrientationHint.
     AMediaFormat_setInt32(encoderFormat, AMEDIAFORMAT_KEY_ROTATION, 0);
+
+    // Request encoder to use background priorities by default.
+    SetDefaultFormatValueInt32(TBD_AMEDIACODEC_PARAMETER_KEY_BACKGROUND_MODE, encoderFormat,
+                               1 /* true */);
 
     mDestinationFormat = std::shared_ptr<AMediaFormat>(encoderFormat, &AMediaFormat_delete);
 
@@ -335,6 +338,7 @@ media_status_t VideoTrackTranscoder::configureDestinationFormat(
     static const std::vector<EntryCopier> kEncoderEntriesToCopy{
             ENTRY_COPIER2(AMEDIAFORMAT_KEY_OPERATING_RATE, Float, Int32),
             ENTRY_COPIER(AMEDIAFORMAT_KEY_PRIORITY, Int32),
+            ENTRY_COPIER(TBD_AMEDIACODEC_PARAMETER_KEY_BACKGROUND_MODE, Int32),
     };
     CopyFormatEntries(mDestinationFormat.get(), decoderFormat.get(), kEncoderEntriesToCopy);
 
@@ -589,7 +593,7 @@ void VideoTrackTranscoder::updateTrackFormat(AMediaFormat* outputFormat, bool fr
 }
 
 media_status_t VideoTrackTranscoder::runTranscodeLoop(bool* stopped) {
-    androidSetThreadPriority(0 /* tid (0 = current) */, ANDROID_PRIORITY_VIDEO);
+    prctl(PR_SET_NAME, (unsigned long)"VideTranscodTrd", 0, 0, 0);
 
     // Push start decoder and encoder as two messages, so that these are subject to the
     // stop request as well. If the session is cancelled (or paused) immediately after start,

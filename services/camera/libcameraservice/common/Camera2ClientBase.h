@@ -52,6 +52,7 @@ public:
                       const String8& cameraId,
                       int api1CameraId,
                       int cameraFacing,
+                      int sensorOrientation,
                       int clientPid,
                       uid_t clientUid,
                       int servicePid);
@@ -66,6 +67,7 @@ public:
 
     virtual void          notifyError(int32_t errorCode,
                                       const CaptureResultExtras& resultExtras);
+    virtual status_t      notifyActive();  // Returns errors on app ops permission failures
     virtual void          notifyIdle(int64_t requestCount, int64_t resultErrorCount,
                                      bool deviceError,
                                      const std::vector<hardware::CameraStreamStats>& streamStats);

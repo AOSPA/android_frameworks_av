@@ -1378,22 +1378,25 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
                 }
                 if (desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
                     directSessionInUse = true;
-                    ALOGD("%s Direct PCM already in use", __func__);
+                    ALOGV("%s Direct PCM already in use", __func__);
                 }
                 if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
                     offloadSessionInUse = true;
-                    ALOGD("%s Compress Offload already in use", __func__);
+                    ALOGV("%s Compress Offload already in use", __func__);
                 }
             }
         }
-        if (outputDesc != nullptr) {
-            if ((((flags == AUDIO_OUTPUT_FLAG_DIRECT) && directSessionInUse) ||
-                ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse)) &&
-                 session != outputDesc->mDirectClientSession) {
-                 ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
-                       "is not the same as requesting client (%d) for different output conf",
-                 outputDesc->mDirectClientSession, session);
-                 return NAME_NOT_FOUND;
+        if (outputDesc != nullptr &&
+            ((flags == AUDIO_OUTPUT_FLAG_DIRECT && directSessionInUse) ||
+            ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse))) {
+            if (session != outputDesc->mDirectClientSession) {
+                ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
+                      "is not the same as requesting client (%d) for different output conf",
+                outputDesc->mDirectClientSession, session);
+                return NAME_NOT_FOUND;
+            } else {
+                ALOGV("%s close previous output on same client session %d ", __func__, session);
+                closeOutput(outputDesc->mIoHandle);
             }
         }
     }
@@ -2440,7 +2443,8 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
             // Prevent from storing invalid requested device id in clients
             requestedDeviceId = AUDIO_PORT_HANDLE_NONE;
             device = mEngine->getInputDeviceForAttributes(attributes, uid, &policyMix);
-            ALOGV("%s found device type is 0x%X", __FUNCTION__, device->type());
+            ALOGV_IF(device != nullptr, "%s found device type is 0x%X",
+                __FUNCTION__, device->type());
         }
         if (device == nullptr) {
             ALOGW("getInputForAttr() could not find device for source %d", attributes.source);
@@ -2559,6 +2563,21 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
     if (profile->getModuleHandle() == 0) {
         ALOGE("getInputForAttr(): HW module %s not opened", profile->getModuleName());
         return input;
+    }
+
+    // Reuse an already opened input if a client with the same session ID already exists
+    // on that input
+    for (size_t i = 0; i < mInputs.size(); i++) {
+        sp <AudioInputDescriptor> desc = mInputs.valueAt(i);
+        if (desc->mProfile != profile) {
+            continue;
+        }
+        RecordClientVector clients = desc->clientsList();
+        for (const auto &client : clients) {
+            if (session == client->session()) {
+                return desc->mIoHandle;
+            }
+        }
     }
 
     if (!profile->canOpenNewIo()) {
