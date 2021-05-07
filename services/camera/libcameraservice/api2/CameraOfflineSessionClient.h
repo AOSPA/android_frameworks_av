@@ -49,13 +49,13 @@ public:
             const sp<ICameraDeviceCallbacks>& remoteCallback,
             const String16& clientPackageName,
             const std::optional<String16>& clientFeatureId,
-            const String8& cameraIdStr, int cameraFacing,
+            const String8& cameraIdStr, int cameraFacing, int sensorOrientation,
             int clientPid, uid_t clientUid, int servicePid) :
             CameraService::BasicClient(
                     cameraService,
                     IInterface::asBinder(remoteCallback),
                     clientPackageName, clientFeatureId,
-                    cameraIdStr, cameraFacing, clientPid, clientUid, servicePid),
+                    cameraIdStr, cameraFacing, sensorOrientation, clientPid, clientUid, servicePid),
             mRemoteCallback(remoteCallback), mOfflineSession(session),
             mCompositeStreamMap(offlineCompositeStreamMap) {}
 
@@ -89,6 +89,7 @@ public:
     // NotificationListener API
     void notifyError(int32_t errorCode, const CaptureResultExtras& resultExtras) override;
     void notifyShutter(const CaptureResultExtras& resultExtras, nsecs_t timestamp) override;
+    status_t notifyActive() override;
     void notifyIdle(int64_t requestCount, int64_t resultErrorCount, bool deviceError,
             const std::vector<hardware::CameraStreamStats>& streamStats) override;
     void notifyAutoFocus(uint8_t newState, int triggerId) override;

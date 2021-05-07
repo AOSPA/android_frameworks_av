@@ -167,6 +167,8 @@ public:
 
     virtual binder::Status    notifyDeviceStateChange(int64_t newState);
 
+    virtual binder::Status    notifyDisplayConfigurationChange();
+
     // OK = supports api of that version, -EOPNOTSUPP = does not support
     virtual binder::Status    supportsCameraApi(
             const String16& cameraId, int32_t apiVersion,
@@ -188,7 +190,8 @@ public:
 
     binder::Status      addListenerHelper(const sp<hardware::ICameraServiceListener>& listener,
             /*out*/
-            std::vector<hardware::CameraStatus>* cameraStatuses, bool isVendor = false);
+            std::vector<hardware::CameraStatus>* cameraStatuses, bool isVendor = false,
+            bool isProcessLocalTest = false);
 
     // Monitored UIDs availability notification
     void                notifyMonitoredUids();
@@ -217,6 +220,19 @@ public:
             int* orientation = nullptr);
 
     /////////////////////////////////////////////////////////////////////
+    // Methods to be used in CameraService class tests only
+    //
+    // CameraService class test method only - clear static variables in the
+    // cameraserver process, which otherwise might affect multiple test runs.
+    void                clearCachedVariables();
+
+    // Add test listener, linkToDeath won't be called since this is for process
+    // local testing.
+    binder::Status    addListenerTest(const sp<hardware::ICameraServiceListener>& listener,
+            /*out*/
+            std::vector<hardware::CameraStatus>* cameraStatuses);
+
+    /////////////////////////////////////////////////////////////////////
     // Shared utilities
     static binder::Status filterGetInfoErrorCode(status_t err);
 
@@ -224,6 +240,7 @@ public:
     // CameraClient functionality
 
     class BasicClient : public virtual RefBase {
+    friend class CameraService;
     public:
         virtual status_t       initialize(sp<CameraProviderManager> manager,
                 const String8& monitorTags) = 0;
@@ -245,6 +262,12 @@ public:
 
         // Return the package name for this client
         virtual String16 getPackageName() const;
+
+        // Return the camera facing for this client
+        virtual int getCameraFacing() const;
+
+        // Return the camera orientation for this client
+        virtual int getCameraOrientation() const;
 
         // Notify client about a fatal error
         virtual void notifyError(int32_t errorCode,
@@ -292,6 +315,7 @@ public:
                 const std::optional<String16>& clientFeatureId,
                 const String8& cameraIdStr,
                 int cameraFacing,
+                int sensorOrientation,
                 int clientPid,
                 uid_t clientUid,
                 int servicePid);
@@ -308,6 +332,7 @@ public:
         static sp<CameraService>        sCameraService;
         const String8                   mCameraIdStr;
         const int                       mCameraFacing;
+        const int                       mOrientation;
         String16                        mClientPackageName;
         std::optional<String16>         mClientFeatureId;
         pid_t                           mClientPid;
@@ -322,9 +347,18 @@ public:
         // - The app-side Binder interface to receive callbacks from us
         sp<IBinder>                     mRemoteBinder;   // immutable after constructor
 
-        // permissions management
+        // Permissions management methods for camera lifecycle
+
+        // Notify rest of system/apps about camera opening, and check appops
         virtual status_t                startCameraOps();
+        // Notify rest of system/apps about camera starting to stream data, and confirm appops
+        virtual status_t                startCameraStreamingOps();
+        // Notify rest of system/apps about camera stopping streaming data
+        virtual status_t                finishCameraStreamingOps();
+        // Notify rest of system/apps about camera closing
         virtual status_t                finishCameraOps();
+        // Handle errors for start/checkOps
+        virtual status_t                handleAppOpMode(int32_t mode);
 
         std::unique_ptr<AppOpsManager>  mAppOpsManager = nullptr;
 
@@ -339,9 +373,12 @@ public:
         }; // class OpsCallback
 
         sp<OpsCallback> mOpsCallback;
-        // Track whether startCameraOps was called successfully, to avoid
-        // finishing what we didn't start.
+        // Track whether checkOps was called successfully, to avoid
+        // finishing what we didn't start, on camera open.
         bool            mOpsActive;
+        // Track whether startOps was called successfully on start of
+        // camera streaming.
+        bool            mOpsStreaming;
 
         // IAppOpsCallback interface, indirected through opListener
         virtual void opChanged(int32_t op, const String16& packageName);
@@ -385,6 +422,7 @@ public:
                 const String8& cameraIdStr,
                 int api1CameraId,
                 int cameraFacing,
+                int sensorOrientation,
                 int clientPid,
                 uid_t clientUid,
                 int servicePid);
@@ -638,14 +676,13 @@ private:
             public virtual IBinder::DeathRecipient {
         public:
             explicit SensorPrivacyPolicy(wp<CameraService> service)
-                    : mService(service), mSensorPrivacyEnabled(false), mRegistered(false),
-                      mIsIndividual(false), mUserId(0) {}
+                    : mService(service), mSensorPrivacyEnabled(false), mRegistered(false) {}
 
             void registerSelf();
-            status_t registerSelfForIndividual(int userId);
             void unregisterSelf();
 
             bool isSensorPrivacyEnabled();
+            bool isCameraPrivacyEnabled(userid_t userId);
 
             binder::Status onSensorPrivacyChanged(bool enabled);
 
@@ -658,8 +695,8 @@ private:
             Mutex mSensorPrivacyLock;
             bool mSensorPrivacyEnabled;
             bool mRegistered;
-            bool mIsIndividual;
-            userid_t mUserId;
+
+            bool hasCameraPrivacyFeature();
     };
 
     sp<UidPolicy> mUidPolicy;
@@ -915,7 +952,10 @@ private:
                       mIsVendorListener(isVendorClient),
                       mOpenCloseCallbackAllowed(openCloseCallbackAllowed) { }
 
-            status_t initialize() {
+            status_t initialize(bool isProcessLocalTest) {
+                if (isProcessLocalTest) {
+                    return OK;
+                }
                 return IInterface::asBinder(mListener)->linkToDeath(this);
             }
 
@@ -1035,9 +1075,6 @@ private:
     // Blocks all active clients.
     void blockAllClients();
 
-    // Mutes all active clients for a user.
-    void setMuteForAllClients(userid_t userId, bool enabled);
-
     // Overrides the UID state as if it is idle
     status_t handleSetUidState(const Vector<String16>& args, int err);
 
@@ -1073,7 +1110,7 @@ private:
     static binder::Status makeClient(const sp<CameraService>& cameraService,
             const sp<IInterface>& cameraCb, const String16& packageName,
             const std::optional<String16>& featureId, const String8& cameraId, int api1CameraId,
-            int facing, int clientPid, uid_t clientUid, int servicePid,
+            int facing, int sensorOrientation, int clientPid, uid_t clientUid, int servicePid,
             int deviceVersion, apiLevel effectiveApiLevel,
             /*out*/sp<BasicClient>* client);
 
@@ -1102,7 +1139,7 @@ private:
     // Aggreated audio restriction mode for all camera clients
     int32_t mAudioRestriction;
 
-    // Current override rotate-and-crop mode
+    // Current override cmd rotate-and-crop mode; AUTO means no override
     uint8_t mOverrideRotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_AUTO;
 
     // Current image dump mask
@@ -1110,12 +1147,6 @@ private:
 
     // Current camera mute mode
     bool mOverrideCameraMuteMode = false;
-
-    // Map from user to sensor privacy policy
-    std::map<userid_t, sp<SensorPrivacyPolicy>> mCameraSensorPrivacyPolicies;
-
-    // Checks if the sensor privacy is enabled for the uid
-    bool isUserSensorPrivacyEnabledForUid(uid_t uid);
 };
 
 } // namespace android

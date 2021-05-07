@@ -101,7 +101,6 @@ cc_library_shared {
     // TODO: jchowdhary@, use header_libs instead b/131165718
     include_dirs: [
         "system/media/private/camera/include",
-        "frameworks/av/media/ndk",
     ],
     export_include_dirs: ["include"],
     export_shared_lib_headers: [
@@ -144,7 +143,6 @@ cc_library_shared {
 
     shared_libs: [
         "libfmq",
-        "libgui_vendor",
         "libhidlbase",
         "libhardware",
         "libnativewindow",
@@ -168,7 +166,6 @@ cc_library_shared {
     // TODO: jchowdhary@, use header_libs instead b/131165718
     include_dirs: [
         "system/media/private/camera/include",
-        "frameworks/av/media/ndk",
     ],
     product_variables: {
         pdk: {
