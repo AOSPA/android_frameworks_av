@@ -75,6 +75,10 @@ struct C2Config {
     enum tiling_mode_t : uint32_t;          ///< tiling modes
 };
 
+struct C2PlatformConfig {
+    enum encoding_quality_level_t : uint32_t; ///< encoding quality level
+};
+
 namespace {
 
 enum C2ParamIndexKind : C2Param::type_index_t {
@@ -259,7 +263,11 @@ enum C2ParamIndexKind : C2Param::type_index_t {
     kParamIndexTunnelHandle, // int32[]
     kParamIndexTunnelSystemTime, // int64
 
+    // dmabuf allocator
     kParamIndexStoreDmaBufUsage,  // store, struct
+
+    // encoding quality requirements
+    kParamIndexEncodingQualityLevel, // encoders, enum
 };
 
 }
@@ -384,6 +392,7 @@ constexpr char C2_PARAMKEY_TIME_STRETCH[]  = "algo.time-stretch";
 
 namespace {
 
+// Codec bases are ordered by their date of introduction to the code base.
 enum : uint32_t {
     _C2_PL_MP2V_BASE = 0x1000,
     _C2_PL_AAC_BASE  = 0x2000,
@@ -394,12 +403,16 @@ enum : uint32_t {
     _C2_PL_VP9_BASE  = 0x7000,
     _C2_PL_DV_BASE   = 0x8000,
     _C2_PL_AV1_BASE  = 0x9000,
+    _C2_PL_VP8_BASE  = 0xA000,
+    _C2_PL_MPEGH_BASE = 0xB000,     // MPEG-H 3D Audio
 
     C2_PROFILE_LEVEL_VENDOR_START = 0x70000000,
 };
 
 }
 
+// Profiles and levels for each codec are ordered based on how they are ordered in the
+// corresponding standard documents at introduction, and chronologically afterwards.
 enum C2Config::profile_t : uint32_t {
     PROFILE_UNUSED = 0,                         ///< profile is not used by this media type
 
@@ -547,6 +560,19 @@ enum C2Config::profile_t : uint32_t {
     PROFILE_AV1_0 = _C2_PL_AV1_BASE,            ///< AV1 Profile 0 (4:2:0, 8 to 10 bit)
     PROFILE_AV1_1,                              ///< AV1 Profile 1 (8 to 10 bit)
     PROFILE_AV1_2,                              ///< AV1 Profile 2 (8 to 12 bit)
+
+    // VP8 profiles
+    PROFILE_VP8_0 = _C2_PL_VP8_BASE,            ///< VP8 Profile 0
+    PROFILE_VP8_1,                              ///< VP8 Profile 1
+    PROFILE_VP8_2,                              ///< VP8 Profile 2
+    PROFILE_VP8_3,                              ///< VP8 Profile 3
+
+    // MPEG-H 3D Audio profiles
+    PROFILE_MPEGH_MAIN = _C2_PL_MPEGH_BASE,     ///< MPEG-H Main
+    PROFILE_MPEGH_HIGH,                         ///< MPEG-H High
+    PROFILE_MPEGH_LC,                           ///< MPEG-H Low-complexity
+    PROFILE_MPEGH_BASELINE,                     ///< MPEG-H Baseline
+
 };
 
 enum C2Config::level_t : uint32_t {
@@ -689,6 +715,13 @@ enum C2Config::level_t : uint32_t {
     LEVEL_AV1_7_1,                              ///< AV1 Level 7.1
     LEVEL_AV1_7_2,                              ///< AV1 Level 7.2
     LEVEL_AV1_7_3,                              ///< AV1 Level 7.3
+
+    // MPEG-H 3D Audio levels
+    LEVEL_MPEGH_1 = _C2_PL_MPEGH_BASE,          ///< MPEG-H L1
+    LEVEL_MPEGH_2,                              ///< MPEG-H L2
+    LEVEL_MPEGH_3,                              ///< MPEG-H L3
+    LEVEL_MPEGH_4,                              ///< MPEG-H L4
+    LEVEL_MPEGH_5,                              ///< MPEG-H L5
 };
 
 struct C2ProfileLevelStruct {
@@ -2332,6 +2365,23 @@ constexpr char C2_PARAMKEY_OUTPUT_TUNNEL_HANDLE[] = "output.tunnel-handle";
 typedef C2PortParam<C2Info, C2SimpleValueStruct<int64_t>, kParamIndexTunnelSystemTime>
         C2PortTunnelSystemTime;
 constexpr char C2_PARAMKEY_OUTPUT_RENDER_TIME[] = "output.render-time";
+
+C2ENUM(C2PlatformConfig::encoding_quality_level_t, uint32_t,
+    NONE,
+    S_HANDHELD,
+    S_HANDHELD_PC
+);
+
+namespace android {
+
+/**
+ * Encoding quality level signaling.
+ */
+typedef C2GlobalParam<C2Setting,
+        C2SimpleValueStruct<C2EasyEnum<C2PlatformConfig::encoding_quality_level_t>>,
+        kParamIndexEncodingQualityLevel> C2EncodingQualityLevel;
+
+}
 
 /// @}
 

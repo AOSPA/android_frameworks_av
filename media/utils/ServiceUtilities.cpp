@@ -73,6 +73,8 @@ static int32_t getOpForSource(audio_source_t source) {
       return AppOpsManager::OP_RECORD_AUDIO_HOTWORD;
     case AUDIO_SOURCE_REMOTE_SUBMIX:
       return AppOpsManager::OP_RECORD_AUDIO_OUTPUT;
+    case AUDIO_SOURCE_VOICE_DOWNLINK:
+      return AppOpsManager::OP_RECORD_INCOMING_PHONE_AUDIO;
     case AUDIO_SOURCE_DEFAULT:
     default:
       return AppOpsManager::OP_RECORD_AUDIO;
@@ -211,10 +213,7 @@ bool captureHotwordAllowed(const Identity& identity) {
 
     if (ok) {
         static const String16 sCaptureHotwordAllowed("android.permission.CAPTURE_AUDIO_HOTWORD");
-        //TODO: b/185972521: see if permission cache can be used with shell identity for CTS
-        PermissionController permissionController;
-        ok = permissionController.checkPermission(sCaptureHotwordAllowed,
-            pid, uid);
+        ok = PermissionCache::checkPermission(sCaptureHotwordAllowed, pid, uid);
     }
     if (!ok) ALOGV("android.permission.CAPTURE_AUDIO_HOTWORD");
     return ok;
@@ -298,6 +297,10 @@ Identity getCallingIdentity() {
   identity.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(IPCThreadState::self()->getCallingPid()));
   identity.uid = VALUE_OR_FATAL(legacy2aidl_uid_t_int32_t(IPCThreadState::self()->getCallingUid()));
   return identity;
+}
+
+void purgePermissionCache() {
+    PermissionCache::purgeCache();
 }
 
 status_t checkIMemory(const sp<IMemory>& iMemory)
