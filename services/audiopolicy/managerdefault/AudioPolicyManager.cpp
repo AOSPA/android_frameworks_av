@@ -1565,7 +1565,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         *flags = (audio_output_flags_t)(*flags & ~AUDIO_OUTPUT_FLAG_DIRECT);
         *flags = forceDeepBuffer ? AUDIO_OUTPUT_FLAG_DEEP_BUFFER :
                  (*flags == AUDIO_OUTPUT_FLAG_NONE) ? AUDIO_OUTPUT_FLAG_PRIMARY : *flags;
-        ALOGI("%s forced deep-buffer (%s) flags (%0x)", __func__,
+        ALOGV("%s forced deep-buffer (%s) flags (%0x)", __func__,
                 forceDeepBuffer ? "yes": "no" , *flags);
         output = selectOutput(
                 outputs, *flags, config->format, channelMask, config->sample_rate, session);
