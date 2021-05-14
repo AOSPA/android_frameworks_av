@@ -69,7 +69,7 @@ class CodecProperties {
     // qp max bound used to compensate when SupportedMinimumQuality == 0
     // 0 == let a system default handle it
     void setTargetQpMax(int qpmax);
-    int targetQpMax();
+    int targetQpMax(int32_t width, int32_t height);
 
     // target bits-per-pixel (per second) for encoding operations.
     // This is used to calculate a minimum bitrate for any particular resolution.
@@ -81,6 +81,14 @@ class CodecProperties {
     // The getMapping() methods provide any needed mapping to non-standard keys.
     void setSupportsQp(bool supported) { mSupportsQp = supported;}
     bool supportsQp() { return mSupportsQp;}
+
+    // defines our range of operation -- multiplier on the floor bitrate
+    double getPhaseOut() { return mPhaseOut; }
+    void setPhaseOut(double overageMultiplier);
+
+    // how much (0.20 = +20%) do we add if Qp is requested but unsupported
+    double getMissingQpBoost() {return mMissingQpBoost; }
+    void setMissingQpBoost(double boost);
 
     int  supportedApi();
 
@@ -98,6 +106,11 @@ class CodecProperties {
     bool mSupportsQp = false;
     double mBpp = 0.0;
 
+    // target bitrates above floor * mPhaseOut are left untouched
+    double mPhaseOut = 1.75;
+    // 20% bump if QP is configured but it is unavailable
+    double mMissingQpBoost = 0.20;
+
     // allow different target bits-per-pixel based on resolution
     // similar to codec 'performance points'
     // uses 'next largest' (by pixel count) point as minimum bpp
@@ -109,6 +122,19 @@ class CodecProperties {
     };
     struct bpp_point *mBppPoints = nullptr;
     bool bppPoint(std::string resolution, std::string value);
+
+    // same thing for qpmax -- allow different ones based on resolution
+    // allow different target bits-per-pixel based on resolution
+    // similar to codec 'performance points'
+    // uses 'next largest' (by pixel count) point as minimum bpp
+    struct qpmax_point {
+        struct qpmax_point *next;
+        int32_t pixels;
+        int32_t width, height;
+        int qpMax;
+    };
+    struct qpmax_point *mQpMaxPoints = nullptr;
+    bool qpMaxPoint(std::string resolution, std::string value);
 
     std::mutex mMappingLock;
     // XXX figure out why I'm having problems getting compiler to like GUARDED_BY
