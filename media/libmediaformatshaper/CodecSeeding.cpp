@@ -44,30 +44,44 @@ typedef struct {
 } preloadTunings_t;
 
 /*
- * 240 = 2.4 bits per pixel-per-second == 5mbps@1080, 2.3mbps@720p, which is about where
- * we want our initial floor for now.
+ * bpp == bits per pixel per second, for 30fps.
  */
 
 static preloadTuning_t featuresAvc[] = {
-      // {true, "vq-target-bpp", "2.45"},
-      {true, "vq-target-bpp-1080p", "2.40"},
-      {true, "vq-target-bpp-540p", "2.60"},
+      {true, "vq-target-bpp", "0"},
+      {true, "vq-target-bpp-1080p", "1.90"},
+      {true, "vq-target-bpp-720p", "2.25"},
+      {true, "vq-target-bpp-540p", "2.65"},
       {true, "vq-target-bpp-480p", "3.00"},
-      {true, "vq-target-qpmax", "40"},
+      {true, "vq-target-qpmax", "-1"},
+      {true, "vq-target-qpmax-1080p", "45"},
+      {true, "vq-target-qpmax-720p", "43"},
+      {true, "vq-target-qpmax-540p", "42"},
+      {true, "vq-target-qpmax-480p", "38"},
+      {true, "vq-bitrate-phaseout", "1.75"},
+      {true, "vq-boost-missing-qp", "0.20"},
       {true, nullptr, 0}
 };
 
 static preloadTuning_t featuresHevc[] = {
-      // {true, "vq-target-bpp", "1.80"},
+      {true, "vq-target-bpp", "0"},
       {true, "vq-target-bpp-1080p", "1.50"},
       {true, "vq-target-bpp-720p", "1.80"},
       {true, "vq-target-bpp-540p", "2.10"},
-      // no qp for hevc, at least for now
+      {true, "vq-target-bpp-480p", "2.30"},
+      {true, "vq-target-qpmax", "-1"},
+      {true, "vq-target-qpmax-1080p", "45"},
+      {true, "vq-target-qpmax-720p", "44"},
+      {true, "vq-target-qpmax-540p", "43"},
+      {true, "vq-target-qpmax-480p", "42"},
+      {true, "vq-bitrate-phaseout", "1.75"},
+      {true, "vq-boost-missing-qp", "0.20"},
       {true, nullptr, 0}
 };
 
 static preloadTuning_t featuresGenericVideo[] = {
-      {true, "vq-target-bpp", "2.40"},
+        // 0 == off
+      {true, "vq-target-bpp", "0"},
       {true, nullptr, 0}
 };
 
