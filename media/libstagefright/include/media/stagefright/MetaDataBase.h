@@ -127,6 +127,8 @@ enum {
     kKeyTrackTimeStatus   = 'tktm',  // int64_t
 
     kKeyRealTimeRecording = 'rtrc',  // bool (int32_t)
+    kKeyBackgroundMode = 'bkmd',  // bool (int32_t)
+
     kKeyNumBuffers        = 'nbbf',  // int32_t
 
     // Ogg files can be tagged to be automatically looping...
@@ -265,6 +267,11 @@ enum {
     // Slow-motion markers
     kKeySlowMotionMarkers = 'slmo', // raw data, byte array following spec for
                                     // MediaFormat#KEY_SLOW_MOTION_MARKERS
+
+    kKeySampleFileOffset = 'sfof', // int64_t, sample's offset in a media file.
+    kKeyLastSampleIndexInChunk = 'lsic',  //int64_t, index of last sample in a chunk.
+    kKeySampleTimeBeforeAppend = 'lsba', // int64_t, timestamp of last sample of a track.
+
     kKeyVendorFeatureNalLength = 'vfnl', // int32_t key to check nal length enable
 };
 

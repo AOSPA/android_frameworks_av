@@ -19,9 +19,11 @@
 
 #define VALIDATE_STATE 1
 
+#include <android/permission_manager.h>
 #include <inttypes.h>
 #include <media/TranscodingSessionController.h>
 #include <media/TranscodingUidPolicy.h>
+#include <utils/AndroidThreads.h>
 #include <utils/Log.h>
 
 #include <thread>
@@ -161,6 +163,7 @@ void TranscodingSessionController::Watchdog::updateTimer_l() NO_THREAD_SAFETY_AN
 
 // Unfortunately std::unique_lock is incompatible with -Wthread-safety.
 void TranscodingSessionController::Watchdog::threadLoop() NO_THREAD_SAFETY_ANALYSIS {
+    androidSetThreadPriority(0 /*tid (0 = current) */, ANDROID_PRIORITY_BACKGROUND);
     std::unique_lock<std::mutex> lock{mLock};
 
     while (!mAbort) {
@@ -193,8 +196,9 @@ struct TranscodingSessionController::Pacer {
 
     ~Pacer() = default;
 
+    bool onSessionStarted(uid_t uid, uid_t callingUid);
     void onSessionCompleted(uid_t uid, std::chrono::microseconds runningTime);
-    bool onSessionStarted(uid_t uid);
+    void onSessionCancelled(uid_t uid);
 
 private:
     // Threshold of time between finish/start below which a back-to-back start is counted.
@@ -205,26 +209,60 @@ private:
     int32_t mBurstTimeQuotaSec;
 
     struct UidHistoryEntry {
-        std::chrono::steady_clock::time_point lastCompletedTime;
+        bool sessionActive = false;
         int32_t burstCount = 0;
         std::chrono::steady_clock::duration burstDuration{0};
+        std::chrono::steady_clock::time_point lastCompletedTime;
     };
     std::map<uid_t, UidHistoryEntry> mUidHistoryMap;
+    std::unordered_set<uid_t> mMtpUids;
+    std::unordered_set<uid_t> mNonMtpUids;
+
+    bool isSubjectToQuota(uid_t uid, uid_t callingUid);
 };
 
-void TranscodingSessionController::Pacer::onSessionCompleted(
-        uid_t uid, std::chrono::microseconds runningTime) {
-    if (mUidHistoryMap.find(uid) == mUidHistoryMap.end()) {
-        mUidHistoryMap.emplace(uid, UidHistoryEntry{});
+bool TranscodingSessionController::Pacer::isSubjectToQuota(uid_t uid, uid_t callingUid) {
+    // Submitting with self uid is not limited (which can only happen if it's used as an
+    // app-facing API). MediaProvider usage always submit on behalf of other uids.
+    if (uid == callingUid) {
+        return false;
     }
-    mUidHistoryMap[uid].lastCompletedTime = std::chrono::steady_clock::now();
-    mUidHistoryMap[uid].burstCount++;
-    mUidHistoryMap[uid].burstDuration += runningTime;
+
+    if (mMtpUids.find(uid) != mMtpUids.end()) {
+        return false;
+    }
+
+    if (mNonMtpUids.find(uid) != mNonMtpUids.end()) {
+        return true;
+    }
+
+    // We don't have MTP permission info about this uid yet, check permission and save the result.
+    int32_t result;
+    if (__builtin_available(android __TRANSCODING_MIN_API__, *)) {
+        if (APermissionManager_checkPermission("android.permission.ACCESS_MTP", -1 /*pid*/, uid,
+                                               &result) == PERMISSION_MANAGER_STATUS_OK &&
+            result == PERMISSION_MANAGER_PERMISSION_GRANTED) {
+            mMtpUids.insert(uid);
+            return false;
+        }
+    }
+
+    mNonMtpUids.insert(uid);
+    return true;
 }
 
-bool TranscodingSessionController::Pacer::onSessionStarted(uid_t uid) {
-    // If uid doesn't exist, this uid has no completed sessions. Skip.
+bool TranscodingSessionController::Pacer::onSessionStarted(uid_t uid, uid_t callingUid) {
+    if (!isSubjectToQuota(uid, callingUid)) {
+        ALOGI("Pacer::onSessionStarted: uid %d (caling uid: %d): not subject to quota", uid,
+              callingUid);
+        return true;
+    }
+
+    // If uid doesn't exist, only insert the entry and mark session active. Skip quota checking.
     if (mUidHistoryMap.find(uid) == mUidHistoryMap.end()) {
+        mUidHistoryMap.emplace(uid, UidHistoryEntry{});
+        mUidHistoryMap[uid].sessionActive = true;
+        ALOGV("Pacer::onSessionStarted: uid %d: new", uid);
         return true;
     }
 
@@ -236,23 +274,53 @@ bool TranscodingSessionController::Pacer::onSessionStarted(uid_t uid) {
             std::chrono::steady_clock::now() - mUidHistoryMap[uid].lastCompletedTime;
     if (mUidHistoryMap[uid].burstCount >= mBurstCountQuota &&
         mUidHistoryMap[uid].burstDuration >= std::chrono::seconds(mBurstTimeQuotaSec)) {
-        ALOGW("Pacer: uid %d: over quota, burst count %d, time %lldms", uid,
-              mUidHistoryMap[uid].burstCount, (long long)mUidHistoryMap[uid].burstDuration.count());
+        ALOGW("Pacer::onSessionStarted: uid %d: over quota, burst count %d, time %lldms", uid,
+              mUidHistoryMap[uid].burstCount,
+              (long long)mUidHistoryMap[uid].burstDuration.count() / 1000000);
         return false;
     }
 
     // If not over quota, allow the session, and reset as long as this is not too close
     // to previous completion.
     if (timeSinceLastComplete > std::chrono::milliseconds(mBurstThresholdMs)) {
-        ALOGV("Pacer: uid %d: reset quota", uid);
+        ALOGV("Pacer::onSessionStarted: uid %d: reset quota", uid);
         mUidHistoryMap[uid].burstCount = 0;
         mUidHistoryMap[uid].burstDuration = std::chrono::milliseconds(0);
     } else {
-        ALOGV("Pacer: uid %d: burst count %d, time %lldms", uid, mUidHistoryMap[uid].burstCount,
-              (long long)mUidHistoryMap[uid].burstDuration.count());
+        ALOGV("Pacer::onSessionStarted: uid %d: burst count %d, time %lldms", uid,
+              mUidHistoryMap[uid].burstCount,
+              (long long)mUidHistoryMap[uid].burstDuration.count() / 1000000);
     }
 
+    mUidHistoryMap[uid].sessionActive = true;
     return true;
+}
+
+void TranscodingSessionController::Pacer::onSessionCompleted(
+        uid_t uid, std::chrono::microseconds runningTime) {
+    // Skip quota update if this uid missed the start. (Could happen if the uid is added via
+    // addClientUid() after the session start.)
+    if (mUidHistoryMap.find(uid) == mUidHistoryMap.end() || !mUidHistoryMap[uid].sessionActive) {
+        ALOGV("Pacer::onSessionCompleted: uid %d: not started", uid);
+        return;
+    }
+    ALOGV("Pacer::onSessionCompleted: uid %d: runningTime %lld", uid, runningTime.count() / 1000);
+    mUidHistoryMap[uid].sessionActive = false;
+    mUidHistoryMap[uid].burstCount++;
+    mUidHistoryMap[uid].burstDuration += runningTime;
+    mUidHistoryMap[uid].lastCompletedTime = std::chrono::steady_clock::now();
+}
+
+void TranscodingSessionController::Pacer::onSessionCancelled(uid_t uid) {
+    if (mUidHistoryMap.find(uid) == mUidHistoryMap.end()) {
+        ALOGV("Pacer::onSessionCancelled: uid %d: not present", uid);
+        return;
+    }
+    // This is only called if a uid is removed from a session (due to it being killed
+    // or the original submitting client was gone but session was kept for offline use).
+    // Since the uid is going to miss the onSessionCompleted(), we can't track this
+    // session, and have to check back at next onSessionStarted().
+    mUidHistoryMap[uid].sessionActive = false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -372,6 +440,14 @@ TranscodingSessionController::Session* TranscodingSessionController::getTopSessi
     }
 
     uid_t topUid = *mUidSortedList.begin();
+    // If the current session is running, and it's in the topUid's queue, let it continue
+    // to run even if it's not the earliest in that uid's queue.
+    // For example, uid(B) is added to a session while it's pending in uid(A)'s queue, then
+    // B is brought to front which caused the session to run, then user switches back to A.
+    if (mCurrentSession != nullptr && mCurrentSession->getState() == Session::RUNNING &&
+        mCurrentSession->allClientUids.count(topUid) > 0) {
+        return mCurrentSession;
+    }
     SessionKeyType topSessionKey = *mSessionQueues[topUid].begin();
     return &mSessionMap[topSessionKey];
 }
@@ -427,7 +503,7 @@ void TranscodingSessionController::Session::setState(Session::State newState) {
 
 void TranscodingSessionController::updateCurrentSession_l() {
     Session* curSession = mCurrentSession;
-    Session* topSession = getTopSession_l();
+    Session* topSession = nullptr;
 
     // Delayed init of transcoder and watchdog.
     if (mTranscoder == nullptr) {
@@ -458,9 +534,18 @@ void TranscodingSessionController::updateCurrentSession_l() {
 
         // Otherwise, ensure topSession is running.
         if (topSession->getState() == Session::NOT_STARTED) {
-            if (!mPacer->onSessionStarted(topSession->clientUid)) {
-                // Unfortunately this uid is out of quota for new sessions.
-                // Drop this sesion and try another one.
+            // Check if at least one client has quota to start the session.
+            bool keepForClient = false;
+            for (uid_t uid : topSession->allClientUids) {
+                if (mPacer->onSessionStarted(uid, topSession->callingUid)) {
+                    keepForClient = true;
+                    // DO NOT break here, because book-keeping still needs to happen
+                    // for the other uids.
+                }
+            }
+            if (!keepForClient) {
+                // Unfortunately all uids requesting this session are out of quota.
+                // Drop this session and try the next one.
                 {
                     auto clientCallback = mSessionMap[topSession->key].callback.lock();
                     if (clientCallback != nullptr) {
@@ -484,8 +569,35 @@ void TranscodingSessionController::updateCurrentSession_l() {
     mCurrentSession = topSession;
 }
 
-void TranscodingSessionController::removeSession_l(const SessionKeyType& sessionKey,
-                                                   Session::State finalState) {
+void TranscodingSessionController::addUidToSession_l(uid_t clientUid,
+                                                     const SessionKeyType& sessionKey) {
+    // If it's an offline session, the queue was already added in constructor.
+    // If it's a real-time sessions, check if a queue is already present for the uid,
+    // and add a new queue if needed.
+    if (clientUid != OFFLINE_UID) {
+        if (mSessionQueues.count(clientUid) == 0) {
+            mUidPolicy->registerMonitorUid(clientUid);
+            if (mUidPolicy->isUidOnTop(clientUid)) {
+                mUidSortedList.push_front(clientUid);
+            } else {
+                // Shouldn't be submitting real-time requests from non-top app,
+                // put it in front of the offline queue.
+                mUidSortedList.insert(mOfflineUidIterator, clientUid);
+            }
+        } else if (clientUid != *mUidSortedList.begin()) {
+            if (mUidPolicy->isUidOnTop(clientUid)) {
+                mUidSortedList.remove(clientUid);
+                mUidSortedList.push_front(clientUid);
+            }
+        }
+    }
+    // Append this session to the uid's queue.
+    mSessionQueues[clientUid].push_back(sessionKey);
+}
+
+void TranscodingSessionController::removeSession_l(
+        const SessionKeyType& sessionKey, Session::State finalState,
+        const std::shared_ptr<std::function<bool(uid_t uid)>>& keepUid) {
     ALOGV("%s: session %s", __FUNCTION__, sessionToString(sessionKey).c_str());
 
     if (mSessionMap.count(sessionKey) == 0) {
@@ -494,24 +606,46 @@ void TranscodingSessionController::removeSession_l(const SessionKeyType& session
     }
 
     // Remove session from uid's queue.
-    const uid_t uid = mSessionMap[sessionKey].clientUid;
-    SessionQueueType& sessionQueue = mSessionQueues[uid];
-    auto it = std::find(sessionQueue.begin(), sessionQueue.end(), sessionKey);
-    if (it == sessionQueue.end()) {
-        ALOGE("couldn't find session %s in queue for uid %d", sessionToString(sessionKey).c_str(),
-              uid);
-        return;
+    bool uidQueueRemoved = false;
+    std::unordered_set<uid_t> remainingUids;
+    for (uid_t uid : mSessionMap[sessionKey].allClientUids) {
+        if (keepUid != nullptr) {
+            if ((*keepUid)(uid)) {
+                remainingUids.insert(uid);
+                continue;
+            }
+            // If we have uids to keep, the session is not going to any final
+            // state we can't use onSessionCompleted as the running time will
+            // not be valid. Only notify pacer to stop tracking this session.
+            mPacer->onSessionCancelled(uid);
+        }
+        SessionQueueType& sessionQueue = mSessionQueues[uid];
+        auto it = std::find(sessionQueue.begin(), sessionQueue.end(), sessionKey);
+        if (it == sessionQueue.end()) {
+            ALOGW("couldn't find session %s in queue for uid %d",
+                  sessionToString(sessionKey).c_str(), uid);
+            continue;
+        }
+        sessionQueue.erase(it);
+
+        // If this is the last session in a real-time queue, remove this uid's queue.
+        if (uid != OFFLINE_UID && sessionQueue.empty()) {
+            mUidSortedList.remove(uid);
+            mSessionQueues.erase(uid);
+            mUidPolicy->unregisterMonitorUid(uid);
+
+            uidQueueRemoved = true;
+        }
     }
-    sessionQueue.erase(it);
 
-    // If this is the last session in a real-time queue, remove this uid's queue.
-    if (uid != OFFLINE_UID && sessionQueue.empty()) {
-        mUidSortedList.remove(uid);
-        mSessionQueues.erase(uid);
-        mUidPolicy->unregisterMonitorUid(uid);
-
+    if (uidQueueRemoved) {
         std::unordered_set<uid_t> topUids = mUidPolicy->getTopUids();
         moveUidsToTop_l(topUids, false /*preserveTopUid*/);
+    }
+
+    if (keepUid != nullptr) {
+        mSessionMap[sessionKey].allClientUids = remainingUids;
+        return;
     }
 
     // Clear current session.
@@ -521,9 +655,10 @@ void TranscodingSessionController::removeSession_l(const SessionKeyType& session
 
     setSessionState_l(&mSessionMap[sessionKey], finalState);
 
-    if (finalState == Session::FINISHED || finalState == Session::ERROR) {
-        mPacer->onSessionCompleted(mSessionMap[sessionKey].clientUid,
-                                   mSessionMap[sessionKey].runningTime);
+    // We can use onSessionCompleted() even for CANCELLED, because runningTime is
+    // now updated by setSessionState_l().
+    for (uid_t uid : mSessionMap[sessionKey].allClientUids) {
+        mPacer->onSessionCompleted(uid, mSessionMap[sessionKey].runningTime);
     }
 
     mSessionHistory.push_back(mSessionMap[sessionKey]);
@@ -617,34 +752,13 @@ bool TranscodingSessionController::submit(
 
     // Add session to session map.
     mSessionMap[sessionKey].key = sessionKey;
-    mSessionMap[sessionKey].clientUid = clientUid;
     mSessionMap[sessionKey].callingUid = callingUid;
+    mSessionMap[sessionKey].allClientUids.insert(clientUid);
     mSessionMap[sessionKey].request = request;
     mSessionMap[sessionKey].callback = callback;
     setSessionState_l(&mSessionMap[sessionKey], Session::NOT_STARTED);
 
-    // If it's an offline session, the queue was already added in constructor.
-    // If it's a real-time sessions, check if a queue is already present for the uid,
-    // and add a new queue if needed.
-    if (clientUid != OFFLINE_UID) {
-        if (mSessionQueues.count(clientUid) == 0) {
-            mUidPolicy->registerMonitorUid(clientUid);
-            if (mUidPolicy->isUidOnTop(clientUid)) {
-                mUidSortedList.push_front(clientUid);
-            } else {
-                // Shouldn't be submitting real-time requests from non-top app,
-                // put it in front of the offline queue.
-                mUidSortedList.insert(mOfflineUidIterator, clientUid);
-            }
-        } else if (clientUid != *mUidSortedList.begin()) {
-            if (mUidPolicy->isUidOnTop(clientUid)) {
-                mUidSortedList.remove(clientUid);
-                mUidSortedList.push_front(clientUid);
-            }
-        }
-    }
-    // Append this session to the uid's queue.
-    mSessionQueues[clientUid].push_back(sessionKey);
+    addUidToSession_l(clientUid, sessionKey);
 
     updateCurrentSession_l();
 
@@ -657,14 +771,20 @@ bool TranscodingSessionController::cancel(ClientIdType clientId, SessionIdType s
 
     ALOGV("%s: session %s", __FUNCTION__, sessionToString(sessionKey).c_str());
 
-    std::list<SessionKeyType> sessionsToRemove;
+    std::list<SessionKeyType> sessionsToRemove, sessionsForOffline;
 
     std::scoped_lock lock{mLock};
 
     if (sessionId < 0) {
         for (auto it = mSessionMap.begin(); it != mSessionMap.end(); ++it) {
-            if (it->first.first == clientId && it->second.clientUid != OFFLINE_UID) {
-                sessionsToRemove.push_back(it->first);
+            if (it->first.first == clientId) {
+                // If there is offline request, only keep the offline client;
+                // otherwise remove the session.
+                if (it->second.allClientUids.count(OFFLINE_UID) > 0) {
+                    sessionsForOffline.push_back(it->first);
+                } else {
+                    sessionsToRemove.push_back(it->first);
+                }
             }
         }
     } else {
@@ -688,10 +808,61 @@ bool TranscodingSessionController::cancel(ClientIdType clientId, SessionIdType s
         removeSession_l(*it, Session::CANCELED);
     }
 
+    auto keepUid = std::make_shared<std::function<bool(uid_t)>>(
+            [](uid_t uid) { return uid == OFFLINE_UID; });
+    for (auto it = sessionsForOffline.begin(); it != sessionsForOffline.end(); ++it) {
+        removeSession_l(*it, Session::CANCELED, keepUid);
+    }
+
     // Start next session.
     updateCurrentSession_l();
 
     validateState_l();
+    return true;
+}
+
+bool TranscodingSessionController::addClientUid(ClientIdType clientId, SessionIdType sessionId,
+                                                uid_t clientUid) {
+    SessionKeyType sessionKey = std::make_pair(clientId, sessionId);
+
+    std::scoped_lock lock{mLock};
+
+    if (mSessionMap.count(sessionKey) == 0) {
+        ALOGE("session %s doesn't exist", sessionToString(sessionKey).c_str());
+        return false;
+    }
+
+    if (mSessionMap[sessionKey].allClientUids.count(clientUid) > 0) {
+        ALOGE("session %s already has uid %d", sessionToString(sessionKey).c_str(), clientUid);
+        return false;
+    }
+
+    mSessionMap[sessionKey].allClientUids.insert(clientUid);
+    addUidToSession_l(clientUid, sessionKey);
+
+    updateCurrentSession_l();
+
+    validateState_l();
+    return true;
+}
+
+bool TranscodingSessionController::getClientUids(ClientIdType clientId, SessionIdType sessionId,
+                                                 std::vector<int32_t>* out_clientUids) {
+    SessionKeyType sessionKey = std::make_pair(clientId, sessionId);
+
+    std::scoped_lock lock{mLock};
+
+    if (mSessionMap.count(sessionKey) == 0) {
+        ALOGE("session %s doesn't exist", sessionToString(sessionKey).c_str());
+        return false;
+    }
+
+    out_clientUids->clear();
+    for (uid_t uid : mSessionMap[sessionKey].allClientUids) {
+        if (uid != OFFLINE_UID) {
+            out_clientUids->push_back(uid);
+        }
+    }
     return true;
 }
 
@@ -886,6 +1057,58 @@ void TranscodingSessionController::onTopUidsChanged(const std::unordered_set<uid
     validateState_l();
 }
 
+void TranscodingSessionController::onUidGone(uid_t goneUid) {
+    ALOGD("%s: gone uid %u", __FUNCTION__, goneUid);
+
+    std::list<SessionKeyType> sessionsToRemove, sessionsForOtherUids;
+
+    std::scoped_lock lock{mLock};
+
+    for (auto it = mSessionMap.begin(); it != mSessionMap.end(); ++it) {
+        if (it->second.allClientUids.count(goneUid) > 0) {
+            // If goneUid is the only uid, remove the session; otherwise, only
+            // remove the uid from the session.
+            if (it->second.allClientUids.size() > 1) {
+                sessionsForOtherUids.push_back(it->first);
+            } else {
+                sessionsToRemove.push_back(it->first);
+            }
+        }
+    }
+
+    for (auto it = sessionsToRemove.begin(); it != sessionsToRemove.end(); ++it) {
+        // If the session has ever been started, stop it now.
+        // Note that stop() is needed even if the session is currently paused. This instructs
+        // the transcoder to discard any states for the session, otherwise the states may
+        // never be discarded.
+        if (mSessionMap[*it].getState() != Session::NOT_STARTED) {
+            mTranscoder->stop(it->first, it->second);
+        }
+
+        {
+            auto clientCallback = mSessionMap[*it].callback.lock();
+            if (clientCallback != nullptr) {
+                clientCallback->onTranscodingFailed(it->second,
+                                                    TranscodingErrorCode::kUidGoneCancelled);
+            }
+        }
+
+        // Remove the session.
+        removeSession_l(*it, Session::CANCELED);
+    }
+
+    auto keepUid = std::make_shared<std::function<bool(uid_t)>>(
+            [goneUid](uid_t uid) { return uid != goneUid; });
+    for (auto it = sessionsForOtherUids.begin(); it != sessionsForOtherUids.end(); ++it) {
+        removeSession_l(*it, Session::CANCELED, keepUid);
+    }
+
+    // Start next session.
+    updateCurrentSession_l();
+
+    validateState_l();
+}
+
 void TranscodingSessionController::onResourceAvailable() {
     std::scoped_lock lock{mLock};
 
@@ -938,7 +1161,8 @@ void TranscodingSessionController::validateState_l() {
     LOG_ALWAYS_FATAL_IF(*mOfflineUidIterator != OFFLINE_UID,
                         "mOfflineUidIterator not pointing to offline uid");
     LOG_ALWAYS_FATAL_IF(mUidSortedList.size() != mSessionQueues.size(),
-                        "mUidList and mSessionQueues size mismatch");
+                        "mUidSortedList and mSessionQueues size mismatch, %zu vs %zu",
+                        mUidSortedList.size(), mSessionQueues.size());
 
     int32_t totalSessions = 0;
     for (auto uid : mUidSortedList) {
@@ -952,8 +1176,14 @@ void TranscodingSessionController::validateState_l() {
 
         totalSessions += mSessionQueues[uid].size();
     }
-    LOG_ALWAYS_FATAL_IF(mSessionMap.size() != totalSessions,
-                        "mSessions size doesn't match total sessions counted from uid queues");
+    int32_t totalSessionsAlternative = 0;
+    for (auto const& s : mSessionMap) {
+        totalSessionsAlternative += s.second.allClientUids.size();
+    }
+    LOG_ALWAYS_FATAL_IF(totalSessions != totalSessionsAlternative,
+                        "session count (including dup) from mSessionQueues doesn't match that from "
+                        "mSessionMap, %d vs %d",
+                        totalSessions, totalSessionsAlternative);
 #endif  // VALIDATE_STATE
 }
 

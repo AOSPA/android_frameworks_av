@@ -163,6 +163,33 @@ class DevicesFactoryHalCallbackImpl : public DevicesFactoryHalCallback {
     }
 };
 
+// TODO b/182392769: use identity util
+/* static */
+media::permission::Identity AudioFlinger::checkIdentityPackage(
+        const media::permission::Identity& identity) {
+    Vector<String16> packages;
+    PermissionController{}.getPackagesForUid(identity.uid, packages);
+
+    Identity checkedIdentity = identity;
+    if (!identity.packageName.has_value() || identity.packageName.value().size() == 0) {
+        if (!packages.isEmpty()) {
+            checkedIdentity.packageName =
+                std::move(legacy2aidl_String16_string(packages[0]).value());
+        }
+    } else {
+        String16 opPackageLegacy = VALUE_OR_FATAL(
+            aidl2legacy_string_view_String16(identity.packageName.value_or("")));
+        if (std::find_if(packages.begin(), packages.end(),
+                [&opPackageLegacy](const auto& package) {
+                return opPackageLegacy == package; }) == packages.end()) {
+            ALOGW("The package name(%s) provided does not correspond to the uid %d",
+                    identity.packageName.value_or("").c_str(), identity.uid);
+            checkedIdentity.packageName = std::optional<std::string>();
+        }
+    }
+    return checkedIdentity;
+}
+
 // ----------------------------------------------------------------------------
 
 std::string formatToString(audio_format_t format) {
@@ -276,6 +303,21 @@ void AudioFlinger::onFirstRef()
 status_t AudioFlinger::setAudioHalPids(const std::vector<pid_t>& pids) {
   TimeCheck::setAudioHalPids(pids);
   return NO_ERROR;
+}
+
+status_t AudioFlinger::setVibratorInfos(
+        const std::vector<media::AudioVibratorInfo>& vibratorInfos) {
+    Mutex::Autolock _l(mLock);
+    mAudioVibratorInfos = vibratorInfos;
+    return NO_ERROR;
+}
+
+// getDefaultVibratorInfo_l must be called with AudioFlinger lock held.
+const media::AudioVibratorInfo* AudioFlinger::getDefaultVibratorInfo_l() {
+    if (mAudioVibratorInfos.empty()) {
+        return nullptr;
+    }
+    return &mAudioVibratorInfos.front();
 }
 
 AudioFlinger::~AudioFlinger()
@@ -2142,7 +2184,7 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
                                                   &output.notificationFrameCount,
                                                   callingPid, adjIdentity, &output.flags,
                                                   input.clientInfo.clientTid,
-                                                  &lStatus, portId);
+                                                  &lStatus, portId, input.maxSharedAudioHistoryMs);
         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (recordTrack == 0));
 
         // lStatus == BAD_TYPE means FAST flag was rejected: request a new input from
@@ -4123,7 +4165,8 @@ status_t AudioFlinger::onPreTransact(
         case TransactionCode::SET_MIC_MUTE:
         case TransactionCode::SET_LOW_RAM_DEVICE:
         case TransactionCode::SYSTEM_READY:
-        case TransactionCode::SET_AUDIO_HAL_PIDS: {
+        case TransactionCode::SET_AUDIO_HAL_PIDS:
+        case TransactionCode::SET_VIBRATOR_INFOS: {
             if (!isServiceUid(IPCThreadState::self()->getCallingUid())) {
                 ALOGW("%s: transaction %d received from PID %d unauthorized UID %d",
                       __func__, code, IPCThreadState::self()->getCallingPid(),

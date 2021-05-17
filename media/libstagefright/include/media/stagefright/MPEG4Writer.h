@@ -97,6 +97,7 @@ private:
     sp<MetaData> mStartMeta;
     status_t mInitCheck;
     bool mIsRealTimeRecording;
+    bool mIsBackgroundMode;
 protected:
     bool mUse4ByteNalLength;
     bool mIsFileSizeLimitExplicitlyRequested;
@@ -107,6 +108,7 @@ protected:
     off64_t mOffset;
     off64_t mPreAllocateFileEndOffset;  //End of file offset during preallocation.
     off64_t mMdatOffset;
+    off64_t mMaxOffsetAppend; // File offset written upto while appending.
     off64_t mMdatEndOffset;  // End offset of mdat atom.
     uint8_t *mInMemoryCache;
     off64_t mInMemoryCacheOffset;
@@ -275,6 +277,10 @@ protected:
     // drained the chunks yet.
     // By default, real time recording is on.
     bool isRealTimeRecording() const;
+
+    // Return whether the writer is used in background mode for media
+    // transcoding.
+    bool isBackgroundMode() const;
 
     void lock();
     void unlock();

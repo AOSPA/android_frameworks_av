@@ -728,7 +728,9 @@ void CCodecBufferChannel::feedInputBufferIfAvailableInternal() {
         }
     }
     size_t numActiveSlots = 0;
-    while (!mPipelineWatcher.lock()->pipelineFull()) {
+    size_t pipelineRoom = 0;
+    size_t numInputBuffersAvailable = 0;
+    while (!mPipelineWatcher.lock()->pipelineFull(&pipelineRoom)) {
         sp<MediaCodecBuffer> inBuffer;
         size_t index;
         {
@@ -751,6 +753,11 @@ void CCodecBufferChannel::feedInputBufferIfAvailableInternal() {
 
         ALOGV("[%s] new input index = %zu [%p]", mName, index, inBuffer.get());
         mCallback->onInputBufferAvailable(index, inBuffer);
+        if (++numInputBuffersAvailable >= pipelineRoom) {
+            ALOGV("[%s] pipeline will overflow after %zu queueInputBuffer", mName,
+                    numInputBuffersAvailable);
+            break;
+        }
     }
     ALOGV("[%s] # active slots after feedInputBufferIfAvailable = %zu", mName, numActiveSlots);
 }
@@ -1036,20 +1043,7 @@ status_t CCodecBufferChannel::start(
     uint32_t outputDelayValue = outputDelay ? outputDelay.value : 0;
 
     size_t numInputSlots = inputDelayValue + pipelineDelayValue + kSmoothnessFactor;
-    size_t smoothnessFactor = kSmoothnessFactor;
-
-    if (outputFormat != nullptr) {
-        int32_t width = 0;
-        int32_t height = 0;
-        if (outputFormat->findInt32(KEY_HEIGHT, &height) &&
-                outputFormat->findInt32(KEY_WIDTH, &width) &&
-                width * height > 4096 * 2304) {
-            smoothnessFactor = 0;
-            outputDelayValue = (outputDelayValue > 12) ? 12 : outputDelayValue;
-            ALOGI("resolution > 4K, reduce default output delay value to %u", outputDelayValue);
-        }
-    }
-    size_t numOutputSlots = outputDelayValue + smoothnessFactor;
+    size_t numOutputSlots = outputDelayValue + kSmoothnessFactor;
 
     // TODO: get this from input format
     bool secure = mComponent->getName().find(".secure") != std::string::npos;
@@ -1233,21 +1227,16 @@ status_t CCodecBufferChannel::start(
             Mutexed<OutputSurface>::Locked output(mOutputSurface);
             maxDequeueCount = output->maxDequeueBuffers = numOutputSlots +
                     reorderDepth.value + kRenderingDepth;
-            bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
-            if (!isHW) {
+            if (!secure) {
                 output->maxDequeueBuffers += numInputSlots;
             }
             outputSurface = output->surface ?
                     output->surface->getIGraphicBufferProducer() : nullptr;
             if (outputSurface) {
-                ALOGI("[%s] start: max output delay %u",
-                        mName, output->maxDequeueBuffers);
+                ALOGD("[%s] start: max output delay %u", mName, output->maxDequeueBuffers);
                 output->surface->setMaxDequeuedBufferCount(output->maxDequeueBuffers);
             }
             outputGeneration = output->generation;
-        }
-        if (maxDequeueCount > 0) {
-            mComponent->setOutputSurfaceMaxDequeueCount(maxDequeueCount);
         }
 
         bool graphic = (oStreamFormat.value == C2BufferData::GRAPHIC);
@@ -1388,7 +1377,8 @@ status_t CCodecBufferChannel::start(
             mComponent->setOutputSurface(
                     outputPoolId_,
                     outputSurface,
-                    outputGeneration);
+                    outputGeneration,
+                    maxDequeueCount);
         }
 
         if (oStreamFormat.value == C2BufferData::LINEAR) {
@@ -1424,8 +1414,7 @@ status_t CCodecBufferChannel::start(
     // mOutputBuffers are initialized to make sure that lingering callbacks
     // about buffers from the previous generation do not interfere with the
     // newly initialized pipeline capacity.
-    // Do not update the pipelinewatcher's delays when resuming
-    if (inputFormat) {
+    {
         ALOGD("[%s] start: updating output delay %u", mName, outputDelayValue);
         Mutexed<PipelineWatcher>::Locked watcher(mPipelineWatcher);
         watcher->inputDelay(inputDelayValue)
@@ -1532,14 +1521,14 @@ status_t CCodecBufferChannel::requestInitialInputBuffers() {
 void CCodecBufferChannel::stop() {
     mSync.stop();
     mFirstValidFrameIndex = mFrameIndex.load(std::memory_order_relaxed);
-    if (mInputSurface != nullptr) {
-        mInputSurface.reset();
-    }
-    mPipelineWatcher.lock()->flush();
 }
 
 void CCodecBufferChannel::reset() {
     stop();
+    if (mInputSurface != nullptr) {
+        mInputSurface.reset();
+    }
+    mPipelineWatcher.lock()->flush();
     {
         Mutexed<Input>::Locked input(mInput);
         input->buffers.reset(new DummyInputBuffers(""));
@@ -1567,8 +1556,10 @@ void CCodecBufferChannel::release() {
 
 void CCodecBufferChannel::flush(const std::list<std::unique_ptr<C2Work>> &flushedWork) {
     ALOGV("[%s] flush", mName);
+    std::vector<uint64_t> indices;
     std::list<std::unique_ptr<C2Work>> configs;
     for (const std::unique_ptr<C2Work> &work : flushedWork) {
+        indices.push_back(work->input.ordinal.frameIndex.peeku());
         if (!(work->input.flags & C2FrameData::FLAG_CODEC_CONFIG)) {
             continue;
         }
@@ -1581,6 +1572,7 @@ void CCodecBufferChannel::flush(const std::list<std::unique_ptr<C2Work>> &flushe
         std::unique_ptr<C2Work> copy(new C2Work);
         copy->input.flags = C2FrameData::flags_t(work->input.flags | C2FrameData::FLAG_DROP_FRAME);
         copy->input.ordinal = work->input.ordinal;
+        copy->input.ordinal.frameIndex = mFrameIndex++;
         copy->input.buffers.insert(
                 copy->input.buffers.begin(),
                 work->input.buffers.begin(),
@@ -1609,7 +1601,12 @@ void CCodecBufferChannel::flush(const std::list<std::unique_ptr<C2Work>> &flushe
             output->buffers->flushStash();
         }
     }
-    mPipelineWatcher.lock()->flush();
+    {
+        Mutexed<PipelineWatcher>::Locked watcher(mPipelineWatcher);
+        for (uint64_t index : indices) {
+            watcher->onWorkDone(index);
+        }
+    }
 }
 
 void CCodecBufferChannel::onWorkDone(
@@ -1770,25 +1767,14 @@ bool CCodecBufferChannel::handleWork(
 
                         bool outputBuffersChanged = false;
                         size_t numOutputSlots = 0;
-                        bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
                         {
                             Mutexed<Output>::Locked output(mOutput);
                             if (!output->buffers) {
                                 return false;
                             }
-
-                            int32_t width = 0;
-                            int32_t height = 0;
-                            size_t smoothnessFactor = kSmoothnessFactor;
-                            const sp<AMessage> bufOutFormat = output->buffers->dupFormat();
-                            if (bufOutFormat->findInt32(KEY_HEIGHT, &height) &&
-                                    bufOutFormat->findInt32(KEY_WIDTH, &width) &&
-                                    width * height > 4096 * 2304) {
-                                smoothnessFactor = 0;
-                            }
                             output->outputDelay = outputDelay.value;
-                            numOutputSlots = outputDelay.value + smoothnessFactor;
-
+                            numOutputSlots = outputDelay.value +
+                                             kSmoothnessFactor;
                             if (output->numSlots < numOutputSlots) {
                                 output->numSlots = numOutputSlots;
                                 if (output->buffers->isArrayMode()) {
@@ -1799,10 +1785,6 @@ bool CCodecBufferChannel::handleWork(
                                     array->grow(numOutputSlots);
                                     outputBuffersChanged = true;
                                 }
-                            } else if (!output->buffers->isArrayMode() && isHW) {
-                                ALOGI("[%s] onWorkDone: shrinking output slots from %zu to %zu",
-                                        mName, output->numSlots, numOutputSlots);
-                                output->numSlots = numOutputSlots;
                             }
                             numOutputSlots = output->numSlots;
                         }
@@ -1851,8 +1833,6 @@ bool CCodecBufferChannel::handleWork(
     }
     if (needMaxDequeueBufferCountUpdate) {
         size_t numOutputSlots = 0;
-        bool isHW = mComponent->getName().find("c2.qti") != std::string::npos;
-        size_t numInputSlots = mInput.lock()->numSlots;
         uint32_t reorderDepth = 0;
         int maxDequeueCount = 0;
         {
@@ -1864,9 +1844,6 @@ bool CCodecBufferChannel::handleWork(
             Mutexed<OutputSurface>::Locked output(mOutputSurface);
             maxDequeueCount = output->maxDequeueBuffers =
                     numOutputSlots + reorderDepth + kRenderingDepth;
-            if (!isHW) {
-                output->maxDequeueBuffers += numInputSlots;
-            }
             if (output->surface) {
                 ALOGI("[%s] onWorkDone: updating max output delay %u",
                         mName, output->maxDequeueBuffers);
@@ -1934,13 +1911,13 @@ bool CCodecBufferChannel::handleWork(
         }
     }
 
-    bool drop = false;
     if (worklet->output.flags & C2FrameData::FLAG_DROP_FRAME) {
-        ALOGV("[%s] onWorkDone: drop buffer but keep metadata", mName);
-        drop = true;
+        ALOGV("[%s] onWorkDone: drop output buffer (%lld)",
+              mName, work->input.ordinal.frameIndex.peekull());
+        notifyClient = false;
     }
 
-    if (notifyClient && !buffer && !flags && !(drop && outputFormat)) {
+    if (notifyClient && !buffer && !flags) {
         ALOGV("[%s] onWorkDone: Not reporting output buffer (%lld)",
               mName, work->input.ordinal.frameIndex.peekull());
         notifyClient = false;
@@ -1967,7 +1944,7 @@ bool CCodecBufferChannel::handleWork(
             return false;
         }
         output->buffers->pushToStash(
-                drop ? nullptr : buffer,
+                buffer,
                 notifyClient,
                 timestamp.peek(),
                 flags,
@@ -2031,10 +2008,11 @@ status_t CCodecBufferChannel::setSurface(const sp<Surface> &newSurface) {
                 & ((1 << 10) - 1));
 
     sp<IGraphicBufferProducer> producer;
+    int maxDequeueCount = mOutputSurface.lock()->maxDequeueBuffers;
     if (newSurface) {
         newSurface->setScalingMode(NATIVE_WINDOW_SCALING_MODE_SCALE_TO_WINDOW);
         newSurface->setDequeueTimeout(kDequeueTimeoutNs);
-        newSurface->setMaxDequeuedBufferCount(mOutputSurface.lock()->maxDequeueBuffers);
+        newSurface->setMaxDequeuedBufferCount(maxDequeueCount);
         producer = newSurface->getIGraphicBufferProducer();
         producer->setGenerationNumber(generation);
     } else {
@@ -2054,7 +2032,8 @@ status_t CCodecBufferChannel::setSurface(const sp<Surface> &newSurface) {
         if (mComponent->setOutputSurface(
                 outputPoolId,
                 producer,
-                generation) != C2_OK) {
+                generation,
+                maxDequeueCount) != C2_OK) {
             ALOGI("[%s] setSurface: component setOutputSurface failed", mName);
             return INVALID_OPERATION;
         }
@@ -2077,10 +2056,9 @@ PipelineWatcher::Clock::duration CCodecBufferChannel::elapsed() {
     if (!mInputMetEos) {
         size_t outputDelay = mOutput.lock()->outputDelay;
         Mutexed<Input>::Locked input(mInput);
-        n = input->inputDelay + input->pipelineDelay + outputDelay + kSmoothnessFactor;
-        ALOGD("[%s] DEBUG: elapsed: n=%zu [in=%u pipeline=%u out=%zu smoothness=%zu]",
-              mComponentName.c_str(), n, input->inputDelay, input->pipelineDelay,
-              outputDelay, kSmoothnessFactor);
+        n = input->inputDelay + input->pipelineDelay + outputDelay;
+        ALOGD("[%s] DEBUG: elapsed: n=%zu [in=%u pipeline=%u out=%zu]", mName, n,
+                input->inputDelay, input->pipelineDelay, outputDelay);
     }
     return mPipelineWatcher.lock()->elapsed(PipelineWatcher::Clock::now(), n);
 }

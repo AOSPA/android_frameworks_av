@@ -19,6 +19,7 @@
 
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
+#include <media/MediaMetricsItem.h>
 #include <utils/Trace.h>
 
 #include "client/AudioStreamInternalPlay.h"
@@ -301,7 +302,7 @@ void *AudioStreamInternalPlay::callbackLoop() {
             }
         } else if (callbackResult == AAUDIO_CALLBACK_RESULT_STOP) {
             ALOGD("%s(): callback returned AAUDIO_CALLBACK_RESULT_STOP", __func__);
-            result = systemStopFromCallback();
+            result = systemStopInternal();
             break;
         }
     }

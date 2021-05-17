@@ -23,10 +23,11 @@
 
 #include <media/NdkMediaFormat.h>
 
-#include <media/formatshaper/VQops.h>
-#include <media/formatshaper/CodecProperties.h>
+#include "CodecProperties.h"
+#include "VideoShaper.h"
+#include "VQops.h"
+
 #include <media/formatshaper/FormatShaper.h>
-#include <media/formatshaper/VideoShaper.h>
 
 namespace android {
 namespace mediaformatshaper {
@@ -95,6 +96,23 @@ int setFeature(shaperHandle_t shaper, const char *feature, int value) {
 
     // save a map of all features
     codec->setFeatureValue(feature, value);
+
+    return 0;
+}
+
+int setTuning(shaperHandle_t shaper, const char *tuning, const char *value) {
+    ALOGV("setTuning: tuning %s value %s", tuning, value);
+    CodecProperties *codec = (CodecProperties*) shaper;
+    if (codec == nullptr) {
+        return -1;
+    }
+    // must not yet be registered
+    if (codec->isRegistered()) {
+        return -1;
+    }
+
+    // save a map of all features
+    codec->setTuningValue(tuning, value);
 
     return 0;
 }
@@ -176,6 +194,8 @@ extern "C" FormatShaperOps_t shaper_ops = {
     .shapeFormat = shapeFormat,
     .getMappings = getMappings,
     .getReverseMappings = getReverseMappings,
+
+    .setTuning = setTuning,
 };
 
 }  // namespace mediaformatshaper

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <audio_utils/primitives.h>
 #include <aaudio/AAudio.h>
+#include <media/MediaMetricsItem.h>
 
 #include "client/AudioStreamInternalCapture.h"
 #include "utility/AudioClock.h"
@@ -268,7 +269,7 @@ void *AudioStreamInternalCapture::callbackLoop() {
 
         if (callbackResult == AAUDIO_CALLBACK_RESULT_STOP) {
             ALOGD("%s(): callback returned AAUDIO_CALLBACK_RESULT_STOP", __func__);
-            result = systemStopFromCallback();
+            result = systemStopInternal();
             break;
         }
     }

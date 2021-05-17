@@ -104,6 +104,7 @@ static const uint32_t kWMASupportedMaxByteRates[kWmaStandardFrequencies][kWmaSta
     {20008, 32048},
     {20000, 48000},
     {48024, 320032},
+    {256008, 256008}
 };
 
 template <typename T>
@@ -319,7 +320,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
                 setOutputDevices(desc, newDevices, force, 0);
             }
             if (!desc->isDuplicated() && desc->mProfile->hasDynamicAudioProfile() &&
-                    desc->devices() != activeMediaDevices &&
+                    !activeMediaDevices.empty() && desc->devices() != activeMediaDevices &&
                     desc->supportsDevicesForPlayback(activeMediaDevices)) {
                 // Reopen the output to query the dynamic profiles when there is not active
                 // clients or all active clients will be rerouted. Otherwise, set the flag
@@ -1377,22 +1378,25 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
                 }
                 if (desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
                     directSessionInUse = true;
-                    ALOGD("%s Direct PCM already in use", __func__);
+                    ALOGV("%s Direct PCM already in use", __func__);
                 }
                 if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
                     offloadSessionInUse = true;
-                    ALOGD("%s Compress Offload already in use", __func__);
+                    ALOGV("%s Compress Offload already in use", __func__);
                 }
             }
         }
-        if (outputDesc != nullptr) {
-            if ((((flags == AUDIO_OUTPUT_FLAG_DIRECT) && directSessionInUse) ||
-                ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse)) &&
-                 session != outputDesc->mDirectClientSession) {
-                 ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
-                       "is not the same as requesting client (%d) for different output conf",
-                 outputDesc->mDirectClientSession, session);
-                 return NAME_NOT_FOUND;
+        if (outputDesc != nullptr &&
+            ((flags == AUDIO_OUTPUT_FLAG_DIRECT && directSessionInUse) ||
+            ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse))) {
+            if (session != outputDesc->mDirectClientSession) {
+                ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
+                      "is not the same as requesting client (%d) for different output conf",
+                outputDesc->mDirectClientSession, session);
+                return NAME_NOT_FOUND;
+            } else {
+                ALOGV("%s close previous output on same client session %d ", __func__, session);
+                closeOutput(outputDesc->mIoHandle);
             }
         }
     }
@@ -1523,7 +1527,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         *flags = (audio_output_flags_t)(*flags &~AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
     } else if ((*flags == AUDIO_OUTPUT_FLAG_NONE || *flags == AUDIO_OUTPUT_FLAG_DIRECT ||
                 (*flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)) && !isInCall() &&
-                property_get_bool("audio.deep_buffer.media", false /* default_value */)) {
+                property_get_bool("audio.deep_buffer.media", true /* default_value */)) {
         // use DEEP_BUFFER as default output for music stream type
         forceDeepBuffer = true;
     }
@@ -2438,7 +2442,9 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
         } else {
             // Prevent from storing invalid requested device id in clients
             requestedDeviceId = AUDIO_PORT_HANDLE_NONE;
-            device = mEngine->getInputDeviceForAttributes(attributes, &policyMix);
+            device = mEngine->getInputDeviceForAttributes(attributes, uid, &policyMix);
+            ALOGV_IF(device != nullptr, "%s found device type is 0x%X",
+                __FUNCTION__, device->type());
         }
         if (device == nullptr) {
             ALOGW("getInputForAttr() could not find device for source %d", attributes.source);
@@ -2557,6 +2563,21 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
     if (profile->getModuleHandle() == 0) {
         ALOGE("getInputForAttr(): HW module %s not opened", profile->getModuleName());
         return input;
+    }
+
+    // Reuse an already opened input if a client with the same session ID already exists
+    // on that input
+    for (size_t i = 0; i < mInputs.size(); i++) {
+        sp <AudioInputDescriptor> desc = mInputs.valueAt(i);
+        if (desc->mProfile != profile) {
+            continue;
+        }
+        RecordClientVector clients = desc->clientsList();
+        for (const auto &client : clients) {
+            if (session == client->session()) {
+                return desc->mIoHandle;
+            }
+        }
     }
 
     if (!profile->canOpenNewIo()) {
@@ -2827,7 +2848,7 @@ void AudioPolicyManager::checkCloseInputs() {
             bool close = false;
             for (const auto& client : input->clientsList()) {
                 sp<DeviceDescriptor> device =
-                    mEngine->getInputDeviceForAttributes(client->attributes());
+                    mEngine->getInputDeviceForAttributes(client->attributes(), client->uid());
                 if (!input->supportedDevices().contains(device)) {
                     close = true;
                     break;
@@ -6166,7 +6187,16 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
 
     // If we are not in call and no client is active on this input, this methods returns
     // a null sp<>, causing the patch on the input stream to be released.
-    audio_attributes_t attributes = inputDesc->getHighestPriorityAttributes();
+    audio_attributes_t attributes;
+    uid_t uid;
+    sp<RecordClientDescriptor> topClient = inputDesc->getHighestPriorityClient();
+    if (topClient != nullptr) {
+      attributes = topClient->attributes();
+      uid = topClient->uid();
+    } else {
+      attributes = { .source = AUDIO_SOURCE_DEFAULT };
+      uid = 0;
+    }
 
     // Check for source AUDIO_SOURCE_VOICE_UPLINK when in call.
     // Device switch during in call record use case returns built-in mic
@@ -6176,7 +6206,7 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
         attributes.source = AUDIO_SOURCE_VOICE_COMMUNICATION;
     }
     if (attributes.source != AUDIO_SOURCE_DEFAULT) {
-        device = mEngine->getInputDeviceForAttributes(attributes);
+        device = mEngine->getInputDeviceForAttributes(attributes, uid);
     }
 
     return device;

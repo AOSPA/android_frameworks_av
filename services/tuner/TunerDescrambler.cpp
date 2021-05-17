@@ -67,8 +67,9 @@ Status TunerDescrambler::addPid(const TunerDemuxPid& pid,
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
 
-    Result res = mDescrambler->addPid(getHidlDemuxPid(pid),
-            static_cast<TunerFilter*>(optionalSourceFilter.get())->getHalFilter());
+    sp<IFilter> halFilter = (optionalSourceFilter == NULL)
+            ? NULL : static_cast<TunerFilter*>(optionalSourceFilter.get())->getHalFilter();
+    Result res = mDescrambler->addPid(getHidlDemuxPid(pid), halFilter);
     if (res != Result::SUCCESS) {
         return ::ndk::ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(res));
     }
@@ -82,8 +83,9 @@ Status TunerDescrambler::removePid(const TunerDemuxPid& pid,
         return Status::fromServiceSpecificError(static_cast<int32_t>(Result::UNAVAILABLE));
     }
 
-    Result res = mDescrambler->removePid(getHidlDemuxPid(pid),
-            static_cast<TunerFilter*>(optionalSourceFilter.get())->getHalFilter());
+    sp<IFilter> halFilter = (optionalSourceFilter == NULL)
+            ? NULL : static_cast<TunerFilter*>(optionalSourceFilter.get())->getHalFilter();
+    Result res = mDescrambler->removePid(getHidlDemuxPid(pid), halFilter);
     if (res != Result::SUCCESS) {
         return ::ndk::ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(res));
     }
@@ -109,11 +111,11 @@ DemuxPid TunerDescrambler::getHidlDemuxPid(const TunerDemuxPid& pid) {
     DemuxPid hidlPid;
     switch (pid.getTag()) {
         case TunerDemuxPid::tPid: {
-            hidlPid.tPid((uint16_t)pid.tPid);
+            hidlPid.tPid((uint16_t)pid.get<TunerDemuxPid::tPid>());
             break;
         }
         case TunerDemuxPid::mmtpPid: {
-            hidlPid.mmtpPid((uint16_t)pid.mmtpPid);
+            hidlPid.mmtpPid((uint16_t)pid.get<TunerDemuxPid::mmtpPid>());
             break;
         }
     }

@@ -41,10 +41,11 @@ class GraphicBuffer : public C2Buffer {
         : C2Buffer({block->share(C2Rect(block->width(), block->height()), ::C2Fence())}) {}
 };
 
-static std::vector<std::tuple<std::string, std::string, std::string, std::string, std::string>>
-        kEncodeTestParameters;
-static std::vector<std::tuple<std::string, std::string, std::string, std::string>>
-        kEncodeResolutionTestParameters;
+using EncodeTestParameters = std::tuple<std::string, std::string, bool, bool, bool>;
+static std::vector<EncodeTestParameters> kEncodeTestParameters;
+
+using EncodeResolutionTestParameters = std::tuple<std::string, std::string, int32_t, int32_t>;
+static std::vector<EncodeResolutionTestParameters> kEncodeResolutionTestParameters;
 
 namespace {
 
@@ -75,26 +76,13 @@ class Codec2VideoEncHidlTestBase : public ::testing::Test {
         mGraphicPool = std::make_shared<C2PooledBlockPool>(mGraphicAllocator, mBlockPoolId++);
         ASSERT_NE(mGraphicPool, nullptr);
 
-        mCompName = unknown_comp;
-        struct StringToName {
-            const char* Name;
-            standardComp CompName;
-        };
+        std::vector<std::unique_ptr<C2Param>> queried;
+        mComponent->query({}, {C2PortMediaTypeSetting::output::PARAM_TYPE}, C2_DONT_BLOCK,
+                          &queried);
+        ASSERT_GT(queried.size(), 0);
 
-        const StringToName kStringToName[] = {
-                {"h263", h263}, {"avc", avc}, {"mpeg4", mpeg4},
-                {"hevc", hevc}, {"vp8", vp8}, {"vp9", vp9},
-        };
-
-        const size_t kNumStringToName = sizeof(kStringToName) / sizeof(kStringToName[0]);
-
-        // Find the component type
-        for (size_t i = 0; i < kNumStringToName; ++i) {
-            if (strcasestr(mComponentName.c_str(), kStringToName[i].Name)) {
-                mCompName = kStringToName[i].CompName;
-                break;
-            }
-        }
+        mMime = ((C2PortMediaTypeSetting::output*)queried[0].get())->m.value;
+        std::cout << "mime : " << mMime << "\n";
         mEos = false;
         mCsd = false;
         mConfigBPictures = false;
@@ -103,7 +91,6 @@ class Codec2VideoEncHidlTestBase : public ::testing::Test {
         mTimestampUs = 0u;
         mOutputSize = 0u;
         mTimestampDevTest = false;
-        if (mCompName == unknown_comp) mDisableTest = true;
 
         C2SecureModeTuning secureModeTuning{};
         mComponent->query({&secureModeTuning}, {}, C2_MAY_BLOCK, nullptr);
@@ -185,16 +172,7 @@ class Codec2VideoEncHidlTestBase : public ::testing::Test {
         }
     }
 
-    enum standardComp {
-        h263,
-        avc,
-        mpeg4,
-        hevc,
-        vp8,
-        vp9,
-        unknown_comp,
-    };
-
+    std::string mMime;
     std::string mInstanceName;
     std::string mComponentName;
     bool mEos;
@@ -202,7 +180,6 @@ class Codec2VideoEncHidlTestBase : public ::testing::Test {
     bool mDisableTest;
     bool mConfigBPictures;
     bool mTimestampDevTest;
-    standardComp mCompName;
     uint32_t mFramesReceived;
     uint32_t mFailedWorkReceived;
     uint64_t mTimestampUs;
@@ -229,9 +206,8 @@ class Codec2VideoEncHidlTestBase : public ::testing::Test {
     }
 };
 
-class Codec2VideoEncHidlTest
-    : public Codec2VideoEncHidlTestBase,
-      public ::testing::WithParamInterface<std::tuple<std::string, std::string>> {
+class Codec2VideoEncHidlTest : public Codec2VideoEncHidlTestBase,
+                               public ::testing::WithParamInterface<TestParameters> {
     void getParams() {
         mInstanceName = std::get<0>(GetParam());
         mComponentName = std::get<1>(GetParam());
@@ -239,7 +215,7 @@ class Codec2VideoEncHidlTest
 };
 
 void validateComponent(const std::shared_ptr<android::Codec2Client::Component>& component,
-                       Codec2VideoEncHidlTest::standardComp compName, bool& disableTest) {
+                       bool& disableTest) {
     // Validate its a C2 Component
     if (component->getName().find("c2") == std::string::npos) {
         ALOGE("Not a c2 component");
@@ -265,13 +241,6 @@ void validateComponent(const std::shared_ptr<android::Codec2Client::Component>& 
             disableTest = true;
             return;
         }
-    }
-
-    // Validates component name
-    if (compName == Codec2VideoEncHidlTest::unknown_comp) {
-        ALOGE("Component InValid");
-        disableTest = true;
-        return;
     }
     ALOGV("Component Valid");
 }
@@ -403,14 +372,12 @@ void encodeNFrames(const std::shared_ptr<android::Codec2Client::Component>& comp
 TEST_P(Codec2VideoEncHidlTest, validateCompName) {
     if (mDisableTest) GTEST_SKIP() << "Test is disabled";
     ALOGV("Checks if the given component is a valid video component");
-    validateComponent(mComponent, mCompName, mDisableTest);
+    validateComponent(mComponent, mDisableTest);
     ASSERT_EQ(mDisableTest, false);
 }
 
-class Codec2VideoEncEncodeTest
-    : public Codec2VideoEncHidlTestBase,
-      public ::testing::WithParamInterface<
-              std::tuple<std::string, std::string, std::string, std::string, std::string>> {
+class Codec2VideoEncEncodeTest : public Codec2VideoEncHidlTestBase,
+                                 public ::testing::WithParamInterface<EncodeTestParameters> {
     void getParams() {
         mInstanceName = std::get<0>(GetParam());
         mComponentName = std::get<1>(GetParam());
@@ -424,10 +391,10 @@ TEST_P(Codec2VideoEncEncodeTest, EncodeTest) {
     char mURL[512];
     int32_t nWidth = ENC_DEFAULT_FRAME_WIDTH;
     int32_t nHeight = ENC_DEFAULT_FRAME_HEIGHT;
-    bool signalEOS = !std::get<2>(GetParam()).compare("true");
+    bool signalEOS = std::get<3>(GetParam());
     // Send an empty frame to receive CSD data from encoder.
-    bool sendEmptyFirstFrame = !std::get<3>(GetParam()).compare("true");
-    mConfigBPictures = !std::get<4>(GetParam()).compare("true");
+    bool sendEmptyFirstFrame = std::get<3>(GetParam());
+    mConfigBPictures = std::get<4>(GetParam());
 
     strcpy(mURL, sResourceDir.c_str());
     GetURLForComponent(mURL);
@@ -515,9 +482,9 @@ TEST_P(Codec2VideoEncEncodeTest, EncodeTest) {
         ASSERT_TRUE(false);
     }
 
-    if (mCompName == vp8 || mCompName == h263) {
+    if ((mMime.find("vp8") != std::string::npos) || (mMime.find("3gpp") != std::string::npos)) {
         ASSERT_FALSE(mCsd) << "CSD Buffer not expected";
-    } else if (mCompName != vp9) {
+    } else if (mMime.find("vp9") == std::string::npos) {
         ASSERT_TRUE(mCsd) << "CSD Buffer not received";
     }
 
@@ -695,8 +662,7 @@ TEST_P(Codec2VideoEncHidlTest, InvalidBufferTest) {
 
 class Codec2VideoEncResolutionTest
     : public Codec2VideoEncHidlTestBase,
-      public ::testing::WithParamInterface<
-              std::tuple<std::string, std::string, std::string, std::string>> {
+      public ::testing::WithParamInterface<EncodeResolutionTestParameters> {
     void getParams() {
         mInstanceName = std::get<0>(GetParam());
         mComponentName = std::get<1>(GetParam());
@@ -708,8 +674,8 @@ TEST_P(Codec2VideoEncResolutionTest, ResolutionTest) {
     if (mDisableTest) GTEST_SKIP() << "Test is disabled";
 
     std::ifstream eleStream;
-    int32_t nWidth = std::stoi(std::get<2>(GetParam()));
-    int32_t nHeight = std::stoi(std::get<3>(GetParam()));
+    int32_t nWidth = std::get<2>(GetParam());
+    int32_t nHeight = std::get<3>(GetParam());
     ALOGD("Trying encode for width %d height %d", nWidth, nHeight);
     mEos = false;
 
@@ -741,14 +707,16 @@ TEST_P(Codec2VideoEncResolutionTest, ResolutionTest) {
 }
 
 INSTANTIATE_TEST_SUITE_P(PerInstance, Codec2VideoEncHidlTest, testing::ValuesIn(kTestParameters),
-                         android::hardware::PrintInstanceTupleNameToString<>);
+                         PrintInstanceTupleNameToString<>);
 
 INSTANTIATE_TEST_SUITE_P(NonStdSizes, Codec2VideoEncResolutionTest,
-                         ::testing::ValuesIn(kEncodeResolutionTestParameters));
+                         ::testing::ValuesIn(kEncodeResolutionTestParameters),
+                         PrintInstanceTupleNameToString<>);
 
 // EncodeTest with EOS / No EOS
 INSTANTIATE_TEST_SUITE_P(EncodeTestwithEOS, Codec2VideoEncEncodeTest,
-                         ::testing::ValuesIn(kEncodeTestParameters));
+                         ::testing::ValuesIn(kEncodeTestParameters),
+                         PrintInstanceTupleNameToString<>);
 
 TEST_P(Codec2VideoEncHidlTest, AdaptiveBitrateTest) {
     description("Encodes input file for different bitrates");
@@ -842,27 +810,23 @@ int main(int argc, char** argv) {
     parseArgs(argc, argv);
     kTestParameters = getTestParameters(C2Component::DOMAIN_VIDEO, C2Component::KIND_ENCODER);
     for (auto params : kTestParameters) {
-        constexpr char const* kBoolString[] = { "false", "true" };
         for (size_t i = 0; i < 1 << 3; ++i) {
             kEncodeTestParameters.push_back(std::make_tuple(
-                    std::get<0>(params), std::get<1>(params),
-                    kBoolString[i & 1],
-                    kBoolString[(i >> 1) & 1],
-                    kBoolString[(i >> 2) & 1]));
+                    std::get<0>(params), std::get<1>(params), i & 1, (i >> 1) & 1, (i >> 2) & 1));
         }
 
         kEncodeResolutionTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), "52", "18"));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 52, 18));
         kEncodeResolutionTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), "365", "365"));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 365, 365));
         kEncodeResolutionTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), "484", "362"));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 484, 362));
         kEncodeResolutionTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), "244", "488"));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 244, 488));
         kEncodeResolutionTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), "852", "608"));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 852, 608));
         kEncodeResolutionTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), "1400", "442"));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 1400, 442));
     }
 
     ::testing::InitGoogleTest(&argc, argv);

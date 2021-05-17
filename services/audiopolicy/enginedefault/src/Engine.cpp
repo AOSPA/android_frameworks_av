@@ -197,7 +197,7 @@ void Engine::filterOutputDevicesForStrategy(legacy_strategy strategy,
             if (desc->isActive() && !audio_is_linear_pcm(desc->getFormat())) {
                 availableOutputDevices.remove(desc->devices().getDevicesFromTypes({
                         AUDIO_DEVICE_OUT_HDMI, AUDIO_DEVICE_OUT_SPDIF,
-                        AUDIO_DEVICE_OUT_HDMI_ARC}));
+                        AUDIO_DEVICE_OUT_HDMI_ARC, AUDIO_DEVICE_OUT_HDMI_EARC}));
             }
         }
         } break;
@@ -398,7 +398,9 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
         if (strategy == STRATEGY_MEDIA) {
             // ARC, SPDIF and AUX_LINE can co-exist with others.
             devices3 = availableOutputDevices.getDevicesFromTypes({
-                    AUDIO_DEVICE_OUT_HDMI_ARC, AUDIO_DEVICE_OUT_SPDIF, AUDIO_DEVICE_OUT_AUX_LINE});
+                    AUDIO_DEVICE_OUT_HDMI_ARC, AUDIO_DEVICE_OUT_HDMI_EARC,
+                    AUDIO_DEVICE_OUT_SPDIF, AUDIO_DEVICE_OUT_AUX_LINE,
+                    });
         }
 
         devices2.add(devices3);
@@ -755,6 +757,7 @@ DeviceVector Engine::getOutputDevicesForStream(audio_stream_type_t stream, bool 
 }
 
 sp<DeviceDescriptor> Engine::getInputDeviceForAttributes(const audio_attributes_t &attr,
+                                                         uid_t uid,
                                                          sp<AudioPolicyMix> *mix) const
 {
     const auto &policyMixes = getApmObserver()->getAudioPolicyMixCollection();
@@ -774,7 +777,10 @@ sp<DeviceDescriptor> Engine::getInputDeviceForAttributes(const audio_attributes_
         return device;
     }
 
-    device = policyMixes.getDeviceAndMixForInputSource(attr.source, availableInputDevices, mix);
+    device = policyMixes.getDeviceAndMixForInputSource(attr.source,
+                                                       availableInputDevices,
+                                                       uid,
+                                                       mix);
     if (device != nullptr) {
         return device;
     }

@@ -113,6 +113,8 @@ cc_library_shared {
         "libutilscallstack",
         "libutils",
         "libbinder",
+        "libactivitymanager_aidl",
+        "libpermission",
         "libcutils",
         "libmedia",
         "libmediautils",
@@ -154,12 +156,15 @@ cc_library_shared {
     ],
 
     static_libs: [
+        "libprocessinfoservice_aidl",
         "libbinderthreadstateutils",
         "media_permission-aidl-cpp",
     ],
 
     export_shared_lib_headers: [
         "libbinder",
+        "libactivitymanager_aidl",
+        "libpermission",
         "libcamera_client",
         "libfmq",
         "libsensorprivacy",

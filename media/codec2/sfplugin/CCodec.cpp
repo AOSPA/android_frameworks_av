@@ -397,6 +397,14 @@ public:
 
         // consumer usage is queried earlier.
 
+        // priority
+        if (mConfig.mPriority != config.mPriority) {
+            if (config.mPriority != INT_MAX) {
+                mNode->setPriority(config.mPriority);
+            }
+            mConfig.mPriority = config.mPriority;
+        }
+
         if (status.str().empty()) {
             ALOGD("ISConfig not changed");
         } else {
@@ -944,6 +952,7 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 }
             }
             config->mISConfig->mUsage = 0;
+            config->mISConfig->mPriority = INT_MAX;
         }
 
         /*
@@ -997,7 +1006,15 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 // needed for decoders.
                 if (!(config->mDomain & Config::IS_ENCODER)) {
                     if (surface == nullptr) {
-                        format = flexPixelFormat.value_or(COLOR_FormatYUV420Flexible);
+                        const char *prefix = "";
+                        if (flexSemiPlanarPixelFormat) {
+                            format = COLOR_FormatYUV420SemiPlanar;
+                            prefix = "semi-";
+                        } else {
+                            format = COLOR_FormatYUV420Planar;
+                        }
+                        ALOGD("Client requested ByteBuffer mode decoder w/o color format set: "
+                                "using default %splanar color format", prefix);
                     } else {
                         format = COLOR_FormatSurface;
                     }
@@ -1125,6 +1142,16 @@ void CCodec::configure(const sp<AMessage> &msg) {
             qp->setFlexCount(ix);
 
             configUpdate.push_back(std::move(qp));
+        }
+
+        int32_t background = 0;
+        if ((config->mDomain & Config::IS_VIDEO)
+                && msg->findInt32("android._background-mode", &background)
+                && background) {
+            androidSetThreadPriority(gettid(), ANDROID_PRIORITY_BACKGROUND);
+            if (config->mISConfig) {
+                config->mISConfig->mPriority = ANDROID_PRIORITY_BACKGROUND;
+            }
         }
 
         err = config->setParameters(comp, configUpdate, C2_DONT_BLOCK);
@@ -1790,17 +1817,19 @@ void CCodec::release(bool sendCallback) {
 }
 
 status_t CCodec::setSurface(const sp<Surface> &surface) {
-    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
-    const std::unique_ptr<Config> &config = *configLocked;
-    if (config->mTunneled && config->mSidebandHandle != nullptr) {
-        sp<ANativeWindow> nativeWindow = static_cast<ANativeWindow *>(surface.get());
-        status_t err = native_window_set_sideband_stream(
-                nativeWindow.get(),
-                const_cast<native_handle_t *>(config->mSidebandHandle->handle()));
-        if (err != OK) {
-            ALOGE("NativeWindow(%p) native_window_set_sideband_stream(%p) failed! (err %d).",
-                    nativeWindow.get(), config->mSidebandHandle->handle(), err);
-            return err;
+    {
+        Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+        const std::unique_ptr<Config> &config = *configLocked;
+        if (config->mTunneled && config->mSidebandHandle != nullptr) {
+            sp<ANativeWindow> nativeWindow = static_cast<ANativeWindow *>(surface.get());
+            status_t err = native_window_set_sideband_stream(
+                    nativeWindow.get(),
+                    const_cast<native_handle_t *>(config->mSidebandHandle->handle()));
+            if (err != OK) {
+                ALOGE("NativeWindow(%p) native_window_set_sideband_stream(%p) failed! (err %d).",
+                        nativeWindow.get(), config->mSidebandHandle->handle(), err);
+                return err;
+            }
         }
     }
     return mChannel->setSurface(surface);
@@ -1933,6 +1962,12 @@ void CCodec::signalSetParameters(const sp<AMessage> &msg) {
     if (params->findInt32(KEY_BIT_RATE, &bitrate)) {
         params = msg->dup();
         params->removeEntryAt(params->findEntryByName(KEY_BIT_RATE));
+    }
+
+    int32_t syncId = 0;
+    if (params->findInt32("audio-hw-sync", &syncId)
+            || params->findInt32("hw-av-sync-id", &syncId)) {
+        configureTunneledVideoPlayback(comp, nullptr, params);
     }
 
     Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
@@ -2135,85 +2170,97 @@ void CCodec::onMessageReceived(const sp<AMessage> &msg) {
             }
 
             // handle configuration changes in work done
-            Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
-            const std::unique_ptr<Config> &config = *configLocked;
-            Config::Watcher<C2StreamInitDataInfo::output> initData =
-                config->watch<C2StreamInitDataInfo::output>();
-            if (!work->worklets.empty()
-                    && (work->worklets.front()->output.flags
-                            & C2FrameData::FLAG_DISCARD_FRAME) == 0) {
+            std::unique_ptr<C2Param> initData;
+            sp<AMessage> outputFormat = nullptr;
+            {
+                Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+                const std::unique_ptr<Config> &config = *configLocked;
+                Config::Watcher<C2StreamInitDataInfo::output> initDataWatcher =
+                    config->watch<C2StreamInitDataInfo::output>();
+                if (!work->worklets.empty()
+                        && (work->worklets.front()->output.flags
+                                & C2FrameData::FLAG_DISCARD_FRAME) == 0) {
 
-                // copy buffer info to config
-                std::vector<std::unique_ptr<C2Param>> updates;
-                for (const std::unique_ptr<C2Param> &param
-                        : work->worklets.front()->output.configUpdate) {
-                    updates.push_back(C2Param::Copy(*param));
-                }
-                unsigned stream = 0;
-                for (const std::shared_ptr<C2Buffer> &buf : work->worklets.front()->output.buffers) {
-                    for (const std::shared_ptr<const C2Info> &info : buf->info()) {
-                        // move all info into output-stream #0 domain
-                        updates.emplace_back(C2Param::CopyAsStream(*info, true /* output */, stream));
+                    // copy buffer info to config
+                    std::vector<std::unique_ptr<C2Param>> updates;
+                    for (const std::unique_ptr<C2Param> &param
+                            : work->worklets.front()->output.configUpdate) {
+                        updates.push_back(C2Param::Copy(*param));
+                    }
+                    unsigned stream = 0;
+                    std::vector<std::shared_ptr<C2Buffer>> &outputBuffers =
+                        work->worklets.front()->output.buffers;
+                    for (const std::shared_ptr<C2Buffer> &buf : outputBuffers) {
+                        for (const std::shared_ptr<const C2Info> &info : buf->info()) {
+                            // move all info into output-stream #0 domain
+                            updates.emplace_back(
+                                    C2Param::CopyAsStream(*info, true /* output */, stream));
+                        }
+
+                        const std::vector<C2ConstGraphicBlock> blocks = buf->data().graphicBlocks();
+                        // for now only do the first block
+                        if (!blocks.empty()) {
+                            // ALOGV("got output buffer with crop %u,%u+%u,%u and size %u,%u",
+                            //      block.crop().left, block.crop().top,
+                            //      block.crop().width, block.crop().height,
+                            //      block.width(), block.height());
+                            const C2ConstGraphicBlock &block = blocks[0];
+                            updates.emplace_back(new C2StreamCropRectInfo::output(
+                                    stream, block.crop()));
+                            updates.emplace_back(new C2StreamPictureSizeInfo::output(
+                                    stream, block.crop().width, block.crop().height));
+                        }
+                        ++stream;
                     }
 
-                    const std::vector<C2ConstGraphicBlock> blocks = buf->data().graphicBlocks();
-                    // for now only do the first block
-                    if (!blocks.empty()) {
-                        // ALOGV("got output buffer with crop %u,%u+%u,%u and size %u,%u",
-                        //      block.crop().left, block.crop().top,
-                        //      block.crop().width, block.crop().height,
-                        //      block.width(), block.height());
-                        const C2ConstGraphicBlock &block = blocks[0];
-                        updates.emplace_back(new C2StreamCropRectInfo::output(stream, block.crop()));
-                        updates.emplace_back(new C2StreamPictureSizeInfo::output(
-                                stream, block.crop().width, block.crop().height));
-                    }
-                    ++stream;
-                }
+                    sp<AMessage> oldFormat = config->mOutputFormat;
+                    config->updateConfiguration(updates, config->mOutputDomain);
+                    RevertOutputFormatIfNeeded(oldFormat, config->mOutputFormat);
 
-                sp<AMessage> outputFormat = config->mOutputFormat;
-                config->updateConfiguration(updates, config->mOutputDomain);
-                RevertOutputFormatIfNeeded(outputFormat, config->mOutputFormat);
-
-                // copy standard infos to graphic buffers if not already present (otherwise, we
-                // may overwrite the actual intermediate value with a final value)
-                stream = 0;
-                const static C2Param::Index stdGfxInfos[] = {
-                    C2StreamRotationInfo::output::PARAM_TYPE,
-                    C2StreamColorAspectsInfo::output::PARAM_TYPE,
-                    C2StreamDataSpaceInfo::output::PARAM_TYPE,
-                    C2StreamHdrStaticInfo::output::PARAM_TYPE,
-                    C2StreamHdr10PlusInfo::output::PARAM_TYPE,
-                    C2StreamPixelAspectRatioInfo::output::PARAM_TYPE,
-                    C2StreamSurfaceScalingInfo::output::PARAM_TYPE
-                };
-                for (const std::shared_ptr<C2Buffer> &buf : work->worklets.front()->output.buffers) {
-                    if (buf->data().graphicBlocks().size()) {
-                        for (C2Param::Index ix : stdGfxInfos) {
-                            if (!buf->hasInfo(ix)) {
-                                const C2Param *param =
-                                    config->getConfigParameterValue(ix.withStream(stream));
-                                if (param) {
-                                    std::shared_ptr<C2Param> info(C2Param::Copy(*param));
-                                    buf->setInfo(std::static_pointer_cast<C2Info>(info));
+                    // copy standard infos to graphic buffers if not already present (otherwise, we
+                    // may overwrite the actual intermediate value with a final value)
+                    stream = 0;
+                    const static C2Param::Index stdGfxInfos[] = {
+                        C2StreamRotationInfo::output::PARAM_TYPE,
+                        C2StreamColorAspectsInfo::output::PARAM_TYPE,
+                        C2StreamDataSpaceInfo::output::PARAM_TYPE,
+                        C2StreamHdrStaticInfo::output::PARAM_TYPE,
+                        C2StreamHdr10PlusInfo::output::PARAM_TYPE,
+                        C2StreamPixelAspectRatioInfo::output::PARAM_TYPE,
+                        C2StreamSurfaceScalingInfo::output::PARAM_TYPE
+                    };
+                    for (const std::shared_ptr<C2Buffer> &buf : outputBuffers) {
+                        if (buf->data().graphicBlocks().size()) {
+                            for (C2Param::Index ix : stdGfxInfos) {
+                                if (!buf->hasInfo(ix)) {
+                                    const C2Param *param =
+                                        config->getConfigParameterValue(ix.withStream(stream));
+                                    if (param) {
+                                        std::shared_ptr<C2Param> info(C2Param::Copy(*param));
+                                        buf->setInfo(std::static_pointer_cast<C2Info>(info));
+                                    }
                                 }
                             }
                         }
+                        ++stream;
                     }
-                    ++stream;
                 }
-            }
-            if (config->mInputSurface) {
-                if (work->worklets.empty()
-                       || !work->worklets.back()
-                       || (work->worklets.back()->output.flags
-                              & C2FrameData::FLAG_INCOMPLETE) == 0) {
-                    config->mInputSurface->onInputBufferDone(work->input.ordinal.frameIndex);
+                if (config->mInputSurface) {
+                    if (work->worklets.empty()
+                           || !work->worklets.back()
+                           || (work->worklets.back()->output.flags
+                                  & C2FrameData::FLAG_INCOMPLETE) == 0) {
+                        config->mInputSurface->onInputBufferDone(work->input.ordinal.frameIndex);
+                    }
                 }
+                if (initDataWatcher.hasChanged()) {
+                    initData = C2Param::Copy(*initDataWatcher.update().get());
+                }
+                outputFormat = config->mOutputFormat;
             }
             mChannel->onWorkDone(
-                    std::move(work), config->mOutputFormat,
-                    initData.hasChanged() ? initData.update().get() : nullptr);
+                    std::move(work), outputFormat,
+                    initData ? (C2StreamInitDataInfo::output *)initData.get() : nullptr);
             break;
         }
         case kWhatWatch: {
@@ -2263,6 +2310,10 @@ status_t CCodec::configureTunneledVideoPlayback(
         return UNKNOWN_ERROR;
     }
 
+    if (sidebandHandle == nullptr) {
+        return OK;
+    }
+
     std::vector<std::unique_ptr<C2Param>> params;
     c2err = comp->query({}, {C2PortTunnelHandleTuning::output::PARAM_TYPE}, C2_DONT_BLOCK, &params);
     if (c2err == C2_OK && params.size() == 1u) {
@@ -2294,9 +2345,13 @@ void CCodec::initiateReleaseIfStuck() {
             pendingDeadline = true;
         }
     }
-    Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
-    const std::unique_ptr<Config> &config = *configLocked;
-    if (config->mTunneled == false && name.empty()) {
+    bool tunneled = false;
+    {
+        Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
+        const std::unique_ptr<Config> &config = *configLocked;
+        tunneled = config->mTunneled;
+    }
+    if (!tunneled && name.empty()) {
         constexpr std::chrono::steady_clock::duration kWorkDurationThreshold = 3s;
         std::chrono::steady_clock::duration elapsed = mChannel->elapsed();
         if (elapsed >= kWorkDurationThreshold) {

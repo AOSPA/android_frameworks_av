@@ -21,6 +21,8 @@
 #include <mutex>
 #include <string>
 
+#include <inttypes.h>
+
 #include <utils/RefBase.h>
 
 namespace android {
@@ -56,6 +58,10 @@ class CodecProperties {
     void setFeatureValue(std::string key, int32_t value);
     bool getFeatureValue(std::string key, int32_t *valuep);
 
+    // keep a map of all tunings and their parameters
+    void setTuningValue(std::string key, std::string value);
+    bool getTuningValue(std::string key, std::string &value);
+
     // does the codec support the Android S minimum quality rules
     void setSupportedMinimumQuality(int vmaf);
     int supportedMinimumQuality();
@@ -69,7 +75,7 @@ class CodecProperties {
     // This is used to calculate a minimum bitrate for any particular resolution.
     // A 1080p (1920*1080 = 2073600 pixels) to be encoded at 5Mbps has a bpp == 2.41
     void setBpp(double bpp) { mBpp = bpp;}
-    double getBpp() {return mBpp;}
+    double getBpp(int32_t width, int32_t height);
 
     // Does this codec support QP bounding
     // The getMapping() methods provide any needed mapping to non-standard keys.
@@ -88,15 +94,31 @@ class CodecProperties {
     std::string mMediaType;
     int mApi = 0;
     int mMinimumQuality = 0;
-    int mTargetQpMax = 0;
+    int mTargetQpMax = INT32_MAX;
     bool mSupportsQp = false;
     double mBpp = 0.0;
+
+    // allow different target bits-per-pixel based on resolution
+    // similar to codec 'performance points'
+    // uses 'next largest' (by pixel count) point as minimum bpp
+    struct bpp_point {
+        struct bpp_point *next;
+        int32_t pixels;
+        int32_t width, height;
+        double bpp;
+    };
+    struct bpp_point *mBppPoints = nullptr;
+    bool bppPoint(std::string resolution, std::string value);
 
     std::mutex mMappingLock;
     // XXX figure out why I'm having problems getting compiler to like GUARDED_BY
     std::map<std::string, std::string> mMappings /*GUARDED_BY(mMappingLock)*/ ;
 
     std::map<std::string, int32_t> mFeatures /*GUARDED_BY(mMappingLock)*/ ;
+    std::map<std::string, std::string> mTunings /*GUARDED_BY(mMappingLock)*/ ;
+
+    // Seed() and Finish() use this as the underlying implementation
+    void addMediaDefaults(bool overrideable);
 
     bool mIsRegistered = false;
 

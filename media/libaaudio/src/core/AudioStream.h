@@ -146,13 +146,7 @@ protected:
      * Free any resources not already freed by release_l().
      * Assume release_l() already called.
      */
-    virtual void close_l() REQUIRES(mStreamLock) {
-        // Releasing the stream will set the state to CLOSING.
-        assert(getState() == AAUDIO_STREAM_STATE_CLOSING);
-        // setState() prevents a transition from CLOSING to any state other than CLOSED.
-        // State is checked by destructor.
-        setState(AAUDIO_STREAM_STATE_CLOSED);
-    }
+    virtual void close_l() REQUIRES(mStreamLock);
 
 public:
     // This is only used to identify a stream in the logs without
@@ -408,7 +402,7 @@ public:
     /**
      * This is called internally when an app callback returns AAUDIO_CALLBACK_RESULT_STOP.
      */
-    aaudio_result_t systemStopFromCallback();
+    aaudio_result_t systemStopInternal();
 
     /**
      * Safely RELEASE a stream after taking mStreamLock and checking
@@ -424,7 +418,7 @@ public:
      */
     aaudio_result_t safeReleaseClose();
 
-    aaudio_result_t safeReleaseCloseFromCallback();
+    aaudio_result_t safeReleaseCloseInternal();
 
 protected:
 

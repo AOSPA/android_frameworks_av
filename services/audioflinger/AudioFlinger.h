@@ -129,6 +129,9 @@ class AudioFlinger : public AudioFlingerServerAdapter::Delegate
 public:
     static void instantiate() ANDROID_API;
 
+    static media::permission::Identity checkIdentityPackage(
+                                            const media::permission::Identity& identity);
+
     status_t dump(int fd, const Vector<String16>& args) override;
 
     // IAudioFlinger interface, in binder opcode order
@@ -267,6 +270,8 @@ public:
 
     virtual status_t setAudioHalPids(const std::vector<pid_t>& pids);
 
+    virtual status_t setVibratorInfos(const std::vector<media::AudioVibratorInfo>& vibratorInfos);
+
     status_t onPreTransact(TransactionCode code, const Parcel& data, uint32_t flags) override;
 
     // end of IAudioFlinger interface
@@ -295,6 +300,8 @@ public:
 
     void updateDownStreamPatches_l(const struct audio_patch *patch,
                                    const std::set<audio_io_handle_t> streams);
+
+    const media::AudioVibratorInfo* getDefaultVibratorInfo_l();
 
 private:
     // FIXME The 400 is temporarily too high until a leak of writers in media.log is fixed.
@@ -669,6 +676,8 @@ using effect_buffer_t = int16_t;
         virtual binder::Status   setPreferredMicrophoneDirection(
                 int /*audio_microphone_direction_t*/ direction);
         virtual binder::Status   setPreferredMicrophoneFieldDimension(float zoom);
+        virtual binder::Status   shareAudioHistory(const std::string& sharedAudioPackageName,
+                                                   int64_t sharedAudioStartMs);
 
     private:
         const sp<RecordThread::RecordTrack> mRecordTrack;
@@ -971,7 +980,12 @@ private:
     SimpleLog  mAppSetParameterLog;
     SimpleLog  mSystemSetParameterLog;
 
+    std::vector<media::AudioVibratorInfo> mAudioVibratorInfos;
+
     static inline constexpr const char *mMetricsId = AMEDIAMETRICS_KEY_AUDIO_FLINGER;
+
+    // Keep in sync with java definition in media/java/android/media/AudioRecord.java
+    static constexpr int32_t kMaxSharedAudioHistoryMs = 5000;
 };
 
 #undef INCLUDING_FROM_AUDIOFLINGER_H

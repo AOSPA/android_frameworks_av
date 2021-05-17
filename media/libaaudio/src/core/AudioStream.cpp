@@ -59,6 +59,10 @@ AudioStream::~AudioStream() {
     if (!mMetricsId.empty()) {
         android::mediametrics::LogItem(mMetricsId)
                 .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_ENDAAUDIOSTREAM)
+                .set(AMEDIAMETRICS_PROP_ENCODINGREQUESTED,
+                     android::toString(mDeviceFormat).c_str())
+                .set(AMEDIAMETRICS_PROP_PERFORMANCEMODEACTUAL,
+                     AudioGlobal_convertPerformanceModeToText(getPerformanceMode()))
                 .record();
     }
 
@@ -124,7 +128,12 @@ void AudioStream::logOpen() {
             .set(AMEDIAMETRICS_PROP_PERFORMANCEMODE,
                 AudioGlobal_convertPerformanceModeToText(getPerformanceMode()))
             .set(AMEDIAMETRICS_PROP_SHARINGMODE,
-                AudioGlobal_convertSharingModeToText(getSharingMode()));
+                AudioGlobal_convertSharingModeToText(getSharingMode()))
+            .set(AMEDIAMETRICS_PROP_BUFFERCAPACITYFRAMES, getBufferCapacity())
+            .set(AMEDIAMETRICS_PROP_BURSTFRAMES, getFramesPerBurst())
+            .set(AMEDIAMETRICS_PROP_DIRECTION,
+                AudioGlobal_convertDirectionToText(getDirection()));
+
         if (getDirection() == AAUDIO_DIRECTION_OUTPUT) {
             item.set(AMEDIAMETRICS_PROP_PLAYERIID, mPlayerBase->getPlayerIId());
         }
@@ -143,12 +152,12 @@ void AudioStream::logReleaseBufferState() {
 }
 
 aaudio_result_t AudioStream::systemStart() {
-    std::lock_guard<std::mutex> lock(mStreamLock);
-
     if (collidesWithCallback()) {
         ALOGE("%s cannot be called from a callback!", __func__);
         return AAUDIO_ERROR_INVALID_STATE;
     }
+
+    std::lock_guard<std::mutex> lock(mStreamLock);
 
     switch (getState()) {
         // Is this a good time to start?
@@ -187,7 +196,6 @@ aaudio_result_t AudioStream::systemStart() {
 }
 
 aaudio_result_t AudioStream::systemPause() {
-    std::lock_guard<std::mutex> lock(mStreamLock);
 
     if (!isPauseSupported()) {
         return AAUDIO_ERROR_UNIMPLEMENTED;
@@ -198,6 +206,7 @@ aaudio_result_t AudioStream::systemPause() {
         return AAUDIO_ERROR_INVALID_STATE;
     }
 
+    std::lock_guard<std::mutex> lock(mStreamLock);
     switch (getState()) {
         // Proceed with pausing.
         case AAUDIO_STREAM_STATE_STARTING:
@@ -242,12 +251,12 @@ aaudio_result_t AudioStream::safeFlush() {
         return AAUDIO_ERROR_UNIMPLEMENTED;
     }
 
-    std::lock_guard<std::mutex> lock(mStreamLock);
     if (collidesWithCallback()) {
         ALOGE("stream cannot be flushed from a callback!");
         return AAUDIO_ERROR_INVALID_STATE;
     }
 
+    std::lock_guard<std::mutex> lock(mStreamLock);
     aaudio_result_t result = AAudio_isFlushAllowed(getState());
     if (result != AAUDIO_OK) {
         return result;
@@ -256,7 +265,7 @@ aaudio_result_t AudioStream::safeFlush() {
     return requestFlush_l();
 }
 
-aaudio_result_t AudioStream::systemStopFromCallback() {
+aaudio_result_t AudioStream::systemStopInternal() {
     std::lock_guard<std::mutex> lock(mStreamLock);
     aaudio_result_t result = safeStop_l();
     if (result == AAUDIO_OK) {
@@ -267,17 +276,12 @@ aaudio_result_t AudioStream::systemStopFromCallback() {
 }
 
 aaudio_result_t AudioStream::systemStopFromApp() {
-    std::lock_guard<std::mutex> lock(mStreamLock);
+    // This check can and should be done outside the lock.
     if (collidesWithCallback()) {
         ALOGE("stream cannot be stopped by calling from a callback!");
         return AAUDIO_ERROR_INVALID_STATE;
     }
-    aaudio_result_t result = safeStop_l();
-    if (result == AAUDIO_OK) {
-        // We only call this for logging in "dumpsys audio". So ignore return code.
-        (void) mPlayerBase->stopWithStatus();
-    }
-    return result;
+    return systemStopInternal();
 }
 
 aaudio_result_t AudioStream::safeStop_l() {
@@ -316,12 +320,12 @@ aaudio_result_t AudioStream::safeStop_l() {
 }
 
 aaudio_result_t AudioStream::safeRelease() {
-    // This may get temporarily unlocked in the MMAP release() when joining callback threads.
-    std::lock_guard<std::mutex> lock(mStreamLock);
     if (collidesWithCallback()) {
         ALOGE("%s cannot be called from a callback!", __func__);
         return AAUDIO_ERROR_INVALID_STATE;
     }
+    // This may get temporarily unlocked in the MMAP release() when joining callback threads.
+    std::lock_guard<std::mutex> lock(mStreamLock);
     if (getState() == AAUDIO_STREAM_STATE_CLOSING) { // already released?
         return AAUDIO_OK;
     }
@@ -329,21 +333,34 @@ aaudio_result_t AudioStream::safeRelease() {
 }
 
 aaudio_result_t AudioStream::safeReleaseClose() {
-    // This get temporarily unlocked in the MMAP release() when joining callback threads.
-    std::lock_guard<std::mutex> lock(mStreamLock);
     if (collidesWithCallback()) {
         ALOGE("%s cannot be called from a callback!", __func__);
         return AAUDIO_ERROR_INVALID_STATE;
     }
-    releaseCloseFinal_l();
-    return AAUDIO_OK;
+    return safeReleaseCloseInternal();
 }
 
-aaudio_result_t AudioStream::safeReleaseCloseFromCallback() {
+aaudio_result_t AudioStream::safeReleaseCloseInternal() {
     // This get temporarily unlocked in the MMAP release() when joining callback threads.
     std::lock_guard<std::mutex> lock(mStreamLock);
     releaseCloseFinal_l();
     return AAUDIO_OK;
+}
+
+void AudioStream::close_l() {
+    // Releasing the stream will set the state to CLOSING.
+    assert(getState() == AAUDIO_STREAM_STATE_CLOSING);
+    // setState() prevents a transition from CLOSING to any state other than CLOSED.
+    // State is checked by destructor.
+    setState(AAUDIO_STREAM_STATE_CLOSED);
+
+    if (!mMetricsId.empty()) {
+        android::mediametrics::LogItem(mMetricsId)
+                .set(AMEDIAMETRICS_PROP_FRAMESTRANSFERRED,
+                        getDirection() == AAUDIO_DIRECTION_INPUT ? getFramesWritten()
+                                                                 : getFramesRead())
+                .record();
+    }
 }
 
 void AudioStream::setState(aaudio_stream_state_t state) {

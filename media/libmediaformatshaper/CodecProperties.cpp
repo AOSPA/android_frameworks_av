@@ -19,8 +19,15 @@
 #include <utils/Log.h>
 
 #include <string>
+#include <stdlib.h>
 
-#include <media/formatshaper/CodecProperties.h>
+#include "CodecProperties.h"
+
+#include <media/stagefright/MediaCodecConstants.h>
+
+
+// we aren't going to mess with shaping points dimensions beyond this
+static const int32_t DIMENSION_LIMIT = 16384;
 
 namespace android {
 namespace mediaformatshaper {
@@ -63,17 +70,12 @@ void CodecProperties::setFeatureValue(std::string key, int32_t value) {
     ALOGD("setFeatureValue(%s,%d)", key.c_str(), value);
     mFeatures.insert({key, value});
 
-    if (!strcmp(key.c_str(), "vq-minimum-quality")) {
-        setSupportedMinimumQuality(value);
-    } else if (!strcmp(key.c_str(), "vq-supports-qp")) {      // key from prototyping
+    if (!strcmp(key.c_str(), FEATURE_QpBounds)) {
         setSupportsQp(1);
-    } else if (!strcmp(key.c_str(), "qp-bounds")) {           // official key
-        setSupportsQp(1);
-    } else if (!strcmp(key.c_str(), "vq-target-qpmax")) {
-        setTargetQpMax(value);
-    } else if (!strcmp(key.c_str(), "vq-target-bppx100")) {
-        double bpp = value / 100.0;
-        setBpp(bpp);
+    } else if (!strcmp(key.c_str(), "video-minimum-quality")) {
+        setSupportedMinimumQuality(1);
+    } else if (!strcmp(key.c_str(), "vq-minimum-quality")) { // from prototyping
+        setSupportedMinimumQuality(1);
     }
 }
 
@@ -90,6 +92,182 @@ bool CodecProperties::getFeatureValue(std::string key, int32_t *valuep) {
     return false;
 }
 
+// Tuning values (which differ from Features)
+// this is where we set up things like target bitrates and QP ranges
+// NB the tuning values arrive as a string, allowing us to convert it into an appropriate
+// format (int, float, ranges, other combinations)
+//
+void CodecProperties::setTuningValue(std::string key, std::string value) {
+    ALOGD("setTuningValue(%s,%s)", key.c_str(), value.c_str());
+    mTunings.insert({key, value});
+
+    bool legal = false;
+    // NB: old school strtol() because std::stoi() throws exceptions
+    if (!strcmp(key.c_str(), "vq-target-qpmax")) {
+        const char *p = value.c_str();
+        char *q;
+        int32_t iValue =  strtol(p, &q, 0);
+        if (q != p) {
+            setTargetQpMax(iValue);
+            legal = true;
+        }
+    } else if (!strcmp(key.c_str(), "vq-target-bpp")) {
+        const char *p = value.c_str();
+        char *q;
+        double bpp = strtod(p, &q);
+        if (q != p) {
+            setBpp(bpp);
+            legal = true;
+        }
+    } else if (!strncmp(key.c_str(), "vq-target-bpp-", strlen("vq-target-bpp-"))) {
+            std::string resolution = key.substr(strlen("vq-target-bpp-"));
+            if (bppPoint(resolution, value)) {
+                legal = true;
+            }
+    } else if (!strcmp(key.c_str(), "vq-target-bppx100")) {
+        // legacy, prototyping
+        const char *p = value.c_str();
+        char *q;
+        int32_t iValue =  strtol(p, &q, 0);
+        if (q != p) {
+            double bpp = iValue / 100.0;
+            setBpp(bpp);
+            legal = true;
+        }
+    } else {
+        legal = true;
+    }
+
+    if (!legal) {
+        ALOGW("setTuningValue() unable to apply tuning '%s' with value '%s'",
+              key.c_str(), value.c_str());
+    }
+    return;
+}
+
+bool CodecProperties::getTuningValue(std::string key, std::string &value) {
+    ALOGV("getTuningValue(%s)", key.c_str());
+    auto mapped = mFeatures.find(key);
+    if (mapped != mFeatures.end()) {
+        value = mapped->second;
+        return true;
+    }
+    return false;
+}
+
+bool CodecProperties::bppPoint(std::string resolution, std::string value) {
+
+    int32_t width = 0;
+    int32_t height = 0;
+    double bpp = -1;
+
+    // resolution is "WxH", "W*H" or a standard name like "720p"
+    if (resolution == "1080p") {
+        width = 1080; height = 1920;
+    } else if (resolution == "720p") {
+        width = 720; height = 1280;
+    } else if (resolution == "540p") {
+        width = 540; height = 960;
+    } else if (resolution == "480p") {
+        width = 480; height = 854;
+    } else {
+        size_t sep = resolution.find('x');
+        if (sep == std::string::npos) {
+            sep = resolution.find('*');
+        }
+        if (sep == std::string::npos) {
+            ALOGW("unable to parse resolution: '%s'", resolution.c_str());
+            return false;
+        }
+        std::string w = resolution.substr(0, sep);
+        std::string h = resolution.substr(sep+1);
+
+        char *q;
+        const char *p = w.c_str();
+        width = strtol(p, &q, 0);
+        if (q == p) {
+                width = -1;
+        }
+        p = h.c_str();
+        height = strtol(p, &q, 0);
+        if (q == p) {
+                height = -1;
+        }
+        if (width <= 0 || height <= 0 || width > DIMENSION_LIMIT || height > DIMENSION_LIMIT) {
+            ALOGW("unparseable: width, height '%s'", resolution.c_str());
+            return false;
+        }
+    }
+
+    const char *p = value.c_str();
+    char *q;
+    bpp = strtod(p, &q);
+    if (q == p) {
+        ALOGW("unparseable bpp '%s'", value.c_str());
+        return false;
+    }
+
+    struct bpp_point *point = (struct bpp_point*) malloc(sizeof(*point));
+    if (point == nullptr) {
+        ALOGW("unable to allocate memory for bpp point");
+        return false;
+    }
+
+    point->pixels = width * height;
+    point->width = width;
+    point->height = height;
+    point->bpp = bpp;
+
+    if (mBppPoints == nullptr) {
+        point->next = nullptr;
+        mBppPoints = point;
+    } else if (point->pixels < mBppPoints->pixels) {
+        // at the front
+        point->next = mBppPoints;
+        mBppPoints = point;
+    } else {
+        struct bpp_point *after = mBppPoints;
+        while (after->next) {
+            if (point->pixels > after->next->pixels) {
+                after = after->next;
+                continue;
+            }
+
+            // insert before after->next
+            point->next = after->next;
+            after->next = point;
+            break;
+        }
+        if (after->next == nullptr) {
+            // hasn't gone in yet
+            point->next = nullptr;
+            after->next = point;
+        }
+    }
+
+    return true;
+}
+
+double CodecProperties::getBpp(int32_t width, int32_t height) {
+    // look in the per-resolution list
+
+    int32_t pixels = width * height;
+
+    if (mBppPoints) {
+        struct bpp_point *point = mBppPoints;
+        while (point && point->pixels < pixels) {
+            point = point->next;
+        }
+        if (point) {
+            ALOGV("getBpp(w=%d,h=%d) returns %f from bpppoint w=%d h=%d",
+                width, height, point->bpp, point->width, point->height);
+            return point->bpp;
+        }
+    }
+
+    ALOGV("defaulting to %f bpp", mBpp);
+    return mBpp;
+}
 
 std::string CodecProperties::getMapping(std::string key, std::string kind) {
     ALOGV("getMapping(key %s, kind %s )", key.c_str(), kind.c_str());
