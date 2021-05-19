@@ -818,7 +818,7 @@ String8 channelMaskToString(audio_channel_mask_t mask, bool output) {
             if (mask & AUDIO_CHANNEL_OUT_FRONT_LEFT) s.append("front-left, ");
             if (mask & AUDIO_CHANNEL_OUT_FRONT_RIGHT) s.append("front-right, ");
             if (mask & AUDIO_CHANNEL_OUT_FRONT_CENTER) s.append("front-center, ");
-            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY) s.append("low freq, ");
+            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY) s.append("low-frequency, ");
             if (mask & AUDIO_CHANNEL_OUT_BACK_LEFT) s.append("back-left, ");
             if (mask & AUDIO_CHANNEL_OUT_BACK_RIGHT) s.append("back-right, ");
             if (mask & AUDIO_CHANNEL_OUT_FRONT_LEFT_OF_CENTER) s.append("front-left-of-center, ");
@@ -838,7 +838,7 @@ String8 channelMaskToString(audio_channel_mask_t mask, bool output) {
             if (mask & AUDIO_CHANNEL_OUT_BOTTOM_FRONT_LEFT) s.append("bottom-front-left, ");
             if (mask & AUDIO_CHANNEL_OUT_BOTTOM_FRONT_CENTER) s.append("bottom-front-center, ");
             if (mask & AUDIO_CHANNEL_OUT_BOTTOM_FRONT_RIGHT) s.append("bottom-front-right, ");
-            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY_2) s.append("low_frequency_2, ");
+            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY_2) s.append("low-frequency-2, ");
             if (mask & AUDIO_CHANNEL_OUT_HAPTIC_B) s.append("haptic-B, ");
             if (mask & AUDIO_CHANNEL_OUT_HAPTIC_A) s.append("haptic-A, ");
             if (mask & ~AUDIO_CHANNEL_OUT_ALL) s.append("unknown,  ");
@@ -858,7 +858,7 @@ String8 channelMaskToString(audio_channel_mask_t mask, bool output) {
             if (mask & AUDIO_CHANNEL_IN_BACK_LEFT) s.append("back-left, ");
             if (mask & AUDIO_CHANNEL_IN_BACK_RIGHT) s.append("back-right, ");
             if (mask & AUDIO_CHANNEL_IN_CENTER) s.append("center, ");
-            if (mask & AUDIO_CHANNEL_IN_LOW_FREQUENCY) s.append("low freq, ");
+            if (mask & AUDIO_CHANNEL_IN_LOW_FREQUENCY) s.append("low-frequency, ");
             if (mask & AUDIO_CHANNEL_IN_TOP_LEFT) s.append("top-left, ");
             if (mask & AUDIO_CHANNEL_IN_TOP_RIGHT) s.append("top-right, ");
             if (mask & AUDIO_CHANNEL_IN_VOICE_UPLINK) s.append("voice-uplink, ");
@@ -7422,18 +7422,28 @@ reacquire_wakelock:
                     //    the only active track
                     // 2) invalidate this track: this will cause the client to reconnect and possibly
                     //    be invalidated again until unsilenced
+                    bool invalidate = false;
                     if (activeTrack->isSilenced()) {
                         if (size > 1) {
-                            activeTrack->invalidate();
-                            ALOG_ASSERT(fastTrackToRemove == 0);
-                            fastTrackToRemove = activeTrack;
-                            removeTrack_l(activeTrack);
-                            mActiveTracks.remove(activeTrack);
-                            size--;
-                            continue;
+                            invalidate = true;
                         } else {
                             silenceFastCapture = true;
                         }
+                    }
+                    // Invalidate fast tracks if access to audio history is required as this is not
+                    // possible with fast tracks. Once the fast track has been invalidated, no new
+                    // fast track will be created until mMaxSharedAudioHistoryMs is cleared.
+                    if (mMaxSharedAudioHistoryMs != 0) {
+                        invalidate = true;
+                    }
+                    if (invalidate) {
+                        activeTrack->invalidate();
+                        ALOG_ASSERT(fastTrackToRemove == 0);
+                        fastTrackToRemove = activeTrack;
+                        removeTrack_l(activeTrack);
+                        mActiveTracks.remove(activeTrack);
+                        size--;
+                        continue;
                     }
                     fastTrack = activeTrack;
                 }
@@ -7954,12 +7964,6 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
             lStatus = PERMISSION_DENIED;
             goto Exit;
         }
-        //TODO: b/185972521 allow resampling buffer resizing on fast mixers by pausing
-        // the fast mixer thread while resizing the buffer in the normal thread
-        if (hasFastCapture()) {
-            lStatus = BAD_VALUE;
-            goto Exit;
-        }
         if (maxSharedAudioHistoryMs < 0
                 || maxSharedAudioHistoryMs > AudioFlinger::kMaxSharedAudioHistoryMs) {
             lStatus = BAD_VALUE;
@@ -7971,8 +7975,9 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
     }
     sampleRate = *pSampleRate;
 
-    // special case for FAST flag considered OK if fast capture is present
-    if (hasFastCapture()) {
+    // special case for FAST flag considered OK if fast capture is present and access to
+    // audio history is not required
+    if (hasFastCapture() && mMaxSharedAudioHistoryMs == 0) {
         inputFlags = (audio_input_flags_t)(inputFlags | AUDIO_INPUT_FLAG_FAST);
     }
 
@@ -7984,8 +7989,9 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         *flags = (audio_input_flags_t)(*flags & inputFlags);
     }
 
-    // client expresses a preference for FAST, but we get the final say
-    if (*flags & AUDIO_INPUT_FLAG_FAST) {
+    // client expresses a preference for FAST and no access to audio history,
+    // but we get the final say
+    if (*flags & AUDIO_INPUT_FLAG_FAST && maxSharedAudioHistoryMs == 0) {
       if (
             // we formerly checked for a callback handler (non-0 tid),
             // but that is no longer required for TRANSFER_OBTAIN mode
@@ -8105,7 +8111,6 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         if (maxSharedAudioHistoryMs != 0) {
             sendResizeBufferConfigEvent_l(maxSharedAudioHistoryMs);
         }
-
     }
 
     lStatus = NO_ERROR;
@@ -8336,9 +8341,6 @@ status_t AudioFlinger::RecordThread::shareAudioHistory(
 status_t AudioFlinger::RecordThread::shareAudioHistory_l(
         const std::string& sharedAudioPackageName, audio_session_t sharedSessionId,
         int64_t sharedAudioStartMs) {
-    if (hasFastCapture()) {
-        return BAD_VALUE;
-    }
     if ((hasAudioSession_l(sharedSessionId) & ThreadBase::TRACK_SESSION) == 0) {
         return BAD_VALUE;
     }
@@ -8581,6 +8583,7 @@ status_t AudioFlinger::RecordThread::ResamplerBufferProvider::getNextBuffer(
     // FIXME if client not keeping up, discard
     LOG_ALWAYS_FATAL_IF(!(0 <= filled && (size_t) filled <= recordThread->mRsmpInFrames));
     // 'filled' may be non-contiguous, so return only the first contiguous chunk
+
     front &= recordThread->mRsmpInFramesP2 - 1;
     size_t part1 = recordThread->mRsmpInFramesP2 - front;
     if (part1 > (size_t) filled) {
@@ -8795,7 +8798,7 @@ void AudioFlinger::RecordThread::readInputParameters_l()
 
     // mRsmpInFrames must be 0 before calling resizeInputBuffer_l for the first time
     mRsmpInFrames = 0;
-    resizeInputBuffer_l();
+    resizeInputBuffer_l(0 /*maxSharedAudioHistoryMs*/);
 
     // AudioRecord mSampleRate and mChannelCount are constant due to AudioRecord API constraints.
     // But if thread's mSampleRate or mChannelCount changes, how will that affect active tracks?
@@ -9036,6 +9039,10 @@ void AudioFlinger::RecordThread::resizeInputBuffer_l(int32_t maxSharedAudioHisto
     int32_t previousRear = mRsmpInRear;
     mRsmpInRear = 0;
 
+    ALOG_ASSERT(maxSharedAudioHistoryMs >= 0
+            && maxSharedAudioHistoryMs <= AudioFlinger::kMaxSharedAudioHistoryMs,
+            "resizeInputBuffer_l() called with invalid max shared history %d",
+            maxSharedAudioHistoryMs);
     if (maxSharedAudioHistoryMs != 0) {
         // resizeInputBuffer_l should never be called with a non zero shared history if the
         // buffer was not already allocated
@@ -9048,6 +9055,7 @@ void AudioFlinger::RecordThread::resizeInputBuffer_l(int32_t maxSharedAudioHisto
         }
         mRsmpInFrames = rsmpInFrames;
     }
+    mMaxSharedAudioHistoryMs = maxSharedAudioHistoryMs;
     // Note: mRsmpInFrames is 0 when called with maxSharedAudioHistoryMs equals to 0 so it is always
     // initialized
     if (mRsmpInFrames < minRsmpInFrames) {

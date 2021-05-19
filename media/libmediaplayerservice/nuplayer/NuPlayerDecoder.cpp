@@ -307,7 +307,7 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
     mCodec = AVUtils::get()->createCustomComponentByName(mCodecLooper, mime.c_str(), false /* encoder */, format);
     if (mCodec == NULL) {
     mCodec = MediaCodec::CreateByType(
-            mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid);
+            mCodecLooper, mime.c_str(), false /* encoder */, NULL /* err */, mPid, mUid, format);
     }
     int32_t secure = 0;
     if (format->findInt32("secure", &secure) && secure != 0) {
