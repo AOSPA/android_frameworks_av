@@ -5967,7 +5967,8 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
             sp<SwAudioOutputDescriptor> desc = mPreviousOutputs.valueFor(srcOut);
             if (desc == nullptr) continue;
 
-            if (desc->isStrategyActive(psId)) {
+            if (desc->isStrategyActive(psId) &&
+                    (invalidate || oldDevices != newDevices)) {
                 setStrategyMute(psId, true, desc);
                 setStrategyMute(psId, false, desc,
                                 (maxLatency * muteLatencyFactor) + routingLatency,
