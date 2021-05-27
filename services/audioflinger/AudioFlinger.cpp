@@ -4116,9 +4116,13 @@ bool AudioFlinger::updateOrphanEffectChains(const sp<AudioFlinger::EffectModule>
 
 // ----------------------------------------------------------------------------
 
-status_t AudioFlinger::onPreTransact(
-        TransactionCode code, const Parcel& /* data */, uint32_t /* flags */)
-{
+status_t AudioFlinger::onTransactWrapper(TransactionCode code,
+                                         const Parcel& data,
+                                         uint32_t flags,
+                                         const std::function<status_t()>& delegate) {
+    (void) data;
+    (void) flags;
+
     // make sure transactions reserved to AudioPolicyManager do not come from other processes
     switch (code) {
         case TransactionCode::SET_STREAM_VOLUME:
@@ -4151,6 +4155,7 @@ status_t AudioFlinger::onPreTransact(
                 default:
                     return INVALID_OPERATION;
             }
+            // Fail silently in these cases.
             return OK;
         default:
             break;
@@ -4178,6 +4183,7 @@ status_t AudioFlinger::onPreTransact(
                     default:
                         return INVALID_OPERATION;
                 }
+                // Fail silently in these cases.
                 return OK;
             }
         } break;
@@ -4219,7 +4225,7 @@ status_t AudioFlinger::onPreTransact(
         AudioSystem::get_audio_policy_service();
     }
 
-    return OK;
+    return delegate();
 }
 
 } // namespace android
