@@ -92,7 +92,7 @@ struct AVFactory {
             bool storeMetaDataInVideoBuffers = true);
     virtual AudioSource* createAudioSource(
             const audio_attributes_t *attr,
-            const media::permission::Identity& clientIdentity,
+            const content::AttributionSourceState& attributionSource,
             uint32_t sampleRate,
             uint32_t channels,
             uint32_t outSampleRate = 0,
