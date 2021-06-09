@@ -103,6 +103,17 @@ static const char *kCodecSecure = "android.media.mediacodec.secure";   /* 0, 1 *
 static const char *kCodecWidth = "android.media.mediacodec.width";     /* 0..n */
 static const char *kCodecHeight = "android.media.mediacodec.height";   /* 0..n */
 static const char *kCodecRotation = "android.media.mediacodec.rotation-degrees";  /* 0/90/180/270 */
+static const char *kCodecColorFormat = "android.media.mediacodec.color-format";
+static const char *kCodecFrameRate = "android.media.mediacodec.frame-rate";
+static const char *kCodecCaptureRate = "android.media.mediacodec.capture-rate";
+static const char *kCodecOperatingRate = "android.media.mediacodec.operating-rate";
+static const char *kCodecPriority = "android.media.mediacodec.priority";
+static const char *kCodecRequestedVideoQPIMin = "android.media.mediacodec.video-qp-i-min";
+static const char *kCodecRequestedVideoQPIMax = "android.media.mediacodec.video-qp-i-max";
+static const char *kCodecRequestedVideoQPPMin = "android.media.mediacodec.video-qp-p-min";
+static const char *kCodecRequestedVideoQPPMax = "android.media.mediacodec.video-qp-p-max";
+static const char *kCodecRequestedVideoQPBMin = "android.media.mediacodec.video-qp-b-min";
+static const char *kCodecRequestedVideoQPBMax = "android.media.mediacodec.video-qp-b-max";
 
 // NB: These are not yet exposed as public Java API constants.
 static const char *kCodecCrypto = "android.media.mediacodec.crypto";   /* 0,1 */
@@ -132,6 +143,8 @@ static const char *kCodecChannelCount = "android.media.mediacodec.channelCount";
 static const char *kCodecSampleRate = "android.media.mediacodec.sampleRate";
 static const char *kCodecVideoEncodedBytes = "android.media.mediacodec.vencode.bytes";
 static const char *kCodecVideoEncodedFrames = "android.media.mediacodec.vencode.frames";
+static const char *kCodecVideoInputBytes = "android.media.mediacodec.video.input.bytes";
+static const char *kCodecVideoInputFrames = "android.media.mediacodec.video.input.frames";
 static const char *kCodecVideoEncodedDurationUs = "android.media.mediacodec.vencode.durationUs";
 
 // the kCodecRecent* fields appear only in getMetrics() results
@@ -626,12 +639,20 @@ void CodecCallback::onFirstTunnelFrameReady() {
 sp<MediaCodec> MediaCodec::CreateByType(
         const sp<ALooper> &looper, const AString &mime, bool encoder, status_t *err, pid_t pid,
         uid_t uid) {
+    sp<AMessage> format;
+    return CreateByType(looper, mime, encoder, err, pid, uid, format);
+}
+
+sp<MediaCodec> MediaCodec::CreateByType(
+        const sp<ALooper> &looper, const AString &mime, bool encoder, status_t *err, pid_t pid,
+        uid_t uid, sp<AMessage> format) {
     Vector<AString> matchingCodecs;
 
     MediaCodecList::findMatchingCodecs(
             mime.c_str(),
             encoder,
             0,
+            format,
             &matchingCodecs);
 
     if (err != NULL) {
@@ -842,6 +863,8 @@ void MediaCodec::updateMediametrics() {
         }
         mediametrics_setInt64(mMetricsHandle, kCodecVideoEncodedDurationUs, duration);
         mediametrics_setInt64(mMetricsHandle, kCodecVideoEncodedFrames, mFramesEncoded);
+        mediametrics_setInt64(mMetricsHandle, kCodecVideoInputFrames, mFramesInput);
+        mediametrics_setInt64(mMetricsHandle, kCodecVideoInputBytes, mBytesInput);
     }
 
     {
@@ -1054,7 +1077,7 @@ std::string MediaCodec::Histogram::emit()
 }
 
 // when we send a buffer to the codec;
-void MediaCodec::statsBufferSent(int64_t presentationUs) {
+void MediaCodec::statsBufferSent(int64_t presentationUs, const sp<MediaCodecBuffer> &buffer) {
 
     // only enqueue if we have a legitimate time
     if (presentationUs <= 0) {
@@ -1066,6 +1089,11 @@ void MediaCodec::statsBufferSent(int64_t presentationUs) {
         mBatteryChecker->onCodecActivity([this] () {
             mResourceManagerProxy->addResource(MediaResource::VideoBatteryResource());
         });
+    }
+
+    if (mIsVideo && (mFlags & kFlagIsEncoder)) {
+        mBytesInput += buffer->size();
+        mFramesInput++;
     }
 
     const int64_t nowNs = systemTime(SYSTEM_TIME_MONOTONIC);
@@ -1460,6 +1488,50 @@ status_t MediaCodec::configure(
             if (format->findInt32("max-height", &maxHeight)) {
                 mediametrics_setInt32(mMetricsHandle, kCodecMaxHeight, maxHeight);
             }
+            int32_t colorFormat = -1;
+            if (format->findInt32("color-format", &colorFormat)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecColorFormat, colorFormat);
+            }
+            float frameRate = -1.0;
+            if (format->findFloat("frame-rate", &frameRate)) {
+                mediametrics_setDouble(mMetricsHandle, kCodecFrameRate, frameRate);
+            }
+            float captureRate = -1.0;
+            if (format->findFloat("capture-rate", &captureRate)) {
+                mediametrics_setDouble(mMetricsHandle, kCodecCaptureRate, captureRate);
+            }
+            float operatingRate = -1.0;
+            if (format->findFloat("operating-rate", &operatingRate)) {
+                mediametrics_setDouble(mMetricsHandle, kCodecOperatingRate, operatingRate);
+            }
+            int32_t priority = -1;
+            if (format->findInt32("priority", &priority)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecPriority, priority);
+            }
+            int32_t qpIMin = -1;
+            if (format->findInt32("video-qp-i-min", &qpIMin)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecRequestedVideoQPIMin, qpIMin);
+            }
+            int32_t qpIMax = -1;
+            if (format->findInt32("video-qp-i-max", &qpIMax)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecRequestedVideoQPIMax, qpIMax);
+            }
+            int32_t qpPMin = -1;
+            if (format->findInt32("video-qp-p-min", &qpPMin)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecRequestedVideoQPPMin, qpPMin);
+            }
+            int32_t qpPMax = -1;
+            if (format->findInt32("video-qp-p-max", &qpPMax)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecRequestedVideoQPPMax, qpPMax);
+            }
+             int32_t qpBMin = -1;
+            if (format->findInt32("video-qp-b-min", &qpBMin)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecRequestedVideoQPBMin, qpBMin);
+            }
+            int32_t qpBMax = -1;
+            if (format->findInt32("video-qp-b-max", &qpBMax)) {
+                mediametrics_setInt32(mMetricsHandle, kCodecRequestedVideoQPBMax, qpBMax);
+            }
         }
 
         // Prevent possible integer overflow in downstream code.
@@ -1528,16 +1600,12 @@ status_t MediaCodec::configure(
     // the reclaimResource call doesn't consider the requester's buffer size for now.
     resources.push_back(MediaResource::GraphicMemoryResource(1));
     for (int i = 0; i <= kMaxRetry; ++i) {
-        if (i > 0) {
-            // Don't try to reclaim resource for the first time.
-            if (!mResourceManagerProxy->reclaimResource(resources)) {
-                break;
-            }
-        }
-
         sp<AMessage> response;
         err = PostAndAwaitResponse(msg, &response);
         if (err != OK && err != INVALID_OPERATION) {
+            if (isResourceError(err) && !mResourceManagerProxy->reclaimResource(resources)) {
+                break;
+            }
             // MediaCodec now set state to UNINITIALIZED upon any fatal error.
             // To maintain backward-compatibility, do a reset() to put codec
             // back into INITIALIZED state.
@@ -2800,6 +2868,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         case STOPPING:
                         {
                             if (mFlags & kFlagSawMediaServerDie) {
+                                bool postPendingReplies = true;
+                                if (mState == RELEASING && !mReplyID) {
+                                    ALOGD("Releasing asynchronously, so nothing to reply here.");
+                                    postPendingReplies = false;
+                                }
                                 // MediaServer died, there definitely won't
                                 // be a shutdown complete notification after
                                 // all.
@@ -2811,7 +2884,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                 if (mState == RELEASING) {
                                     mComponentName.clear();
                                 }
-                                postPendingRepliesAndDeferredMessages(origin + ":dead");
+                                if (postPendingReplies) {
+                                    postPendingRepliesAndDeferredMessages(origin + ":dead");
+                                }
                                 sendErrorResponse = false;
                             } else if (!mReplyID) {
                                 sendErrorResponse = false;
@@ -4277,7 +4352,8 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
         // format as necessary.
         int32_t flags = 0;
         (void) buffer->meta()->findInt32("flags", &flags);
-        if ((flags & BUFFER_FLAG_CODECCONFIG) && !(mFlags & kFlagIsSecure)) {
+        if ((flags & BUFFER_FLAG_CODECCONFIG) && !(mFlags & kFlagIsSecure)
+                && !mOwnerName.startsWith("codec2::")) {
             status_t err =
                 amendOutputFormatWithCodecSpecificData(buffer);
 
@@ -4688,7 +4764,7 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         info->mOwnedByClient = false;
         info->mData.clear();
 
-        statsBufferSent(timeUs);
+        statsBufferSent(timeUs, buffer);
     }
 
     return err;

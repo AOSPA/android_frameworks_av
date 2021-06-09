@@ -1568,7 +1568,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         *flags = (audio_output_flags_t)(*flags & ~AUDIO_OUTPUT_FLAG_DIRECT);
         *flags = forceDeepBuffer ? AUDIO_OUTPUT_FLAG_DEEP_BUFFER :
                  (*flags == AUDIO_OUTPUT_FLAG_NONE) ? AUDIO_OUTPUT_FLAG_PRIMARY : *flags;
-        ALOGI("%s forced deep-buffer (%s) flags (%0x)", __func__,
+        ALOGV("%s forced deep-buffer (%s) flags (%0x)", __func__,
                 forceDeepBuffer ? "yes": "no" , *flags);
         output = selectOutput(
                 outputs, *flags, config->format, channelMask, config->sample_rate, session);
@@ -5967,7 +5967,8 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
             sp<SwAudioOutputDescriptor> desc = mPreviousOutputs.valueFor(srcOut);
             if (desc == nullptr) continue;
 
-            if (desc->isStrategyActive(psId)) {
+            if (desc->isStrategyActive(psId) &&
+                    (invalidate || oldDevices != newDevices)) {
                 setStrategyMute(psId, true, desc);
                 setStrategyMute(psId, false, desc,
                                 (maxLatency * muteLatencyFactor) + routingLatency,

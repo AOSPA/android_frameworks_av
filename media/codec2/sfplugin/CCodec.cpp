@@ -38,6 +38,7 @@
 #include <media/omx/1.0/WOmxNode.h>
 #include <media/openmax/OMX_Core.h>
 #include <media/openmax/OMX_IndexExt.h>
+#include <media/stagefright/foundation/avc_utils.h>
 #include <media/stagefright/omx/1.0/WGraphicBufferSource.h>
 #include <media/stagefright/omx/OmxGraphicBufferSource.h>
 #include <media/stagefright/CCodec.h>
@@ -518,6 +519,44 @@ void RevertOutputFormatIfNeeded(
     }
     if (diff->countEntries() == 0) {
         currentFormat = oldFormat;
+    }
+}
+
+void AmendOutputFormatWithCodecSpecificData(
+        const uint8_t *data, size_t size, const std::string &mediaType,
+        const sp<AMessage> &outputFormat) {
+    if (mediaType == MIMETYPE_VIDEO_AVC) {
+        // Codec specific data should be SPS and PPS in a single buffer,
+        // each prefixed by a startcode (0x00 0x00 0x00 0x01).
+        // We separate the two and put them into the output format
+        // under the keys "csd-0" and "csd-1".
+
+        unsigned csdIndex = 0;
+
+        const uint8_t *nalStart;
+        size_t nalSize;
+        while (getNextNALUnit(&data, &size, &nalStart, &nalSize, true) == OK) {
+            sp<ABuffer> csd = new ABuffer(nalSize + 4);
+            memcpy(csd->data(), "\x00\x00\x00\x01", 4);
+            memcpy(csd->data() + 4, nalStart, nalSize);
+
+            outputFormat->setBuffer(
+                    AStringPrintf("csd-%u", csdIndex).c_str(), csd);
+
+            ++csdIndex;
+        }
+
+        if (csdIndex != 2) {
+            ALOGW("Expected two NAL units from AVC codec config, but %u found",
+                    csdIndex);
+        }
+    } else {
+        // For everything else we just stash the codec specific data into
+        // the output format as a single piece of csd under "csd-0".
+        sp<ABuffer> csd = new ABuffer(size);
+        memcpy(csd->data(), data, size);
+        csd->setRange(0, size);
+        outputFormat->setBuffer("csd-0", csd);
     }
 }
 
@@ -2170,7 +2209,7 @@ void CCodec::onMessageReceived(const sp<AMessage> &msg) {
             }
 
             // handle configuration changes in work done
-            std::unique_ptr<C2Param> initData;
+            std::shared_ptr<const C2StreamInitDataInfo::output> initData;
             sp<AMessage> outputFormat = nullptr;
             {
                 Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
@@ -2254,13 +2293,15 @@ void CCodec::onMessageReceived(const sp<AMessage> &msg) {
                     }
                 }
                 if (initDataWatcher.hasChanged()) {
-                    initData = C2Param::Copy(*initDataWatcher.update().get());
+                    initData = initDataWatcher.update();
+                    AmendOutputFormatWithCodecSpecificData(
+                            initData->m.value, initData->flexCount(), config->mCodingMediaType,
+                            config->mOutputFormat);
                 }
                 outputFormat = config->mOutputFormat;
             }
             mChannel->onWorkDone(
-                    std::move(work), outputFormat,
-                    initData ? (C2StreamInitDataInfo::output *)initData.get() : nullptr);
+                    std::move(work), outputFormat, initData ? initData.get() : nullptr);
             break;
         }
         case kWhatWatch: {
@@ -2346,12 +2387,43 @@ void CCodec::initiateReleaseIfStuck() {
         }
     }
     bool tunneled = false;
+    bool isMediaTypeKnown = false;
     {
+        static const std::set<std::string> kKnownMediaTypes{
+            MIMETYPE_VIDEO_VP8,
+            MIMETYPE_VIDEO_VP9,
+            MIMETYPE_VIDEO_AV1,
+            MIMETYPE_VIDEO_AVC,
+            MIMETYPE_VIDEO_HEVC,
+            MIMETYPE_VIDEO_MPEG4,
+            MIMETYPE_VIDEO_H263,
+            MIMETYPE_VIDEO_MPEG2,
+            MIMETYPE_VIDEO_RAW,
+            MIMETYPE_VIDEO_DOLBY_VISION,
+
+            MIMETYPE_AUDIO_AMR_NB,
+            MIMETYPE_AUDIO_AMR_WB,
+            MIMETYPE_AUDIO_MPEG,
+            MIMETYPE_AUDIO_AAC,
+            MIMETYPE_AUDIO_QCELP,
+            MIMETYPE_AUDIO_VORBIS,
+            MIMETYPE_AUDIO_OPUS,
+            MIMETYPE_AUDIO_G711_ALAW,
+            MIMETYPE_AUDIO_G711_MLAW,
+            MIMETYPE_AUDIO_RAW,
+            MIMETYPE_AUDIO_FLAC,
+            MIMETYPE_AUDIO_MSGSM,
+            MIMETYPE_AUDIO_AC3,
+            MIMETYPE_AUDIO_EAC3,
+
+            MIMETYPE_IMAGE_ANDROID_HEIC,
+        };
         Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
         const std::unique_ptr<Config> &config = *configLocked;
         tunneled = config->mTunneled;
+        isMediaTypeKnown = (kKnownMediaTypes.count(config->mCodingMediaType) != 0);
     }
-    if (!tunneled && name.empty()) {
+    if (!tunneled && isMediaTypeKnown && name.empty()) {
         constexpr std::chrono::steady_clock::duration kWorkDurationThreshold = 3s;
         std::chrono::steady_clock::duration elapsed = mChannel->elapsed();
         if (elapsed >= kWorkDurationThreshold) {
@@ -2374,6 +2446,11 @@ void CCodec::initiateReleaseIfStuck() {
     C2String compName;
     {
         Mutexed<State>::Locked state(mState);
+        if (!state->comp) {
+            ALOGD("previous call to %s exceeded timeout "
+                  "and the component is already released", name.c_str());
+            return;
+        }
         compName = state->comp->getName();
     }
     ALOGW("[%s] previous call to %s exceeded timeout", compName.c_str(), name.c_str());

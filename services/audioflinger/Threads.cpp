@@ -124,12 +124,26 @@ using media::permission::Identity;
 // 50 * ~20msecs = 1 second
 static const int8_t kMaxTrackRetries = 50;
 static const int8_t kMaxTrackStartupRetries = 50;
+
 // allow less retry attempts on direct output thread.
 // direct outputs can be a scarce resource in audio hardware and should
 // be released as quickly as possible.
-static const int8_t kMaxTrackRetriesDirect = 2;
-
-
+// Notes:
+// 1) The retry duration kMaxTrackRetriesDirectMs may be increased
+//    in case the data write is bursty for the AudioTrack.  The application
+//    should endeavor to write at least once every kMaxTrackRetriesDirectMs
+//    to prevent an underrun situation.  If the data is bursty, then
+//    the application can also throttle the data sent to be even.
+// 2) For compressed audio data, any data present in the AudioTrack buffer
+//    will be sent and reset the retry count.  This delivers data as
+//    it arrives, with approximately kDirectMinSleepTimeUs = 10ms checking interval.
+// 3) For linear PCM or proportional PCM, we wait one period for a period's worth
+//    of data to be available, then any remaining data is delivered.
+//    This is required to ensure the last bit of data is delivered before underrun.
+//
+// Sleep time per cycle is kDirectMinSleepTimeUs for compressed tracks
+// or the size of the HAL period for proportional / linear PCM tracks.
+static const int32_t kMaxTrackRetriesDirectMs = 200;
 
 // don't warn about blocked writes or record buffer overflows more often than this
 static const nsecs_t kWarningThrottleNs = seconds(5);
@@ -804,7 +818,7 @@ String8 channelMaskToString(audio_channel_mask_t mask, bool output) {
             if (mask & AUDIO_CHANNEL_OUT_FRONT_LEFT) s.append("front-left, ");
             if (mask & AUDIO_CHANNEL_OUT_FRONT_RIGHT) s.append("front-right, ");
             if (mask & AUDIO_CHANNEL_OUT_FRONT_CENTER) s.append("front-center, ");
-            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY) s.append("low freq, ");
+            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY) s.append("low-frequency, ");
             if (mask & AUDIO_CHANNEL_OUT_BACK_LEFT) s.append("back-left, ");
             if (mask & AUDIO_CHANNEL_OUT_BACK_RIGHT) s.append("back-right, ");
             if (mask & AUDIO_CHANNEL_OUT_FRONT_LEFT_OF_CENTER) s.append("front-left-of-center, ");
@@ -817,12 +831,16 @@ String8 channelMaskToString(audio_channel_mask_t mask, bool output) {
             if (mask & AUDIO_CHANNEL_OUT_TOP_FRONT_CENTER) s.append("top-front-center, ");
             if (mask & AUDIO_CHANNEL_OUT_TOP_FRONT_RIGHT) s.append("top-front-right, ");
             if (mask & AUDIO_CHANNEL_OUT_TOP_BACK_LEFT) s.append("top-back-left, ");
-            if (mask & AUDIO_CHANNEL_OUT_TOP_BACK_CENTER) s.append("top-back-center, " );
-            if (mask & AUDIO_CHANNEL_OUT_TOP_BACK_RIGHT) s.append("top-back-right, " );
-            if (mask & AUDIO_CHANNEL_OUT_TOP_SIDE_LEFT) s.append("top-side-left, " );
-            if (mask & AUDIO_CHANNEL_OUT_TOP_SIDE_RIGHT) s.append("top-side-right, " );
-            if (mask & AUDIO_CHANNEL_OUT_HAPTIC_B) s.append("haptic-B, " );
-            if (mask & AUDIO_CHANNEL_OUT_HAPTIC_A) s.append("haptic-A, " );
+            if (mask & AUDIO_CHANNEL_OUT_TOP_BACK_CENTER) s.append("top-back-center, ");
+            if (mask & AUDIO_CHANNEL_OUT_TOP_BACK_RIGHT) s.append("top-back-right, ");
+            if (mask & AUDIO_CHANNEL_OUT_TOP_SIDE_LEFT) s.append("top-side-left, ");
+            if (mask & AUDIO_CHANNEL_OUT_TOP_SIDE_RIGHT) s.append("top-side-right, ");
+            if (mask & AUDIO_CHANNEL_OUT_BOTTOM_FRONT_LEFT) s.append("bottom-front-left, ");
+            if (mask & AUDIO_CHANNEL_OUT_BOTTOM_FRONT_CENTER) s.append("bottom-front-center, ");
+            if (mask & AUDIO_CHANNEL_OUT_BOTTOM_FRONT_RIGHT) s.append("bottom-front-right, ");
+            if (mask & AUDIO_CHANNEL_OUT_LOW_FREQUENCY_2) s.append("low-frequency-2, ");
+            if (mask & AUDIO_CHANNEL_OUT_HAPTIC_B) s.append("haptic-B, ");
+            if (mask & AUDIO_CHANNEL_OUT_HAPTIC_A) s.append("haptic-A, ");
             if (mask & ~AUDIO_CHANNEL_OUT_ALL) s.append("unknown,  ");
         } else {
             if (mask & AUDIO_CHANNEL_IN_LEFT) s.append("left, ");
@@ -840,9 +858,9 @@ String8 channelMaskToString(audio_channel_mask_t mask, bool output) {
             if (mask & AUDIO_CHANNEL_IN_BACK_LEFT) s.append("back-left, ");
             if (mask & AUDIO_CHANNEL_IN_BACK_RIGHT) s.append("back-right, ");
             if (mask & AUDIO_CHANNEL_IN_CENTER) s.append("center, ");
-            if (mask & AUDIO_CHANNEL_IN_LOW_FREQUENCY) s.append("low freq, ");
-            if (mask & AUDIO_CHANNEL_IN_TOP_LEFT) s.append("top-left, " );
-            if (mask & AUDIO_CHANNEL_IN_TOP_RIGHT) s.append("top-right, " );
+            if (mask & AUDIO_CHANNEL_IN_LOW_FREQUENCY) s.append("low-frequency, ");
+            if (mask & AUDIO_CHANNEL_IN_TOP_LEFT) s.append("top-left, ");
+            if (mask & AUDIO_CHANNEL_IN_TOP_RIGHT) s.append("top-right, ");
             if (mask & AUDIO_CHANNEL_IN_VOICE_UPLINK) s.append("voice-uplink, ");
             if (mask & AUDIO_CHANNEL_IN_VOICE_DNLINK) s.append("voice-dnlink, ");
             if (mask & ~AUDIO_CHANNEL_IN_ALL) s.append("unknown,  ");
@@ -5975,11 +5993,19 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::DirectOutputThread::prep
         // Allow draining the buffer in case the client
         // app does not call stop() and relies on underrun to stop:
         // hence the test on (track->mRetryCount > 1).
-        // If retryCount<=1 then track is about to underrun and be removed.
+        // If track->mRetryCount <= 1 then track is about to be disabled, paused, removed,
+        // so we accept any nonzero amount of data delivered by the AudioTrack (which will
+        // reset the retry counter).
         // Do not use a high threshold for compressed audio.
+
+        // target retry count that we will use is based on the time we wait for retries.
+        const int32_t targetRetryCount = kMaxTrackRetriesDirectMs * 1000 / mActiveSleepTimeUs;
+        // the retry threshold is when we accept any size for PCM data.  This is slightly
+        // smaller than the retry count so we can push small bits of data without a glitch.
+        const int32_t retryThreshold = targetRetryCount > 2 ? targetRetryCount - 1 : 1;
         uint32_t minFrames;
         if ((track->sharedBuffer() == 0) && !track->isStopping_1() && !track->isPausing()
-            && (track->mRetryCount > 1) && audio_has_proportional_frames(mFormat)) {
+            && (track->mRetryCount > retryThreshold) && audio_has_proportional_frames(mFormat)) {
             minFrames = mNormalFrameCount;
         } else {
             minFrames = 1;
@@ -6023,7 +6049,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::DirectOutputThread::prep
                 mPreviousTrack = track;
 
                 // reset retry count
-                track->mRetryCount = kMaxTrackRetriesDirect;
+                track->mRetryCount = targetRetryCount;
                 mActiveTrack = t;
                 mixerStatus = MIXER_TRACKS_READY;
                 if (mHwPaused) {
@@ -6085,8 +6111,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::DirectOutputThread::prep
                     ALOGW("pause because of UNDERRUN, framesReady = %zu,"
                             "minFrames = %u, mFormat = %#x",
                             framesReady, minFrames, mFormat);
-                    mixerStatus = MIXER_TRACKS_ENABLED;
-                    if (mHwSupportsPause && last && !mHwPaused && !mStandby) {
+                    if (last && mHwSupportsPause && !mHwPaused && !mStandby) {
                         doHwPause = true;
                         mHwPaused = true;
                     }
@@ -6163,17 +6188,13 @@ void AudioFlinger::DirectOutputThread::threadLoop_sleepTime()
         mSleepTimeUs = mIdleSleepTimeUs;
         return;
     }
-    if (mSleepTimeUs == 0) {
-        if (mMixerStatus == MIXER_TRACKS_ENABLED) {
-            mSleepTimeUs = mActiveSleepTimeUs;
-        } else {
-            mSleepTimeUs = mIdleSleepTimeUs;
-        }
-    } else if (mBytesWritten != 0 && audio_has_proportional_frames(mFormat)) {
-        memset(mSinkBuffer, 0, mFrameCount * mFrameSize);
-        mSleepTimeUs = 0;
-        mFramesWrittenForSleep += mFrameCount;
+    if (mMixerStatus == MIXER_TRACKS_ENABLED) {
+        mSleepTimeUs = mActiveSleepTimeUs;
+    } else {
+        mSleepTimeUs = mIdleSleepTimeUs;
     }
+    // Note: In S or later, we do not write zeroes for
+    // linear or proportional PCM direct tracks in underrun.
 }
 
 void AudioFlinger::DirectOutputThread::threadLoop_exit()
@@ -7401,18 +7422,28 @@ reacquire_wakelock:
                     //    the only active track
                     // 2) invalidate this track: this will cause the client to reconnect and possibly
                     //    be invalidated again until unsilenced
+                    bool invalidate = false;
                     if (activeTrack->isSilenced()) {
                         if (size > 1) {
-                            activeTrack->invalidate();
-                            ALOG_ASSERT(fastTrackToRemove == 0);
-                            fastTrackToRemove = activeTrack;
-                            removeTrack_l(activeTrack);
-                            mActiveTracks.remove(activeTrack);
-                            size--;
-                            continue;
+                            invalidate = true;
                         } else {
                             silenceFastCapture = true;
                         }
+                    }
+                    // Invalidate fast tracks if access to audio history is required as this is not
+                    // possible with fast tracks. Once the fast track has been invalidated, no new
+                    // fast track will be created until mMaxSharedAudioHistoryMs is cleared.
+                    if (mMaxSharedAudioHistoryMs != 0) {
+                        invalidate = true;
+                    }
+                    if (invalidate) {
+                        activeTrack->invalidate();
+                        ALOG_ASSERT(fastTrackToRemove == 0);
+                        fastTrackToRemove = activeTrack;
+                        removeTrack_l(activeTrack);
+                        mActiveTracks.remove(activeTrack);
+                        size--;
+                        continue;
                     }
                     fastTrack = activeTrack;
                 }
@@ -7933,12 +7964,6 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
             lStatus = PERMISSION_DENIED;
             goto Exit;
         }
-        //TODO: b/185972521 allow resampling buffer resizing on fast mixers by pausing
-        // the fast mixer thread while resizing the buffer in the normal thread
-        if (hasFastCapture()) {
-            lStatus = BAD_VALUE;
-            goto Exit;
-        }
         if (maxSharedAudioHistoryMs < 0
                 || maxSharedAudioHistoryMs > AudioFlinger::kMaxSharedAudioHistoryMs) {
             lStatus = BAD_VALUE;
@@ -7950,8 +7975,9 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
     }
     sampleRate = *pSampleRate;
 
-    // special case for FAST flag considered OK if fast capture is present
-    if (hasFastCapture()) {
+    // special case for FAST flag considered OK if fast capture is present and access to
+    // audio history is not required
+    if (hasFastCapture() && mMaxSharedAudioHistoryMs == 0) {
         inputFlags = (audio_input_flags_t)(inputFlags | AUDIO_INPUT_FLAG_FAST);
     }
 
@@ -7963,8 +7989,9 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         *flags = (audio_input_flags_t)(*flags & inputFlags);
     }
 
-    // client expresses a preference for FAST, but we get the final say
-    if (*flags & AUDIO_INPUT_FLAG_FAST) {
+    // client expresses a preference for FAST and no access to audio history,
+    // but we get the final say
+    if (*flags & AUDIO_INPUT_FLAG_FAST && maxSharedAudioHistoryMs == 0) {
       if (
             // we formerly checked for a callback handler (non-0 tid),
             // but that is no longer required for TRANSFER_OBTAIN mode
@@ -8053,18 +8080,18 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
 
     { // scope for mLock
         Mutex::Autolock _l(mLock);
-        long startTimeMs = -1;
+        int32_t startFrames = -1;
         if (!mSharedAudioPackageName.empty()
                 && mSharedAudioPackageName == checkedIdentity.packageName
                 && mSharedAudioSessionId == sessionId
                 && captureHotwordAllowed(checkedIdentity)) {
-            startTimeMs = mSharedAudioStartMs;
+            startFrames = mSharedAudioStartFrames;
         }
 
         track = new RecordTrack(this, client, attr, sampleRate,
                       format, channelMask, frameCount,
                       nullptr /* buffer */, (size_t)0 /* bufferSize */, sessionId, creatorPid,
-                      checkedIdentity, *flags, TrackBase::TYPE_DEFAULT, portId, startTimeMs);
+                      checkedIdentity, *flags, TrackBase::TYPE_DEFAULT, portId, startFrames);
 
         lStatus = track->initCheck();
         if (lStatus != NO_ERROR) {
@@ -8084,7 +8111,6 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         if (maxSharedAudioHistoryMs != 0) {
             sendResizeBufferConfigEvent_l(maxSharedAudioHistoryMs);
         }
-
     }
 
     lStatus = NO_ERROR;
@@ -8315,23 +8341,35 @@ status_t AudioFlinger::RecordThread::shareAudioHistory(
 status_t AudioFlinger::RecordThread::shareAudioHistory_l(
         const std::string& sharedAudioPackageName, audio_session_t sharedSessionId,
         int64_t sharedAudioStartMs) {
-    if (hasFastCapture()) {
-        return BAD_VALUE;
-    }
     if ((hasAudioSession_l(sharedSessionId) & ThreadBase::TRACK_SESSION) == 0) {
         return BAD_VALUE;
     }
-    if (sharedAudioStartMs < 0 || sharedAudioStartMs * mSampleRate / 1000 > mRsmpInRear) {
+
+    if (sharedAudioStartMs < 0
+        || sharedAudioStartMs > INT64_MAX / mSampleRate) {
         return BAD_VALUE;
+    }
+
+    // Current implementation of the input resampling buffer wraps around indexes at 32 bit.
+    // As we cannot detect more than one wraparound, only accept values up current write position
+    // after one wraparound
+    // We assume recent wraparounds on mRsmpInRear only given it is unlikely that the requesting
+    // app waits several hours after the start time was computed.
+    const int64_t sharedAudioStartFrames = sharedAudioStartMs * mSampleRate / 1000;
+    const int32_t sharedOffset = audio_utils::safe_sub_overflow(mRsmpInRear,
+          (int32_t)sharedAudioStartFrames);
+    if (sharedOffset < 0
+          || sharedOffset > mRsmpInFrames) {
+      return BAD_VALUE;
     }
 
     mSharedAudioPackageName = sharedAudioPackageName;
     if (mSharedAudioPackageName.empty()) {
         mSharedAudioSessionId = AUDIO_SESSION_NONE;
-        mSharedAudioStartMs = -1;
+        mSharedAudioStartFrames = -1;
     } else {
         mSharedAudioSessionId = sharedSessionId;
-        mSharedAudioStartMs = sharedAudioStartMs;
+        mSharedAudioStartFrames = (int32_t)sharedAudioStartFrames;
     }
     return NO_ERROR;
 }
@@ -8478,14 +8516,14 @@ void AudioFlinger::RecordThread::ResamplerBufferProvider::reset()
     mRsmpInUnrel = 0;
     const int32_t rear = recordThread->mRsmpInRear;
     ssize_t deltaFrames = 0;
-    if (mRecordTrack->startTimeMs() >= 0) {
-        int32_t startFrames = mRecordTrack->startTimeMs() * recordThread->sampleRate()  / 1000;
-        // start frame has to be in the past
-        //TODO: b/185972521 fix in case rear or startFrames wrap around
-        if (startFrames > rear) {
-            startFrames = rear;
+    if (mRecordTrack->startFrames() >= 0) {
+        int32_t startFrames = mRecordTrack->startFrames();
+        // Accept a recent wraparound of mRsmpInRear
+        if (startFrames <= rear) {
+            deltaFrames = rear - startFrames;
+        } else {
+            deltaFrames = (int32_t)((int64_t)rear + UINT32_MAX + 1 - startFrames);
         }
-        deltaFrames = rear - startFrames;
         // start frame cannot be further in the past than start of resampling buffer
         if ((size_t) deltaFrames > recordThread->mRsmpInFrames) {
             deltaFrames = recordThread->mRsmpInFrames;
@@ -8545,6 +8583,7 @@ status_t AudioFlinger::RecordThread::ResamplerBufferProvider::getNextBuffer(
     // FIXME if client not keeping up, discard
     LOG_ALWAYS_FATAL_IF(!(0 <= filled && (size_t) filled <= recordThread->mRsmpInFrames));
     // 'filled' may be non-contiguous, so return only the first contiguous chunk
+
     front &= recordThread->mRsmpInFramesP2 - 1;
     size_t part1 = recordThread->mRsmpInFramesP2 - front;
     if (part1 > (size_t) filled) {
@@ -8759,7 +8798,7 @@ void AudioFlinger::RecordThread::readInputParameters_l()
 
     // mRsmpInFrames must be 0 before calling resizeInputBuffer_l for the first time
     mRsmpInFrames = 0;
-    resizeInputBuffer_l();
+    resizeInputBuffer_l(0 /*maxSharedAudioHistoryMs*/);
 
     // AudioRecord mSampleRate and mChannelCount are constant due to AudioRecord API constraints.
     // But if thread's mSampleRate or mChannelCount changes, how will that affect active tracks?
@@ -8947,17 +8986,22 @@ int32_t AudioFlinger::RecordThread::getOldestFront_l()
     if (mTracks.size() == 0) {
         return 0;
     }
-    //TODO: b/185972521 fix in case of wrap around on one track:
-    //  want the max(rear - front) for all tracks.
-    int32_t front = INT_MAX;
+    int32_t oldestFront = mRsmpInRear;
+    int32_t maxFilled = 0;
     for (size_t i = 0; i < mTracks.size(); i++) {
-        front = std::min(front, mTracks[i]->mResamplerBufferProvider->getFront());
+        int32_t front = mTracks[i]->mResamplerBufferProvider->getFront();
+        int32_t filled;
+        if (front <= mRsmpInRear) {
+            filled = mRsmpInRear - front;
+        } else {
+            filled = (int32_t)((int64_t)mRsmpInRear + UINT32_MAX + 1 - front);
+        }
+        if (filled > maxFilled) {
+            oldestFront = front;
+            maxFilled = filled;
+        }
     }
-    // discard any audio past the buffer size
-    if (audio_utils::safe_add_overflow(front, (int32_t)mRsmpInFrames) < mRsmpInRear) {
-        front = audio_utils::safe_sub_overflow(mRsmpInRear, (int32_t)mRsmpInFrames);
-    }
-    return front;
+    return oldestFront;
 }
 
 void AudioFlinger::RecordThread::updateFronts_l(int32_t offset)
@@ -8995,6 +9039,10 @@ void AudioFlinger::RecordThread::resizeInputBuffer_l(int32_t maxSharedAudioHisto
     int32_t previousRear = mRsmpInRear;
     mRsmpInRear = 0;
 
+    ALOG_ASSERT(maxSharedAudioHistoryMs >= 0
+            && maxSharedAudioHistoryMs <= AudioFlinger::kMaxSharedAudioHistoryMs,
+            "resizeInputBuffer_l() called with invalid max shared history %d",
+            maxSharedAudioHistoryMs);
     if (maxSharedAudioHistoryMs != 0) {
         // resizeInputBuffer_l should never be called with a non zero shared history if the
         // buffer was not already allocated
@@ -9007,6 +9055,7 @@ void AudioFlinger::RecordThread::resizeInputBuffer_l(int32_t maxSharedAudioHisto
         }
         mRsmpInFrames = rsmpInFrames;
     }
+    mMaxSharedAudioHistoryMs = maxSharedAudioHistoryMs;
     // Note: mRsmpInFrames is 0 when called with maxSharedAudioHistoryMs equals to 0 so it is always
     // initialized
     if (mRsmpInFrames < minRsmpInFrames) {
