@@ -55,7 +55,7 @@ cc_binary {
     // mediaserver has only been verified on 32-bit, see b/126502613
     // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
     // targets, which allows them to reach 'boot_complete'.
-    compile_multilib: "prefer32",
+    compile_multilib: "32",
 
     init_rc: ["mediaserver.rc"],
 
@@ -66,3 +66,87 @@ cc_binary {
 
     vintf_fragments: ["manifest_media_c2_software.xml"],
 }
+
+cc_binary {
+    name: "mediaserver64",
+
+    srcs: ["main_mediaserver.cpp"],
+
+    shared_libs: [
+        "android.hardware.media.omx@1.0",
+        "libandroidicu",
+        "libfmq",
+        "libbinder",
+        "libhidlbase",
+        "liblog",
+        "libmediaplayerservice",
+        "libresourcemanagerservice",
+        "libutils",
+    ],
+
+    static_libs: [
+        "libregistermsext",
+    ],
+
+    include_dirs: [
+        "frameworks/av/media/libmediaplayerservice",
+        "frameworks/av/services/mediaresourcemanager",
+    ],
+
+    // mediaserver has only been verified on 32-bit, see b/126502613
+    // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
+    // targets, which allows them to reach 'boot_complete'.
+    compile_multilib: "64",
+
+    init_rc: ["mediaserver.rc"],
+
+    cflags: [
+        "-Werror",
+        "-Wall",
+    ],
+
+    vintf_fragments: ["manifest_media_c2_software.xml"],
+}
+cc_binary {
+    name: "mediaserverwrapper",
+
+    srcs: ["mediaserverwrapper.cpp"],
+
+    shared_libs: [
+        "android.hardware.media.omx@1.0",
+        "libandroidicu",
+        "libfmq",
+        "libbinder",
+        "libhidlbase",
+        "liblog",
+        "libmediaplayerservice",
+        "libresourcemanagerservice",
+        "libutils",
+        "libutils",
+        "libcutils",
+    ],
+
+    static_libs: [
+        "libregistermsext",
+    ],
+
+    include_dirs: [
+        "frameworks/av/media/libmediaplayerservice",
+        "frameworks/av/services/mediaresourcemanager",
+    ],
+
+    // mediaserver has only been verified on 32-bit, see b/126502613
+    // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
+    // targets, which allows them to reach 'boot_complete'.
+    compile_multilib: "64",
+
+    init_rc: ["mediaserverwrapper.rc"],
+
+    cflags: [
+        "-Werror",
+        "-Wall",
+    ],
+
+    vintf_fragments: ["manifest_media_c2_software.xml"],
+}
+
