@@ -13,7 +13,7 @@
 ** limitations under the License.
 */
 
-#define LOG_TAG "mediaserverproxy"
+#define LOG_TAG "mediaserverwrapper"
 //#define LOG_NDEBUG 0
 
 #include <binder/IPCThreadState.h>
@@ -38,12 +38,10 @@ int mediaserverwrapper(){
     bool MediaServer_PathSelect = property_get_bool("ro.mediaserver.64b.enable", false);
     const char *mediapath;
     if (MediaServer_PathSelect){
-        ALOGI("Child Process running 64 bit");
         mediapath= "/system/bin/mediaserver64";
     }
     else
     {
-        ALOGI("Child Process running 32 bit");
         mediapath= "/system/bin/mediaserver";
     }
     status = execl(mediapath,mediapath,NULL,NULL);
