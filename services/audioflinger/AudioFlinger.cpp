@@ -2897,8 +2897,8 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openInput_l(audio_module_handle_t mod
         audio_is_linear_pcm(config->format) &&
         audio_is_linear_pcm(halconfig.format) &&
         (halconfig.sample_rate <= AUDIO_RESAMPLER_DOWN_RATIO_MAX * config->sample_rate) &&
-        (audio_channel_count_from_in_mask(halconfig.channel_mask) <= FCC_8) &&
-        (audio_channel_count_from_in_mask(config->channel_mask) <= FCC_8)) {
+        (audio_channel_count_from_in_mask(halconfig.channel_mask) <= FCC_LIMIT) &&
+        (audio_channel_count_from_in_mask(config->channel_mask) <= FCC_LIMIT)) {
         // FIXME describe the change proposed by HAL (save old values so we can log them here)
         ALOGV("openInput_l() reopening with proposed sampling rate and channel mask");
         inStream.clear();
@@ -3997,7 +3997,7 @@ status_t AudioFlinger::moveEffectChain_l(audio_session_t sessionId,
         // if the move request is not received from audio policy manager, the effect must be
         // re-registered with the new strategy and output
         if (dstChain == 0) {
-            dstChain = effect->callback()->chain().promote();
+            dstChain = effect->getCallback()->chain().promote();
             if (dstChain == 0) {
                 ALOGW("moveEffectChain_l() cannot get chain from effect %p", effect.get());
                 status = NO_INIT;
@@ -4047,7 +4047,7 @@ status_t AudioFlinger::moveAuxEffectToIo(int EffectId,
             goto Exit;
         }
 
-        dstChain = effect->callback()->chain().promote();
+        dstChain = effect->getCallback()->chain().promote();
         if (dstChain == 0) {
             thread->addEffect_l(effect);
             status = INVALID_OPERATION;
