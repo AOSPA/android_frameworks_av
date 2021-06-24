@@ -1644,7 +1644,7 @@ void AudioFlinger::ThreadBase::removeEffect_l(const sp<EffectModule>& effect, bo
         detachAuxEffect_l(effect->id());
     }
 
-    sp<EffectChain> chain = effect->callback()->chain().promote();
+    sp<EffectChain> chain = effect->getCallback()->chain().promote();
     if (chain != 0) {
         // remove effect chain if removing last effect
         if (chain->removeEffect_l(effect, release) == 0) {
@@ -2637,7 +2637,7 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
         }
 
         track->mResetDone = false;
-        track->mPresentationCompleteFrames = 0;
+        track->resetPresentationComplete();
         mActiveTracks.add(track);
         if (chain != 0) {
             ALOGV("addTrack_l() starting track on chain %p for session %d", chain.get(),
@@ -6082,16 +6082,8 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::DirectOutputThread::prep
                     track->isStopping_2() || track->isPaused()) {
                 // We have consumed all the buffers of this track.
                 // Remove it from the list of active tracks.
-                size_t audioHALFrames;
-                if (audio_has_proportional_frames(mFormat)) {
-                    audioHALFrames = (latency_l() * mSampleRate) / 1000;
-                } else {
-                    audioHALFrames = 0;
-                }
-
-                int64_t framesWritten = mBytesWritten / mFrameSize;
                 if (mStandby || !last ||
-                        track->presentationComplete(framesWritten, audioHALFrames) ||
+                        track->presentationComplete(latency_l()) ||
                         track->isPaused() || mHwPaused) {
                     if (track->isStopping_2()) {
                         track->mState = TrackBase::STOPPED;
@@ -6702,14 +6694,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::OffloadThread::prepareTr
                 // Drain has completed or we are in standby, signal presentation complete
                 if (!(mDrainSequence & 1) || !last || mStandby) {
                     track->mState = TrackBase::STOPPED;
-                    uint32_t latency = 0;
-                    status_t result = mOutput->stream->getLatency(&latency);
-                    ALOGE_IF(result != OK,
-                            "Error when retrieving output stream latency: %d", result);
-                    size_t audioHALFrames = (latency * mSampleRate) / 1000;
-                    int64_t framesWritten =
-                            mBytesWritten / mOutput->getFrameSize();
-                    track->presentationComplete(framesWritten, audioHALFrames);
+                    track->presentationComplete(latency_l());
                     track->reset();
                     tracksToRemove->add(track);
                     // OFFLOADED stop resets frame counts.
@@ -8690,7 +8675,7 @@ bool AudioFlinger::RecordThread::checkForNewParameter_l(const String8& keyValueP
     if (param.getInt(String8(AudioParameter::keyChannels), value) == NO_ERROR) {
         audio_channel_mask_t mask = (audio_channel_mask_t) value;
         if (!audio_is_input_channel(mask) ||
-                audio_channel_count_from_in_mask(mask) > FCC_8) {
+                audio_channel_count_from_in_mask(mask) > FCC_LIMIT) {
             status = BAD_VALUE;
         } else {
             channelMask = mask;
@@ -8727,7 +8712,7 @@ bool AudioFlinger::RecordThread::checkForNewParameter_l(const String8& keyValueP
                 if (mInput->stream->getAudioProperties(&config) == OK &&
                         audio_is_linear_pcm(config.format) && audio_is_linear_pcm(reqFormat) &&
                         config.sample_rate <= (AUDIO_RESAMPLER_DOWN_RATIO_MAX * samplingRate) &&
-                        audio_channel_count_from_in_mask(config.channel_mask) <= FCC_8) {
+                        audio_channel_count_from_in_mask(config.channel_mask) <= FCC_LIMIT) {
                     status = NO_ERROR;
                 }
             }
@@ -8789,10 +8774,10 @@ void AudioFlinger::RecordThread::readInputParameters_l()
     mFormat = mHALFormat;
     mChannelCount = audio_channel_count_from_in_mask(mChannelMask);
     if (audio_is_linear_pcm(mFormat)) {
-        LOG_ALWAYS_FATAL_IF(mChannelCount > FCC_8, "HAL channel count %d > %d",
-                mChannelCount, FCC_8);
+        LOG_ALWAYS_FATAL_IF(mChannelCount > FCC_LIMIT, "HAL channel count %d > %d",
+                mChannelCount, FCC_LIMIT);
     } else {
-        // Can have more that FCC_8 channels in encoded streams.
+        // Can have more that FCC_LIMIT channels in encoded streams.
         ALOGI("HAL format %#x is not linear pcm", mFormat);
     }
     result = mInput->stream->getFrameSize(&mFrameSize);
