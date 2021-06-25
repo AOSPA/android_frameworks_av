@@ -76,7 +76,7 @@ public:
     // a width <= ROUNDING_WIDTH_CAP
     static bool roundBufferDimensionNearest(int32_t width, int32_t height, int32_t format,
             android_dataspace dataSpace, const CameraMetadata& info, bool maxResolution,
-            /*out*/int32_t* outWidth, /*out*/int32_t* outHeight);
+            /*out*/int32_t* outWidth, /*out*/int32_t* outHeight, bool isPriviledgedClient);
 
     //check if format is not custom format
     static bool isPublicFormat(int32_t format);
