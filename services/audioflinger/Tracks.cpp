@@ -1513,10 +1513,9 @@ bool AudioFlinger::PlaybackThread::Track::presentationComplete(uint32_t latencyM
     // useful because it doesn't always reflect whether there is data in the h/w
     // buffers, particularly if a track has been paused and resumed during draining
 
-    // Scaling exists on internal branch.
-    //constexpr float MIN_SPEED = 0.125f; // min speed scaling allowed for timely response.
+    constexpr float MIN_SPEED = 0.125f; // min speed scaling allowed for timely response.
     if (mPresentationCompleteTimeNs == 0) {
-        mPresentationCompleteTimeNs = systemTime() + latencyMs * 1e6; // / fmax(mSpeed, MIN_SPEED);
+        mPresentationCompleteTimeNs = systemTime() + latencyMs * 1e6 / fmax(mSpeed, MIN_SPEED);
         ALOGV("%s(%d): set: latencyMs %u  mPresentationCompleteTimeNs:%lld",
                 __func__, mId, latencyMs, (long long) mPresentationCompleteTimeNs);
     }
