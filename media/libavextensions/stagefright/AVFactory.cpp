@@ -103,7 +103,7 @@ ElementaryStreamQueue* AVFactory::createESQueue(
 
 AudioSource* AVFactory::createAudioSource(
             const audio_attributes_t *attr,
-            const content::AttributionSourceState& attributionSource,
+            const media::permission::Identity& clientIdentity,
             uint32_t sampleRate,
             uint32_t channels,
             uint32_t outSampleRate,
@@ -111,7 +111,7 @@ AudioSource* AVFactory::createAudioSource(
             audio_microphone_direction_t /*selectedMicDirection*/,
             float /*selectedMicFieldDimension*/) {
     // TODO(b/129493645): use new selectedMicDirection and selectedMicFieldDimension params
-    return new AudioSource(attr, attributionSource, sampleRate,
+    return new AudioSource(attr, clientIdentity, sampleRate,
                             channels, outSampleRate, selectedDeviceId);
 }
 // ----- NO TRESSPASSING BEYOND THIS LINE ------

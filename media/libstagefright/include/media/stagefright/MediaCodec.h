@@ -58,7 +58,6 @@ class IMemory;
 struct PersistentSurface;
 class SoftwareRenderer;
 class Surface;
-class PlaybackDurationAccumulator;
 namespace hardware {
 namespace cas {
 namespace native {
@@ -379,23 +378,15 @@ private:
     // This type is used to track the tunnel mode video peek state machine:
     //
     // DisabledNoBuffer -> EnabledNoBuffer  when tunnel-peek = true
-    // DisabledQueued   -> EnabledQueued    when tunnel-peek = true
-    // DisabledNoBuffer -> DisabledQueued   when first frame queued
     // EnabledNoBuffer  -> DisabledNoBuffer when tunnel-peek = false
-    // EnabledQueued    -> DisabledQueued   when tunnel-peek = false
-    // EnabledNoBuffer  -> EnabledQueued    when first frame queued
     // DisabledNoBuffer -> BufferDecoded    when kWhatFirstTunnelFrameReady
-    // DisabledQueued   -> BufferDecoded    when kWhatFirstTunnelFrameReady
     // EnabledNoBuffer  -> BufferDecoded    when kWhatFirstTunnelFrameReady
-    // EnabledQueued    -> BufferDecoded    when kWhatFirstTunnelFrameReady
     // BufferDecoded    -> BufferRendered   when kWhatFrameRendered
     // <all states>     -> EnabledNoBuffer  when flush
     // <all states>     -> EnabledNoBuffer  when stop then configure then start
     enum struct TunnelPeekState {
         kDisabledNoBuffer,
         kEnabledNoBuffer,
-        kDisabledQueued,
-        kEnabledQueued,
         kBufferDecoded,
         kBufferRendered,
     };
@@ -429,7 +420,6 @@ private:
     void updateLowLatency(const sp<AMessage> &msg);
     constexpr const char *asString(TunnelPeekState state, const char *default_string="?");
     void updateTunnelPeek(const sp<AMessage> &msg);
-    void updatePlaybackDuration(const sp<AMessage> &msg);
 
     sp<AMessage> mOutputFormat;
     sp<AMessage> mInputFormat;
@@ -441,7 +431,6 @@ private:
     sp<ResourceManagerServiceProxy> mResourceManagerProxy;
 
     bool mIsVideo;
-    AString mLogSessionId;
     int32_t mVideoWidth;
     int32_t mVideoHeight;
     int32_t mRotationDegrees;
@@ -497,9 +486,6 @@ private:
     bool mCpuBoostRequested;
 
     std::shared_ptr<BufferChannelBase> mBufferChannel;
-
-    PlaybackDurationAccumulator * mPlaybackDurationAccumulator;
-    bool mIsSurfaceToScreen;
 
     MediaCodec(
             const sp<ALooper> &looper, pid_t pid, uid_t uid,

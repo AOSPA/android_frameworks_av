@@ -40,7 +40,6 @@ import android.media.IAudioRecord;
 import android.media.IAudioTrack;
 import android.media.MicrophoneInfoData;
 import android.media.RenderPosition;
-import android.media.TrackSecondaryOutputInfo;
 import android.media.audio.common.AudioFormat;
 
 /**
@@ -208,9 +207,4 @@ interface IAudioFlingerService {
     // Set vibrators' information.
     // The value will be used to initialize HapticGenerator.
     void setVibratorInfos(in AudioVibratorInfo[] vibratorInfos);
-
-    // Update secondary outputs.
-    // This usually happens when there is a dynamic policy registered.
-    void updateSecondaryOutputs(
-            in TrackSecondaryOutputInfo[] trackSecondaryOutputInfos);
 }

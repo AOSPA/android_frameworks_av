@@ -123,8 +123,8 @@ static void addBatteryData(uint32_t params) {
 }
 
 
-StagefrightRecorder::StagefrightRecorder(const AttributionSourceState& client)
-    : MediaRecorderBase(client),
+StagefrightRecorder::StagefrightRecorder(const Identity& clientIdentity)
+    : MediaRecorderBase(clientIdentity),
       mWriter(NULL),
       mOutputFd(-1),
       mAudioSource((audio_source_t)AUDIO_SOURCE_CNT), // initialize with invalid value
@@ -166,7 +166,7 @@ void StagefrightRecorder::updateMetrics() {
 
     // we run as part of the media player service; what we really want to
     // know is the app which requested the recording.
-    mMetricsItem->setUid(VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mAttributionSource.uid)));
+    mMetricsItem->setUid(VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClient.uid)));
 
     mMetricsItem->setCString(kRecorderLogSessionId, mLogSessionId.c_str());
 
@@ -1154,8 +1154,7 @@ status_t StagefrightRecorder::setListener(const sp<IMediaRecorderClient> &listen
 
 status_t StagefrightRecorder::setClientName(const String16& clientName) {
 
-    mAttributionSource.packageName = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_String16_string(clientName));
+    mClient.packageName = VALUE_OR_RETURN_STATUS(legacy2aidl_String16_string(clientName));
 
     return OK;
 }
@@ -1369,7 +1368,7 @@ sp<MediaCodecSource> StagefrightRecorder::createAudioSource() {
 
     sp<AudioSource> audioSource = AVFactory::get()->createAudioSource(
                 &attr,
-                mAttributionSource,
+                mClient,
                 sourceSampleRate,
                 mAudioChannels,
                 mSampleRate,
@@ -1910,10 +1909,10 @@ status_t StagefrightRecorder::setupCameraSource(
     Size videoSize;
     videoSize.width = mVideoWidth;
     videoSize.height = mVideoHeight;
-    uid_t uid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_uid_t(mAttributionSource.uid));
-    pid_t pid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_pid_t(mAttributionSource.pid));
+    uid_t uid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_uid_t(mClient.uid));
+    pid_t pid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_pid_t(mClient.pid));
     String16 clientName = VALUE_OR_RETURN_STATUS(
-        aidl2legacy_string_view_String16(mAttributionSource.packageName.value_or("")));
+        aidl2legacy_string_view_String16(mClient.packageName.value_or("")));
     if (mCaptureFpsEnable && mCaptureFps != mFrameRate ) {
         if (!(mCaptureFps > 0.)) {
             ALOGE("Invalid mCaptureFps value: %lf", mCaptureFps);

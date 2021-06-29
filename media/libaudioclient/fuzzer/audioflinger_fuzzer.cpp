@@ -23,7 +23,7 @@
  */
 
 #include <android_audio_policy_configuration_V7_0-enums.h>
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 #include <binder/IServiceManager.h>
 #include <binder/MemoryDealer.h>
 #include <media/AidlConversion.h>
@@ -48,7 +48,7 @@ namespace xsd {
 using namespace ::android::audio::policy::configuration::V7_0;
 }
 
-using android::content::AttributionSourceState;
+using media::permission::Identity;
 
 constexpr audio_unique_id_use_t kUniqueIds[] = {
     AUDIO_UNIQUE_ID_USE_UNSPECIFIED, AUDIO_UNIQUE_ID_USE_SESSION, AUDIO_UNIQUE_ID_USE_MODULE,
@@ -225,16 +225,15 @@ void AudioFlingerFuzzer::invokeAudioTrack() {
     attributes.usage = usage;
     sp<AudioTrack> track = new AudioTrack();
 
-    // TODO b/182392769: use attribution source util
-    AttributionSourceState attributionSource;
-    attributionSource.uid = VALUE_OR_FATAL(legacy2aidl_uid_t_int32_t(getuid()));
-    attributionSource.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(getpid()));
-    attributionSource.token = sp<BBinder>::make();
+    // TODO b/182392769: use identity util
+    Identity i;
+    i.uid = VALUE_OR_FATAL(legacy2aidl_uid_t_int32_t(getuid()));
+    i.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(getpid()));
     track->set(AUDIO_STREAM_DEFAULT, sampleRate, format, channelMask, frameCount, flags, nullptr,
                nullptr, notificationFrames, sharedBuffer, false, sessionId,
                ((fast && sharedBuffer == 0) || offload) ? AudioTrack::TRANSFER_CALLBACK
                                                         : AudioTrack::TRANSFER_DEFAULT,
-               offload ? &offloadInfo : nullptr, attributionSource, &attributes, false, 1.0f,
+               offload ? &offloadInfo : nullptr, i, &attributes, false, 1.0f,
                AUDIO_PORT_HANDLE_NONE);
 
     status_t status = track->initCheck();
@@ -309,11 +308,10 @@ void AudioFlingerFuzzer::invokeAudioRecord() {
 
     attributes.source = inputSource;
 
-    // TODO b/182392769: use attribution source util
-    AttributionSourceState attributionSource;
-    attributionSource.packageName = std::string(mFdp.ConsumeRandomLengthString().c_str());
-    attributionSource.token = sp<BBinder>::make();
-    sp<AudioRecord> record = new AudioRecord(attributionSource);
+    // TODO b/182392769: use identity util
+    Identity i;
+    i.packageName = std::string(mFdp.ConsumeRandomLengthString().c_str());
+    sp<AudioRecord> record = new AudioRecord(i);
     record->set(AUDIO_SOURCE_DEFAULT, sampleRate, format, channelMask, frameCount, nullptr, nullptr,
                 notificationFrames, false, sessionId,
                 fast ? AudioRecord::TRANSFER_CALLBACK : AudioRecord::TRANSFER_DEFAULT, flags,
@@ -420,9 +418,9 @@ status_t AudioFlingerFuzzer::invokeAudioEffect() {
     request.output = io;
     request.sessionId = sessionId;
     request.device = VALUE_OR_RETURN_STATUS(legacy2aidl_AudioDeviceTypeAddress(device));
-    // TODO b/182392769: use attribution source util
-    request.attributionSource.packageName = opPackageName;
-    request.attributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(getpid()));
+    // TODO b/182392769: use identity util
+    request.identity.packageName = opPackageName;
+    request.identity.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(getpid()));
     request.probe = false;
 
     media::CreateEffectResponse response{};

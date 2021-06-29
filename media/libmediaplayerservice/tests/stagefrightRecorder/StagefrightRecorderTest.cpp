@@ -59,11 +59,10 @@ class StagefrightRecorderTest
     }
 
     void SetUp() override {
-        // TODO b/182392769: use attribution source util
-        AttributionSourceState attributionSource;
-        attributionSource.packageName = std::string(LOG_TAG);
-        attributionSource.token = sp<BBinder>::make();
-        mStfRecorder = new StagefrightRecorder(attributionSource);
+        // TODO b/182392769: use identity util
+        Identity identity;
+        identity.packageName = std::string(LOG_TAG);
+        mStfRecorder = new StagefrightRecorder(identity);
         ASSERT_NE(mStfRecorder, nullptr) << "Failed to create the instance of recorder";
 
         mOutputAudioFp = fopen(OUTPUT_FILE_NAME_AUDIO, "wb");

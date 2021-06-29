@@ -26,7 +26,7 @@
 #include <media/Modulo.h>
 #include <media/VolumeShaper.h>
 #include <utils/threads.h>
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 
 #include <string>
 
@@ -35,8 +35,6 @@
 #include "android/media/IAudioTrackCallback.h"
 
 namespace android {
-
-using content::AttributionSourceState;
 
 // ----------------------------------------------------------------------------
 
@@ -184,7 +182,7 @@ public:
      */
                         AudioTrack();
 
-                        AudioTrack(const AttributionSourceState& attributionSourceState);
+                        AudioTrack(const media::permission::Identity& identity);
 
     /* Creates an AudioTrack object and registers it with AudioFlinger.
      * Once created, the track needs to be started before it can be used.
@@ -232,8 +230,7 @@ public:
      * transferType:       How data is transferred to AudioTrack.
      * offloadInfo:        If not NULL, provides offload parameters for
      *                     AudioSystem::getOutputForAttr().
-     * attributionSource:  The attribution source of the app which initially requested this
-     *                     AudioTrack.
+     * identity:           The identity of the app which initiallly requested this AudioTrack.
      *                     Includes the UID and PID for power management tracking, or -1 for
      *                     current user/process ID, plus the package name.
      * pAttributes:        If not NULL, supersedes streamType for use case selection.
@@ -262,8 +259,8 @@ public:
                                     audio_session_t sessionId  = AUDIO_SESSION_ALLOCATE,
                                     transfer_type transferType = TRANSFER_DEFAULT,
                                     const audio_offload_info_t *offloadInfo = NULL,
-                                    const AttributionSourceState& attributionSource =
-                                        AttributionSourceState(),
+                                    const media::permission::Identity& identity =
+                                        media::permission::Identity(),
                                     const audio_attributes_t* pAttributes = NULL,
                                     bool doNotReconnect = false,
                                     float maxRequiredSpeed = 1.0f,
@@ -293,8 +290,8 @@ public:
                                     audio_session_t sessionId   = AUDIO_SESSION_ALLOCATE,
                                     transfer_type transferType = TRANSFER_DEFAULT,
                                     const audio_offload_info_t *offloadInfo = NULL,
-                                    const AttributionSourceState& attributionSource =
-                                        AttributionSourceState(),
+                                    const media::permission::Identity& identity =
+                                        media::permission::Identity(),
                                     const audio_attributes_t* pAttributes = NULL,
                                     bool doNotReconnect = false,
                                     float maxRequiredSpeed = 1.0f);
@@ -341,8 +338,8 @@ public:
                             audio_session_t sessionId  = AUDIO_SESSION_ALLOCATE,
                             transfer_type transferType = TRANSFER_DEFAULT,
                             const audio_offload_info_t *offloadInfo = NULL,
-                            const AttributionSourceState& attributionSource =
-                                AttributionSourceState(),
+                            const media::permission::Identity& identity =
+                                media::permission::Identity(),
                             const audio_attributes_t* pAttributes = NULL,
                             bool doNotReconnect = false,
                             float maxRequiredSpeed = 1.0f,
@@ -1355,7 +1352,7 @@ private:
 
     sp<DeathNotifier>       mDeathNotifier;
     uint32_t                mSequence;              // incremented for each new IAudioTrack attempt
-    AttributionSourceState mClientAttributionSource;
+    media::permission::Identity mClientIdentity;
 
     wp<AudioSystem::AudioDeviceCallback> mDeviceCallback;
 

@@ -18,11 +18,11 @@ license {
     ],
 }
 
-cc_library {
+cc_library_shared {
     name: "libdownmix",
-    host_supported: true,
+
     vendor: true,
-    srcs: ["EffectDownmix.cpp"],
+    srcs: ["EffectDownmix.c"],
 
     shared_libs: [
         "libaudioutils",

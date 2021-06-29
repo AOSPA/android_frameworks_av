@@ -25,7 +25,7 @@
 #include <media/IMediaRecorderClient.h>
 #include <media/IMediaDeathNotifier.h>
 #include <media/MicrophoneInfo.h>
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 
 namespace android {
 
@@ -233,7 +233,7 @@ class MediaRecorder : public BnMediaRecorderClient,
                       public virtual IMediaDeathNotifier
 {
 public:
-    explicit MediaRecorder(const android::content::AttributionSourceState& attributionSource);
+    explicit MediaRecorder(const media::permission::Identity& identity);
     ~MediaRecorder();
 
     void        died();

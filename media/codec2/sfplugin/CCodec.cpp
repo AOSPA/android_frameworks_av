@@ -673,10 +673,6 @@ public:
         mCodec->mCallback->onOutputBuffersChanged();
     }
 
-    void onFirstTunnelFrameReady() override {
-        mCodec->mCallback->onFirstTunnelFrameReady();
-    }
-
 private:
     CCodec *mCodec;
 };
@@ -1504,11 +1500,13 @@ void CCodec::createInputSurface() {
     status_t err;
     sp<IGraphicBufferProducer> bufferProducer;
 
+    sp<AMessage> inputFormat;
     sp<AMessage> outputFormat;
     uint64_t usage = 0;
     {
         Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
         const std::unique_ptr<Config> &config = *configLocked;
+        inputFormat = config->mInputFormat;
         outputFormat = config->mOutputFormat;
         usage = config->mISConfig ? config->mISConfig->mUsage : 0;
     }
@@ -1544,14 +1542,6 @@ void CCodec::createInputSurface() {
         return;
     }
 
-    // Formats can change after setupInputSurface
-    sp<AMessage> inputFormat;
-    {
-        Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
-        const std::unique_ptr<Config> &config = *configLocked;
-        inputFormat = config->mInputFormat;
-        outputFormat = config->mOutputFormat;
-    }
     mCallback->onInputSurfaceCreated(
             inputFormat,
             outputFormat,
@@ -1601,11 +1591,13 @@ void CCodec::initiateSetInputSurface(const sp<PersistentSurface> &surface) {
 }
 
 void CCodec::setInputSurface(const sp<PersistentSurface> &surface) {
+    sp<AMessage> inputFormat;
     sp<AMessage> outputFormat;
     uint64_t usage = 0;
     {
         Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
         const std::unique_ptr<Config> &config = *configLocked;
+        inputFormat = config->mInputFormat;
         outputFormat = config->mOutputFormat;
         usage = config->mISConfig ? config->mISConfig->mUsage : 0;
     }
@@ -1636,14 +1628,6 @@ void CCodec::setInputSurface(const sp<PersistentSurface> &surface) {
         ALOGE("Failed to set input surface: Corrupted surface.");
         mCallback->onInputSurfaceDeclined(UNKNOWN_ERROR);
         return;
-    }
-    // Formats can change after setupInputSurface
-    sp<AMessage> inputFormat;
-    {
-        Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
-        const std::unique_ptr<Config> &config = *configLocked;
-        inputFormat = config->mInputFormat;
-        outputFormat = config->mOutputFormat;
     }
     mCallback->onInputSurfaceAccepted(inputFormat, outputFormat);
 }
@@ -2692,11 +2676,7 @@ static status_t CalculateMinMaxUsage(
             *maxUsage = 0;
             continue;
         }
-        if (supported.values.size() > 1) {
-            *minUsage |= supported.values[1].u64;
-        } else {
-            *minUsage |= supported.values[0].u64;
-        }
+        *minUsage |= supported.values[0].u64;
         int64_t currentMaxUsage = 0;
         for (const C2Value::Primitive &flags : supported.values) {
             currentMaxUsage |= flags.u64;

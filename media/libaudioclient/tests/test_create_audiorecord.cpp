@@ -19,7 +19,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 #include <binder/MemoryBase.h>
 #include <binder/MemoryDealer.h>
 #include <binder/MemoryHeapBase.h>
@@ -33,7 +33,7 @@
 
 namespace android {
 
-using android::content::AttributionSourceState;
+using media::permission::Identity;
 
 int testRecord(FILE *inputFile, int outputFileFd)
 {
@@ -41,17 +41,16 @@ int testRecord(FILE *inputFile, int outputFileFd)
     uint32_t testCount = 0;
     Vector<String16> args;
     int ret = 0;
-    // TODO b/182392769: use attribution source util
-    AttributionSourceState attributionSource;
-    attributionSource.packageName = std::string(PACKAGE_NAME);
-    attributionSource.token = sp<BBinder>::make();
+    // TODO b/182392769: use identity util
+    Identity identity;
+    identity.packageName = PACKAGE_NAME;
 
     if (inputFile == nullptr) {
         sp<AudioRecord> record = new AudioRecord(AUDIO_SOURCE_DEFAULT,
                                               0 /* sampleRate */,
                                               AUDIO_FORMAT_DEFAULT,
                                               AUDIO_CHANNEL_IN_MONO,
-                                              attributionSource);
+                                              identity);
         if (record == 0 || record->initCheck() != NO_ERROR) {
             write(outputFileFd, "Error creating AudioRecord\n",
                   sizeof("Error creating AudioRecord\n"));
@@ -97,7 +96,7 @@ int testRecord(FILE *inputFile, int outputFileFd)
         memset(&attributes, 0, sizeof(attributes));
         attributes.source = inputSource;
 
-        sp<AudioRecord> record = new AudioRecord(attributionSource);
+        sp<AudioRecord> record = new AudioRecord(identity);
 
         record->set(AUDIO_SOURCE_DEFAULT,
                    sampleRate,

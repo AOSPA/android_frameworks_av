@@ -40,10 +40,9 @@
 namespace android {
 
 using media::VolumeShaper;
-using content::AttributionSourceState;
+using media::permission::Identity;
 
-MediaPlayer::MediaPlayer(const AttributionSourceState& attributionSource)
-        : mAttributionSource(attributionSource)
+MediaPlayer::MediaPlayer(const Identity& identity) : mIdentity(identity)
 {
     ALOGV("constructor");
     mListener = NULL;
@@ -154,7 +153,7 @@ status_t MediaPlayer::setDataSource(
     if (url != NULL) {
         const sp<IMediaPlayerService> service(getMediaPlayerService());
         if (service != 0) {
-            sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mAttributionSource));
+            sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mIdentity));
             if ((NO_ERROR != doSetRetransmitEndpoint(player)) ||
                 (NO_ERROR != player->setDataSource(httpService, url, headers))) {
                 player.clear();
@@ -171,7 +170,7 @@ status_t MediaPlayer::setDataSource(int fd, int64_t offset, int64_t length)
     status_t err = UNKNOWN_ERROR;
     const sp<IMediaPlayerService> service(getMediaPlayerService());
     if (service != 0) {
-        sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mAttributionSource));
+        sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mIdentity));
         if ((NO_ERROR != doSetRetransmitEndpoint(player)) ||
             (NO_ERROR != player->setDataSource(fd, offset, length))) {
             player.clear();
@@ -187,7 +186,7 @@ status_t MediaPlayer::setDataSource(const sp<IDataSource> &source)
     status_t err = UNKNOWN_ERROR;
     const sp<IMediaPlayerService> service(getMediaPlayerService());
     if (service != 0) {
-        sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mAttributionSource));
+        sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mIdentity));
         if ((NO_ERROR != doSetRetransmitEndpoint(player)) ||
             (NO_ERROR != player->setDataSource(source))) {
             player.clear();
@@ -203,7 +202,7 @@ status_t MediaPlayer::setDataSource(const String8& rtpParams)
     status_t err = UNKNOWN_ERROR;
     const sp<IMediaPlayerService> service(getMediaPlayerService());
     if (service != 0) {
-        sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mAttributionSource));
+        sp<IMediaPlayer> player(service->create(this, mAudioSessionId, mIdentity));
         if ((NO_ERROR != doSetRetransmitEndpoint(player)) ||
             (NO_ERROR != player->setDataSource(rtpParams))) {
             player.clear();

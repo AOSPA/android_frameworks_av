@@ -36,7 +36,7 @@
 
 namespace android {
 
-using content::AttributionSourceState;
+using android::media::permission::Identity;
 
 static void AudioRecordCallbackFunction(int event, void *user, void *info) {
     AudioSource *source = (AudioSource *) user;
@@ -56,18 +56,18 @@ static void AudioRecordCallbackFunction(int event, void *user, void *info) {
 }
 
 AudioSource::AudioSource(
-        const audio_attributes_t *attr, const AttributionSourceState& attributionSource,
+        const audio_attributes_t *attr, const media::permission::Identity& identity,
         uint32_t sampleRate, uint32_t channelCount, uint32_t outSampleRate,
         audio_port_handle_t selectedDeviceId,
         audio_microphone_direction_t selectedMicDirection,
         float selectedMicFieldDimension)
 {
-  set(attr, attributionSource, sampleRate, channelCount, outSampleRate, selectedDeviceId,
+  set(attr, identity, sampleRate, channelCount, outSampleRate, selectedDeviceId,
       selectedMicDirection, selectedMicFieldDimension);
 }
 
 void AudioSource::set(
-   const audio_attributes_t *attr, const AttributionSourceState& attributionSource,
+   const audio_attributes_t *attr, const Identity& identity,
         uint32_t sampleRate, uint32_t channelCount, uint32_t outSampleRate,
         audio_port_handle_t selectedDeviceId,
         audio_microphone_direction_t selectedMicDirection,
@@ -118,7 +118,7 @@ void AudioSource::set(
     mRecord = new AudioRecord(
         AUDIO_SOURCE_DEFAULT, sampleRate, AUDIO_FORMAT_PCM_16_BIT,
         audio_channel_in_mask_from_count(channelCount),
-        attributionSource,
+        identity,
         (size_t) (bufCount * frameCount),
         AudioRecordCallbackFunction,
         this,

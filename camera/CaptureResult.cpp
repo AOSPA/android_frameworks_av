@@ -89,7 +89,7 @@ status_t CaptureResultExtras::writeToParcel(android::Parcel *parcel) const {
 status_t PhysicalCaptureResultInfo::readFromParcel(const android::Parcel* parcel) {
     status_t res;
 
-    mPhysicalCameraId.setTo(u"");
+    mPhysicalCameraId.remove(mPhysicalCameraId.size());
     mPhysicalCameraMetadata.clear();
 
     if ((res = parcel->readString16(&mPhysicalCameraId)) != OK) {

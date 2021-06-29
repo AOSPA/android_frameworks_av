@@ -504,14 +504,7 @@ media_status_t MP3Source::read(
             }
 
             mCurrentTimeUs = seekTimeUs;
-            int64_t seekTimeUsTimesBitrate;
-            if (__builtin_mul_overflow(seekTimeUs, bitrate, &seekTimeUsTimesBitrate)) {
-              return AMEDIA_ERROR_UNSUPPORTED;
-            }
-            if (__builtin_add_overflow(
-                    mFirstFramePos, seekTimeUsTimesBitrate / 8000000, &mCurrentPos)) {
-                return AMEDIA_ERROR_UNSUPPORTED;
-            }
+            mCurrentPos = mFirstFramePos + seekTimeUs * bitrate / 8000000;
             seekCBR = true;
         } else {
             mCurrentTimeUs = actualSeekTimeUs;

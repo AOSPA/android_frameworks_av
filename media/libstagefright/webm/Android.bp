@@ -58,7 +58,7 @@ cc_library_static {
         "android.hardware.media.omx@1.0",
         "libhidlmemory",
         "libcamera_client",
-        "framework-permission-aidl-cpp",
+        "media_permission-aidl-cpp",
     ],
 
     header_libs: [

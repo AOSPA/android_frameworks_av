@@ -1182,7 +1182,7 @@ ConversionResult<AudioClient> aidl2legacy_AudioClient_AudioClient(
         const media::AudioClient& aidl) {
     AudioClient legacy;
     legacy.clientTid = VALUE_OR_RETURN(aidl2legacy_int32_t_pid_t(aidl.clientTid));
-    legacy.attributionSource = aidl.attributionSource;
+    legacy.identity = aidl.identity;
     return legacy;
 }
 
@@ -1190,7 +1190,7 @@ ConversionResult<media::AudioClient> legacy2aidl_AudioClient_AudioClient(
         const AudioClient& legacy) {
     media::AudioClient aidl;
     aidl.clientTid = VALUE_OR_RETURN(legacy2aidl_pid_t_int32_t(legacy.clientTid));
-    aidl.attributionSource = legacy.attributionSource;
+    aidl.identity = legacy.identity;
     return aidl;
 }
 
@@ -2321,30 +2321,6 @@ legacy2aidl_audio_encapsulation_type_t_AudioEncapsulationType(
             return media::AudioEncapsulationType::IEC61937;
     }
     return unexpected(BAD_VALUE);
-}
-
-ConversionResult<TrackSecondaryOutputInfoPair>
-aidl2legacy_TrackSecondaryOutputInfo_TrackSecondaryOutputInfoPair(
-        const media::TrackSecondaryOutputInfo& aidl) {
-    TrackSecondaryOutputInfoPair trackSecondaryOutputInfoPair;
-    trackSecondaryOutputInfoPair.first =
-            VALUE_OR_RETURN(aidl2legacy_int32_t_audio_port_handle_t(aidl.portId));
-    trackSecondaryOutputInfoPair.second =
-            VALUE_OR_RETURN(convertContainer<std::vector<audio_port_handle_t>>(
-                    aidl.secondaryOutputIds, aidl2legacy_int32_t_audio_io_handle_t));
-    return trackSecondaryOutputInfoPair;
-}
-
-ConversionResult<media::TrackSecondaryOutputInfo>
-legacy2aidl_TrackSecondaryOutputInfoPair_TrackSecondaryOutputInfo(
-        const TrackSecondaryOutputInfoPair& legacy) {
-    media::TrackSecondaryOutputInfo trackSecondaryOutputInfo;
-    trackSecondaryOutputInfo.portId =
-            VALUE_OR_RETURN(legacy2aidl_audio_port_handle_t_int32_t(legacy.first));
-    trackSecondaryOutputInfo.secondaryOutputIds =
-            VALUE_OR_RETURN(convertContainer<std::vector<int32_t>>(
-                    legacy.second, legacy2aidl_audio_io_handle_t_int32_t));
-    return trackSecondaryOutputInfo;
 }
 
 }  // namespace android

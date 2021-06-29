@@ -73,7 +73,7 @@ cc_test {
         "libstagefright",
         "libstagefright_foundation",
         "libutils",
-        "framework-permission-aidl-cpp",
+        "media_permission-aidl-cpp",
         "libaudioclient_aidl_conversion",
     ],
 

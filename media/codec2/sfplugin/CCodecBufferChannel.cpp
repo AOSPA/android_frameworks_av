@@ -216,7 +216,6 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
     int32_t flags = 0;
     int32_t tmp = 0;
     bool eos = false;
-    bool tunnelFirstFrame = false;
     if (buffer->meta()->findInt32("eos", &tmp) && tmp) {
         eos = true;
         mInputMetEos = true;
@@ -224,9 +223,6 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
     }
     if (buffer->meta()->findInt32("csd", &tmp) && tmp) {
         flags |= C2FrameData::FLAG_CODEC_CONFIG;
-    }
-    if (buffer->meta()->findInt32("tunnel-first-frame", &tmp) && tmp) {
-        tunnelFirstFrame = true;
     }
     ALOGV("[%s] queueInputBuffer: buffer->size() = %zu", mName, buffer->size());
     std::list<std::unique_ptr<C2Work>> items;
@@ -299,13 +295,6 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
         // TODO: fill info's
 
         work->input.configUpdate = std::move(mParamsToBeSet);
-        if (tunnelFirstFrame) {
-            C2StreamTunnelHoldRender::input tunnelHoldRender{
-                0u /* stream */,
-                C2_TRUE /* value */
-            };
-            work->input.configUpdate.push_back(C2Param::Copy(tunnelHoldRender));
-        }
         work->worklets.clear();
         work->worklets.emplace_back(new C2Worklet);
 
@@ -1798,15 +1787,6 @@ bool CCodecBufferChannel::handleWork(
                     mCCodecCallback->onOutputFramesRendered(
                             worklet->output.ordinal.timestamp.peek(), frameRenderTime.value);
                 }
-                break;
-            }
-            case C2StreamTunnelHoldRender::CORE_INDEX: {
-                C2StreamTunnelHoldRender::output firstTunnelFrameHoldRender;
-                if (!(worklet->output.flags & C2FrameData::FLAG_INCOMPLETE)) break;
-                if (!firstTunnelFrameHoldRender.updateFrom(*param)) break;
-                if (firstTunnelFrameHoldRender.value != C2_TRUE) break;
-                ALOGV("[%s] onWorkDone: first tunnel frame ready", mName);
-                mCCodecCallback->onFirstTunnelFrameReady();
                 break;
             }
             default:

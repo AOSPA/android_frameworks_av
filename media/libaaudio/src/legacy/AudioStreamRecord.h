@@ -25,7 +25,7 @@
 #include "AAudioLegacy.h"
 #include "legacy/AudioStreamLegacy.h"
 #include "utility/FixedBlockWriter.h"
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 
 namespace aaudio {
 
@@ -87,7 +87,7 @@ private:
     FixedBlockWriter                 mFixedBlockWriter;
 
     // TODO add 64-bit position reporting to AudioRecord and use it.
-    android::content::AttributionSourceState mAttributionSource;
+    android::media::permission::Identity mIdentity;
 
     // Only one type of conversion buffer is used.
     std::unique_ptr<float[]>         mFormatConversionBufferFloat;

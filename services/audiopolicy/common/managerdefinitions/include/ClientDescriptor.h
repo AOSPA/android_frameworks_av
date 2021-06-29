@@ -109,9 +109,6 @@ public:
     const std::vector<wp<SwAudioOutputDescriptor>>& getSecondaryOutputs() const {
         return mSecondaryOutputs;
     };
-    void setSecondaryOutputs(std::vector<wp<SwAudioOutputDescriptor>>&& secondaryOutputs) {
-        mSecondaryOutputs = std::move(secondaryOutputs);
-    }
     VolumeSource volumeSource() const { return mVolumeSource; }
     const sp<AudioPolicyMix> getPrimaryMix() const {
         return mPrimaryMix.promote();
@@ -146,7 +143,7 @@ private:
     const product_strategy_t mStrategy;
     const VolumeSource mVolumeSource;
     const audio_output_flags_t mFlags;
-    std::vector<wp<SwAudioOutputDescriptor>> mSecondaryOutputs;
+    const std::vector<wp<SwAudioOutputDescriptor>> mSecondaryOutputs;
     const wp<AudioPolicyMix> mPrimaryMix;
     /**
      * required for duplicating thread, prevent from removing active client from an output

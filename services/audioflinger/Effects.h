@@ -138,9 +138,8 @@ public:
                              int32_t __unused,
                              std::vector<uint8_t>* __unused) { return NO_ERROR; };
 
-    // mCallback is atomic so this can be lock-free.
     void setCallback(const sp<EffectCallbackInterface>& callback) { mCallback = callback; }
-    sp<EffectCallbackInterface> getCallback() const { return mCallback.load(); }
+    sp<EffectCallbackInterface>&     callback() { return mCallback; }
 
     status_t addHandle(EffectHandle *handle);
     ssize_t disconnectHandle(EffectHandle *handle, bool unpinIfLast);
@@ -171,7 +170,7 @@ private:
     DISALLOW_COPY_AND_ASSIGN(EffectBase);
 
 mutable Mutex                 mLock;      // mutex for process, commands and handles list protection
-    mediautils::atomic_sp<EffectCallbackInterface> mCallback; // parent effect chain
+    sp<EffectCallbackInterface> mCallback; // parent effect chain
     const int                 mId;        // this instance unique ID
     const audio_session_t     mSessionId; // audio session ID
     const effect_descriptor_t mDescriptor;// effect descriptor received from effect engine

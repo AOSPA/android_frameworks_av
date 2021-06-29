@@ -23,7 +23,7 @@
 #include <AAudioService.h>
 #include <aaudio/AAudio.h>
 #include "aaudio/BnAAudioClient.h"
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 
 #define UNUSED_PARAM __attribute__((unused))
 
@@ -295,12 +295,11 @@ void OboeserviceFuzzer::process(const uint8_t *data, size_t size) {
             ? fdp.ConsumeIntegral<int32_t>()
             : kAAudioFormats[fdp.ConsumeIntegralInRange<int32_t>(0, kNumAAudioFormats - 1)]));
 
-    // TODO b/182392769: use attribution source util
-    android::content::AttributionSourceState attributionSource;
-    attributionSource.uid = getuid();
-    attributionSource.pid = getpid();
-    attributionSource.token = sp<BBinder>::make();
-    request.setAttributionSource(attributionSource);
+    // TODO b/182392769: use identity util
+    media::permission::Identity identity;
+    identity.uid = getuid();
+    identity.pid = getpid();
+    request.setIdentity(identity);
     request.setInService(fdp.ConsumeBool());
 
     request.getConfiguration().setDeviceId(fdp.ConsumeIntegral<int32_t>());

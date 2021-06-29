@@ -327,8 +327,6 @@ public:
     status_t getSystemCameraKind(const std::string& id, SystemCameraKind *kind) const;
     bool isHiddenPhysicalCamera(const std::string& cameraId) const;
 
-    void filterSmallJpegSizes(const std::string& cameraId);
-
     static const float kDepthARTolerance;
 private:
     // All private members, unless otherwise noted, expect mInterfaceMutex to be locked before use
@@ -488,7 +486,6 @@ private:
                     bool * /*status*/) {
                 return INVALID_OPERATION;
             }
-            virtual void filterSmallJpegSizes() = 0;
 
             template<class InterfaceT>
             sp<InterfaceT> startDeviceInterface();
@@ -547,7 +544,6 @@ private:
                     const hardware::camera::device::V3_7::StreamConfiguration &configuration,
                     bool *status /*out*/)
                     override;
-            virtual void filterSmallJpegSizes() override;
 
             DeviceInfo3(const std::string& name, const metadata_vendor_id_t tagId,
                     const std::string &id, uint16_t minorVersion,

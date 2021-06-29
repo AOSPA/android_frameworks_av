@@ -44,8 +44,8 @@
 
 namespace android {
 StagefrightRecorder *AVMediaServiceFactory::createStagefrightRecorder(
-        const AttributionSourceState& attributionSourcce) {
-    return new StagefrightRecorder(attributionSourcce);
+        const Identity& clientIdentity) {
+    return new StagefrightRecorder(clientIdentity);
 }
 
 sp<ARTSPConnection> AVMediaServiceFactory::createARTSPConnection(

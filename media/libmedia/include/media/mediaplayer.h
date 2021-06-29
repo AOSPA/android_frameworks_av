@@ -29,7 +29,7 @@
 #include <media/IMediaPlayer.h>
 #include <media/IMediaDeathNotifier.h>
 #include <media/IStreamSource.h>
-#include <android/content/AttributionSourceState.h>
+#include <android/media/permission/Identity.h>
 
 #include <utils/KeyedVector.h>
 #include <utils/String8.h>
@@ -212,8 +212,8 @@ class MediaPlayer : public BnMediaPlayerClient,
                     public virtual IMediaDeathNotifier
 {
 public:
-    explicit MediaPlayer(const android::content::AttributionSourceState& mAttributionSource =
-        android::content::AttributionSourceState());
+    explicit MediaPlayer(const android::media::permission::Identity& mIdentity =
+        android::media::permission::Identity());
     ~MediaPlayer();
             void            died();
             void            disconnect();
@@ -317,7 +317,7 @@ private:
     float                       mSendLevel;
     struct sockaddr_in          mRetransmitEndpoint;
     bool                        mRetransmitEndpointValid;
-    const android::content::AttributionSourceState mAttributionSource;
+    const android::media::permission::Identity mIdentity;
 };
 
 }; // namespace android

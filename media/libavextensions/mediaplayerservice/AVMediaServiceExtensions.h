@@ -51,7 +51,7 @@ struct ABuffer;
  * Factory to create objects of base-classes in libmediaplayerservice
  */
 struct AVMediaServiceFactory {
-    virtual StagefrightRecorder *createStagefrightRecorder(const content::AttributionSourceState& attributionSourcce);
+    virtual StagefrightRecorder *createStagefrightRecorder(const media::permission::Identity& clientIdentity);
 
     // RTSP extensions
     virtual sp<ARTSPConnection> createARTSPConnection(bool uidValid, uid_t uid);
