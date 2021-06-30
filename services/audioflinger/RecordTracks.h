@@ -15,21 +15,25 @@
 ** limitations under the License.
 */
 
+#include <android/content/AttributionSourceState.h>
+
 #ifndef INCLUDING_FROM_AUDIOFLINGER_H
     #error This header file should only be included from AudioFlinger.h
 #endif
 
-// Checks and monitors OP_RECORD_AUDIO
+// Checks and monitors app ops for audio record
 class OpRecordAudioMonitor : public RefBase {
 public:
     ~OpRecordAudioMonitor() override;
-    bool hasOpRecordAudio() const;
+    bool hasOp() const;
+    int32_t getOp() const { return mAppOp; }
 
-    static sp<OpRecordAudioMonitor> createIfNeeded
-        (const media::permission::Identity& identity, const audio_attributes_t& attr);
+    static sp<OpRecordAudioMonitor> createIfNeeded(const AttributionSourceState& attributionSource,
+            const audio_attributes_t& attr);
 
 private:
-    explicit OpRecordAudioMonitor(const media::permission::Identity& identity);
+    OpRecordAudioMonitor(const AttributionSourceState& attributionSource, int32_t appOp);
+
     void onFirstRef() override;
 
     AppOpsManager mAppOpsManager;
@@ -44,12 +48,13 @@ private:
     };
 
     sp<RecordAudioOpCallback> mOpCallback;
-    // called by RecordAudioOpCallback when OP_RECORD_AUDIO is updated in AppOp callback
-    // and in onFirstRef()
-    void checkRecordAudio();
+    // called by RecordAudioOpCallback when the app op for this OpRecordAudioMonitor is updated
+    // in AppOp callback and in onFirstRef()
+    void checkOp();
 
-    std::atomic_bool mHasOpRecordAudio;
-    const media::permission::Identity mIdentity;
+    std::atomic_bool mHasOp;
+    const AttributionSourceState mAttributionSource;
+    const int32_t mAppOp;
 };
 
 // record track
@@ -66,7 +71,7 @@ public:
                                 size_t bufferSize,
                                 audio_session_t sessionId,
                                 pid_t creatorPid,
-                                const media::permission::Identity& identity,
+                                const AttributionSourceState& attributionSource,
                                 audio_input_flags_t flags,
                                 track_type type,
                                 audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE,
@@ -149,7 +154,7 @@ private:
 
             bool                               mSilenced;
 
-            // used to enforce OP_RECORD_AUDIO
+            // used to enforce the audio record app op corresponding to this track's audio source
             sp<OpRecordAudioMonitor>           mOpRecordAudioMonitor;
             std::string                        mSharedAudioPackageName = {};
             int32_t                            mStartFrames = -1;
