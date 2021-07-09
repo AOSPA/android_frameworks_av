@@ -1,3 +1,4 @@
+
 /*
  * Copyright (C) 2009 The Android Open Source Project
  *
@@ -38,11 +39,13 @@
 #include "CaptureStateNotifier.h"
 #include <AudioPolicyInterface.h>
 #include <android/hardware/BnSensorPrivacyListener.h>
-#include <android/media/permission/Identity.h>
+#include <android/content/AttributionSourceState.h>
 
 #include <unordered_map>
 
 namespace android {
+
+using content::AttributionSourceState;
 
 // ----------------------------------------------------------------------------
 
@@ -81,7 +84,7 @@ public:
                                media::AudioPolicyForcedConfig* _aidl_return) override;
     binder::Status getOutput(media::AudioStreamType stream, int32_t* _aidl_return) override;
     binder::Status getOutputForAttr(const media::AudioAttributesInternal& attr, int32_t session,
-                                    const media::permission::Identity &identity,
+                                    const AttributionSourceState &attributionSource,
                                     const media::AudioConfig& config,
                                     int32_t flags, int32_t selectedDeviceId,
                                     media::GetOutputForAttrResponse* _aidl_return) override;
@@ -90,7 +93,7 @@ public:
     binder::Status releaseOutput(int32_t portId) override;
     binder::Status getInputForAttr(const media::AudioAttributesInternal& attr, int32_t input,
                                    int32_t riid, int32_t session,
-                                   const media::permission::Identity &identity,
+                                   const AttributionSourceState &attributionSource,
                                    const media::AudioConfigBase& config, int32_t flags,
                                    int32_t selectedDeviceId,
                                    media::GetInputForAttrResponse* _aidl_return) override;
@@ -323,8 +326,10 @@ private:
     // Handles binder shell commands
     virtual status_t shellCommand(int in, int out, int err, Vector<String16>& args);
 
+    class AudioRecordClient;
+
     // Sets whether the given UID records only silence
-    virtual void setAppState_l(audio_port_handle_t portId, app_state_t state) REQUIRES(mLock);
+    virtual void setAppState_l(sp<AudioRecordClient> client, app_state_t state) REQUIRES(mLock);
 
     // Overrides the UID state as if it is idle
     status_t handleSetUidState(Vector<String16>& args, int err);
@@ -346,7 +351,7 @@ private:
 
     bool isSupportedSystemUsage(audio_usage_t usage);
     status_t validateUsage(audio_usage_t usage);
-    status_t validateUsage(audio_usage_t usage, const media::permission::Identity& identity);
+    status_t validateUsage(audio_usage_t usage, const AttributionSourceState& attributionSource);
 
     void updateUidStates();
     void updateUidStates_l() REQUIRES(mLock);
@@ -744,6 +749,9 @@ private:
 
         status_t getAudioPort(struct audio_port_v7 *port) override;
 
+        status_t updateSecondaryOutputs(
+                const TrackSecondaryOutputsMap& trackSecondaryOutputs) override;
+
      private:
         AudioPolicyService *mAudioPolicyService;
     };
@@ -797,17 +805,18 @@ private:
     public:
                 AudioClient(const audio_attributes_t attributes,
                             const audio_io_handle_t io,
-                            const media::permission::Identity& identity,
+                            const AttributionSourceState& attributionSource,
                             const audio_session_t session,  audio_port_handle_t portId,
                             const audio_port_handle_t deviceId) :
-                                attributes(attributes), io(io), identity(identity),
-                                session(session), portId(portId), deviceId(deviceId), active(false) {}
+                                attributes(attributes), io(io), attributionSource(
+                                attributionSource), session(session), portId(portId),
+                                deviceId(deviceId), active(false) {}
                 ~AudioClient() override = default;
 
 
         const audio_attributes_t attributes; // source, flags ...
         const audio_io_handle_t io;          // audio HAL stream IO handle
-        const media::permission::Identity& identity; //client identity
+        const AttributionSourceState& attributionSource; //client attributionsource
         const audio_session_t session;       // audio session ID
         const audio_port_handle_t portId;
         const audio_port_handle_t deviceId;  // selected input device port ID
@@ -823,17 +832,19 @@ private:
                           const audio_io_handle_t io,
                           const audio_session_t session, audio_port_handle_t portId,
                           const audio_port_handle_t deviceId,
-                          const media::permission::Identity& identity,
+                          const AttributionSourceState& attributionSource,
                           bool canCaptureOutput, bool canCaptureHotword) :
-                    AudioClient(attributes, io, identity,
-                        session, portId, deviceId), identity(identity), startTimeNs(0),
-                    canCaptureOutput(canCaptureOutput), canCaptureHotword(canCaptureHotword) {}
+                    AudioClient(attributes, io, attributionSource,
+                        session, portId, deviceId), attributionSource(attributionSource),
+                        startTimeNs(0), canCaptureOutput(canCaptureOutput),
+                        canCaptureHotword(canCaptureHotword), silenced(false) {}
                 ~AudioRecordClient() override = default;
 
-        const media::permission::Identity identity;        // identity of client
+        const AttributionSourceState attributionSource; // attribution source of client
         nsecs_t startTimeNs;
         const bool canCaptureOutput;
         const bool canCaptureHotword;
+        bool silenced;
     };
 
     // --- AudioPlaybackClient ---
@@ -842,10 +853,10 @@ private:
     class AudioPlaybackClient : public AudioClient {
     public:
                 AudioPlaybackClient(const audio_attributes_t attributes,
-                      const audio_io_handle_t io, media::permission::Identity identity,
+                      const audio_io_handle_t io, AttributionSourceState attributionSource,
                             const audio_session_t session, audio_port_handle_t portId,
                             audio_port_handle_t deviceId, audio_stream_type_t stream) :
-                    AudioClient(attributes, io, identity, session, portId,
+                    AudioClient(attributes, io, attributionSource, session, portId,
                         deviceId), stream(stream) {}
                 ~AudioPlaybackClient() override = default;
 

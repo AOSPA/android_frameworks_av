@@ -26,15 +26,13 @@ cc_library_static {
     ],
 }
 
-cc_binary {
-    name: "mediaserver",
-
-    srcs: ["main_mediaserver.cpp"],
-
+cc_defaults {
+    name: "mediaserver_defaults",
     shared_libs: [
         "android.hardware.media.omx@1.0",
         "libandroidicu",
         "libfmq",
+        "libbase",
         "libbinder",
         "libhidlbase",
         "liblog",
@@ -53,96 +51,43 @@ cc_binary {
         "frameworks/av/services/mediaresourcemanager",
     ],
 
+    cflags: [
+        "-Werror",
+        "-Wall",
+    ],
+
+    vintf_fragments: ["manifest_media_c2_software.xml"],
+}
+
+cc_binary {
+    name: "mediaserver",
+    defaults: [
+                "mediaserver_defaults",
+              ],
+    srcs: ["main_mediaserver.cpp"],
+    init_rc: ["mediaserver.rc"],
     // mediaserver has only been verified on 32-bit, see b/126502613
     // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
     // targets, which allows them to reach 'boot_complete'.
     compile_multilib: "32",
-    init_rc: ["mediaserver.rc"],
-
-    cflags: [
-        "-Werror",
-        "-Wall",
-    ],
-
-    vintf_fragments: ["manifest_media_c2_software.xml"],
 }
 cc_binary {
     name: "mediaserver64",
-
+    defaults: [
+                "mediaserver_defaults",
+              ],
     srcs: ["main_mediaserver.cpp"],
-    compile_multilib: "64",
-    shared_libs: [
-        "android.hardware.media.omx@1.0",
-        "libandroidicu",
-        "libfmq",
-        "libbinder",
-        "libhidlbase",
-        "liblog",
-        "libmediaplayerservice",
-        "libresourcemanagerservice",
-        "libutils",
-        "libcutils",
-    ],
-
-    static_libs: [
-        "libregistermsext",
-    ],
-
-    include_dirs: [
-        "frameworks/av/media/libmediaplayerservice",
-        "frameworks/av/services/mediaresourcemanager",
-    ],
-
+    init_rc: ["mediaserver.rc"],
     // mediaserver has only been verified on 32-bit, see b/126502613
     // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
     // targets, which allows them to reach 'boot_complete'.
-    init_rc: ["mediaserver.rc"],
-
-    cflags: [
-        "-Werror",
-        "-Wall",
-    ],
-
-    vintf_fragments: ["manifest_media_c2_software.xml"],
+    compile_multilib: "64",
 }
-
 cc_binary {
     name: "mediaserverwrapper",
-
+    defaults: [
+                "mediaserver_defaults",
+              ],
     srcs: ["mediaserverwrapper.cpp"],
-
-    shared_libs: [
-        "android.hardware.media.omx@1.0",
-        "libandroidicu",
-        "libfmq",
-        "libbinder",
-        "libhidlbase",
-        "liblog",
-        "libmediaplayerservice",
-        "libresourcemanagerservice",
-        "libutils",
-        "libcutils",
-    ],
-
-    static_libs: [
-        "libregistermsext",
-    ],
-
-    include_dirs: [
-        "frameworks/av/media/libmediaplayerservice",
-        "frameworks/av/services/mediaresourcemanager",
-    ],
-
-    // mediaserver has only been verified on 32-bit, see b/126502613
-    // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
-    // targets, which allows them to reach 'boot_complete'.
-
     init_rc: ["mediaserverwrapper.rc"],
-
-    cflags: [
-        "-Werror",
-        "-Wall",
-    ],
-
-    vintf_fragments: ["manifest_media_c2_software.xml"],
 }

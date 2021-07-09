@@ -594,7 +594,8 @@ void AudioPolicyService::updateUidStates_l()
 
     for (size_t i =0; i < mAudioRecordClients.size(); i++) {
         sp<AudioRecordClient> current = mAudioRecordClients[i];
-        uid_t currentUid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(current->identity.uid));
+        uid_t currentUid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(
+                current->attributionSource.uid));
         if (!current->active) {
             continue;
         }
@@ -641,7 +642,7 @@ void AudioPolicyService::updateUidStates_l()
                             || (isInCommunication && currentUid == mPhoneStateOwnerUid)) {
                         if (!isInCommunication || latestSensitiveActiveOrComm == nullptr
                                 || VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(
-                                    latestSensitiveActiveOrComm->identity.uid))
+                                    latestSensitiveActiveOrComm->attributionSource.uid))
                                         != mPhoneStateOwnerUid) {
                             latestSensitiveActiveOrComm = current;
                             latestSensitiveStartNs = current->startTimeNs;
@@ -676,7 +677,7 @@ void AudioPolicyService::updateUidStates_l()
         // if audio mode is IN_COMMUNICATION, favor audio mode owner over an app with
         // foreground UI in case both are capturing with privacy sensitive flag.
         uid_t latestActiveUid = VALUE_OR_FATAL(
-            aidl2legacy_int32_t_uid_t(latestSensitiveActiveOrComm->identity.uid));
+            aidl2legacy_int32_t_uid_t(latestSensitiveActiveOrComm->attributionSource.uid));
         if (isInCommunication && latestActiveUid == mPhoneStateOwnerUid) {
             topSensitiveActive = latestSensitiveActiveOrComm;
             topSensitiveStartNs = latestSensitiveStartNs;
@@ -696,20 +697,20 @@ void AudioPolicyService::updateUidStates_l()
     for (size_t i =0; i < mAudioRecordClients.size(); i++) {
         sp<AudioRecordClient> current = mAudioRecordClients[i];
         uid_t currentUid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(
-            current->identity.uid));
+            current->attributionSource.uid));
         if (!current->active) {
             continue;
         }
 
         audio_source_t source = current->attributes.source;
         bool isTopOrLatestActive = topActive == nullptr ? false :
-            current->identity.uid == topActive->identity.uid;
+            current->attributionSource.uid == topActive->attributionSource.uid;
         bool isTopOrLatestSensitive = topSensitiveActive == nullptr ? false :
-            current->identity.uid == topSensitiveActive->identity.uid;
+            current->attributionSource.uid == topSensitiveActive->attributionSource.uid;
 
         auto canCaptureIfInCallOrCommunication = [&](const auto &recordClient) REQUIRES(mLock) {
             uid_t recordUid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(
-                recordClient->identity.uid));
+                recordClient->attributionSource.uid));
             bool canCaptureCall = recordClient->canCaptureOutput;
             bool canCaptureCommunication = recordClient->canCaptureOutput
                 || !isPhoneStateOwnerActive
@@ -785,7 +786,7 @@ void AudioPolicyService::updateUidStates_l()
                 allowCapture = true;
             }
         }
-        setAppState_l(current->portId,
+        setAppState_l(current,
                       allowCapture ? apmStatFromAmState(mUidPolicy->getUidState(currentUid)) :
                                 APP_STATE_IDLE);
     }
@@ -795,7 +796,7 @@ void AudioPolicyService::silenceAllRecordings_l() {
     for (size_t i = 0; i < mAudioRecordClients.size(); i++) {
         sp<AudioRecordClient> current = mAudioRecordClients[i];
         if (!isVirtualSource(current->attributes.source)) {
-            setAppState_l(current->portId, APP_STATE_IDLE);
+            setAppState_l(current, APP_STATE_IDLE);
         }
     }
 }
@@ -829,17 +830,32 @@ bool AudioPolicyService::isVirtualSource(audio_source_t source)
     return false;
 }
 
-void AudioPolicyService::setAppState_l(audio_port_handle_t portId, app_state_t state)
+void AudioPolicyService::setAppState_l(sp<AudioRecordClient> client, app_state_t state)
 {
     AutoCallerClear acc;
 
     if (mAudioPolicyManager) {
-        mAudioPolicyManager->setAppState(portId, state);
+        mAudioPolicyManager->setAppState(client->portId, state);
     }
     sp<IAudioFlinger> af = AudioSystem::get_audio_flinger();
     if (af) {
         bool silenced = state == APP_STATE_IDLE;
-        af->setRecordSilenced(portId, silenced);
+        if (client->silenced != silenced) {
+            if (client->active) {
+                if (silenced) {
+                    finishRecording(client->attributionSource, client->attributes.source);
+                } else {
+                    std::stringstream msg;
+                    msg << "Audio recording un-silenced on session " << client->session;
+                    if (!startRecording(client->attributionSource, String16(msg.str().c_str()),
+                            client->attributes.source)) {
+                        silenced = true;
+                    }
+                }
+            }
+            af->setRecordSilenced(client->portId, silenced);
+            client->silenced = silenced;
+        }
     }
 }
 

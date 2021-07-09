@@ -37,6 +37,8 @@
 #include <android/media/IAudioFlingerClient.h>
 #include <android/media/IAudioTrackCallback.h>
 #include <android/os/BnExternalVibrationController.h>
+#include <android/content/AttributionSourceState.h>
+
 
 #include <android-base/macros.h>
 #include <cutils/atomic.h>
@@ -124,13 +126,15 @@ static const nsecs_t kDefaultStandbyTimeInNsecs = seconds(3);
 
 #define INCLUDING_FROM_AUDIOFLINGER_H
 
+using android::content::AttributionSourceState;
+
 class AudioFlinger : public AudioFlingerServerAdapter::Delegate
 {
 public:
     static void instantiate() ANDROID_API;
 
-    static media::permission::Identity checkIdentityPackage(
-                                            const media::permission::Identity& identity);
+    static AttributionSourceState checkAttributionSourcePackage(
+        const AttributionSourceState& attributionSource);
 
     status_t dump(int fd, const Vector<String16>& args) override;
 
@@ -271,6 +275,9 @@ public:
     virtual status_t setAudioHalPids(const std::vector<pid_t>& pids);
 
     virtual status_t setVibratorInfos(const std::vector<media::AudioVibratorInfo>& vibratorInfos);
+
+    virtual status_t updateSecondaryOutputs(
+            const TrackSecondaryOutputsMap& trackSecondaryOutputs);
 
     status_t onTransactWrapper(TransactionCode code, const Parcel& data, uint32_t flags,
         const std::function<status_t()>& delegate) override;
@@ -774,6 +781,11 @@ using effect_buffer_t = int16_t;
               sp<ThreadBase> getEffectThread_l(audio_session_t sessionId, int effectId);
 
               ThreadBase *hapticPlaybackThread_l() const;
+
+              void updateSecondaryOutputsForTrack_l(
+                      PlaybackThread::Track* track,
+                      PlaybackThread* thread,
+                      const std::vector<audio_io_handle_t>& secondaryOutputs) const;
 
 
                 void        removeClient_l(pid_t pid);

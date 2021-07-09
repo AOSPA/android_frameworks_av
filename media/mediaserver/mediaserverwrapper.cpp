@@ -1,6 +1,4 @@
-/*
-**
-** Copyright 2008, The Android Open Source Project
+/*copyright 2008, The Android Open Source Project
 **
 ** Licensed under the Apache License, Version 2.0 (the "License");
 ** you may not use this file except in compliance with the License.
@@ -36,43 +34,21 @@
 using namespace android;
 
 int mediaserverwrapper(){
-    auto pid = fork();
     int status = 0;
     bool MediaServer_PathSelect = property_get_bool("ro.mediaserver.64b.enable", false);
-    if (pid < 0){
-        ALOGE("fork() failed!");
+    const char *mediapath;
+    if (MediaServer_PathSelect){
+        mediapath= "/system/bin/mediaserver64";
     }
-    if (pid == 0){
-        //ChildProcess to run the media server
-        const char *mediapath;
-        if (MediaServer_PathSelect){
-            ALOGI("Child Process running 64 bit");
-            mediapath= "/system/bin/mediaserver64";
-        }
-        else
-        {
-            ALOGI("Child Process running 32 bit");
-            mediapath= "/system/bin/mediaserver";
-        }
-        execl(mediapath,mediapath,NULL,NULL);
+    else
+    {
+        mediapath= "/system/bin/mediaserver";
     }
-    else{
-        //Parent Process to wait until child process is complete and report the status
-        waitpid(pid, &status,0); // wait for the child to exit
-        if (WIFEXITED(status)) {
-            if (WEXITSTATUS(status) == EXIT_SUCCESS) {
-                ALOGI("Child Successfuly Run");
-            } else {
-                ALOGE("process exited with status : %d",WEXITSTATUS(status));
-            }
-        } else if (WIFSIGNALED(status)) {
-            ALOGE("process killed by signal :%d ",WTERMSIG(status));
-        }
-    }
+    status = execl(mediapath,mediapath,NULL,NULL);
     return status;
 }
 
 int main(int argc __unused, char **argv __unused)
 {
-    mediaserverwrapper();
+    return mediaserverwrapper();
 }
