@@ -35,8 +35,6 @@ using android::camera3::CompositeStream;
 
 namespace android {
 
-typedef std::function<CameraMetadata (const String8 &)> metadataGetter;
-
 struct CameraDeviceClientBase :
          public CameraService::BasicClient,
          public hardware::camera2::BnCameraDeviceUser
@@ -185,7 +183,8 @@ public:
             int sensorOrientation,
             int clientPid,
             uid_t clientUid,
-            int servicePid);
+            int servicePid,
+            bool overrideForPerfClass);
     virtual ~CameraDeviceClient();
 
     virtual status_t      initialize(sp<CameraProviderManager> manager,
@@ -335,6 +334,9 @@ private:
     KeyedVector<sp<IBinder>, sp<CompositeStream>> mCompositeStreamMap;
 
     sp<CameraProviderManager> mProviderManager;
+
+    // Override the camera characteristics for performance class primary cameras.
+    bool mOverrideForPerfClass;
 };
 
 }; // namespace android
