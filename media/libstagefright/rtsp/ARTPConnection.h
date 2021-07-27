@@ -41,7 +41,7 @@ struct ARTPConnection : public AHandler {
             const sp<AMessage> &notify,
             bool injected,
             bool isIPV6 = false);
-
+    void seekStream();
     void removeStream(int rtpSocket, int rtcpSocket);
 
     void injectPacket(int index, const sp<ABuffer> &buffer);
@@ -71,6 +71,7 @@ protected:
 private:
     enum {
         kWhatAddStream,
+        kWhatSeekStream,
         kWhatRemoveStream,
         kWhatPollStreams,
         kWhatInjectPacket,
@@ -95,6 +96,7 @@ private:
 
     int32_t mCumulativeBytes;
 
+    void onSeekStream(const sp<AMessage> &msg);
     void onRemoveStream(const sp<AMessage> &msg);
     void onPollStreams();
     void onInjectPacket(const sp<AMessage> &msg);
