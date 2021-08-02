@@ -1988,6 +1988,16 @@ typedef enum acamera_metadata_tag {
      * ACAMERA_CONTROL_ZOOM_RATIO is not 1.0, and ACAMERA_SCALER_CROP_REGION is set to be
      * windowboxing, the camera framework will override the ACAMERA_SCALER_CROP_REGION to be
      * the active array.</p>
+     * <p>In the capture request, if the application sets ACAMERA_CONTROL_ZOOM_RATIO to a
+     * value != 1.0, the ACAMERA_CONTROL_ZOOM_RATIO tag in the capture result reflects the
+     * effective zoom ratio achieved by the camera device, and the ACAMERA_SCALER_CROP_REGION
+     * adjusts for additional crops that are not zoom related. Otherwise, if the application
+     * sets ACAMERA_CONTROL_ZOOM_RATIO to 1.0, or does not set it at all, the
+     * ACAMERA_CONTROL_ZOOM_RATIO tag in the result metadata will also be 1.0.</p>
+     * <p>When the application requests a physical stream for a logical multi-camera, the
+     * ACAMERA_CONTROL_ZOOM_RATIO in the physical camera result metadata will be 1.0, and
+     * the ACAMERA_SCALER_CROP_REGION tag reflects the amount of zoom and crop done by the
+     * physical camera device.</p>
      *
      * @see ACAMERA_CONTROL_AE_REGIONS
      * @see ACAMERA_CONTROL_ZOOM_RATIO
@@ -3576,9 +3586,9 @@ typedef enum acamera_metadata_tag {
      * <p>Not all output formats may be supported in a configuration with
      * an input stream of a particular format. For more details, see
      * android.scaler.availableInputOutputFormatsMap.</p>
-     * <p>The following table describes the minimum required output stream
-     * configurations based on the hardware level
-     * (ACAMERA_INFO_SUPPORTED_HARDWARE_LEVEL), prior to Android 12:</p>
+     * <p>For applications targeting SDK version older than 31, the following table
+     * describes the minimum required output stream configurations based on the hardware level
+     * (ACAMERA_INFO_SUPPORTED_HARDWARE_LEVEL):</p>
      * <p>Format         | Size                                         | Hardware Level | Notes
      * :-------------:|:--------------------------------------------:|:--------------:|:--------------:
      * JPEG           | ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE          | Any            |
@@ -3589,10 +3599,13 @@ typedef enum acamera_metadata_tag {
      * YUV_420_888    | all output sizes available for JPEG          | FULL           |
      * YUV_420_888    | all output sizes available for JPEG, up to the maximum video size | LIMITED        |
      * IMPLEMENTATION_DEFINED | same as YUV_420_888                  | Any            |</p>
-     * <p>Starting from Android 12, the camera device may not support JPEG sizes smaller than the
-     * minimum of 1080p and the camera sensor active array size. The requirements for
-     * IMPLEMENTATION_DEFINED and YUV_420_888 stay the same. This new minimum required output
-     * stream configurations are illustrated by the table below:</p>
+     * <p>For applications targeting SDK version 31 or newer, if the mobile device declares to be
+     * <a href="https://developer.android.com/reference/android/os/Build/VERSION_CDOES/MEDIA_PERFORMANCE_CLASS.html">media performance class</a> S,
+     * the primary camera devices (first rear/front camera in the camera ID list) will not
+     * support JPEG sizes smaller than 1080p. If the application configures a JPEG stream
+     * smaller than 1080p, the camera device will round up the JPEG image size to at least
+     * 1080p. The requirements for IMPLEMENTATION_DEFINED and YUV_420_888 stay the same.
+     * This new minimum required output stream configurations are illustrated by the table below:</p>
      * <p>Format         | Size                                         | Hardware Level | Notes
      * :-------------:|:--------------------------------------------:|:--------------:|:--------------:
      * JPEG           | ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE          | Any            |
@@ -3604,6 +3617,10 @@ typedef enum acamera_metadata_tag {
      * YUV_420_888    | 320x240 (240p)                               | FULL           | if 240p &lt;= activeArraySize
      * YUV_420_888    | all output sizes available for FULL hardware level, up to the maximum video size | LIMITED        |
      * IMPLEMENTATION_DEFINED | same as YUV_420_888                  | Any            |</p>
+     * <p>For applications targeting SDK version 31 or newer, if the mobile device doesn't declare
+     * to be media performance class S, or if the camera device isn't a primary rear/front
+     * camera, the minimum required output stream configurations are the same as for applications
+     * targeting SDK version older than 31.</p>
      * <p>Refer to ACAMERA_REQUEST_AVAILABLE_CAPABILITIES for additional
      * mandatory stream configurations on a per-capability basis.</p>
      * <p>Exception on 176x144 (QCIF) resolution: camera devices usually have a fixed capability for

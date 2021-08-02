@@ -75,7 +75,7 @@ using android::hardware::camera::metadata::V3_6::CameraMetadataEnumAndroidSensor
 
 namespace android {
 
-Camera3Device::Camera3Device(const String8 &id):
+Camera3Device::Camera3Device(const String8 &id, bool overrideForPerfClass):
         mId(id),
         mOperatingMode(NO_MODE),
         mIsConstrainedHighSpeedConfiguration(false),
@@ -93,7 +93,8 @@ Camera3Device::Camera3Device(const String8 &id):
         mListener(NULL),
         mVendorTagId(CAMERA_METADATA_INVALID_VENDOR_ID),
         mLastTemplateId(-1),
-        mNeedFixupMonochromeTags(false)
+        mNeedFixupMonochromeTags(false),
+        mOverrideForPerfClass(overrideForPerfClass)
 {
     ATRACE_CALL();
     ALOGV("%s: Created device for camera %s", __FUNCTION__, mId.string());
@@ -132,7 +133,7 @@ status_t Camera3Device::initialize(sp<CameraProviderManager> manager, const Stri
         return res;
     }
 
-    res = manager->getCameraCharacteristics(mId.string(), &mDeviceInfo);
+    res = manager->getCameraCharacteristics(mId.string(), mOverrideForPerfClass, &mDeviceInfo);
     if (res != OK) {
         SET_ERR_L("Could not retrieve camera characteristics: %s (%d)", strerror(-res), res);
         session->close();
@@ -144,8 +145,9 @@ status_t Camera3Device::initialize(sp<CameraProviderManager> manager, const Stri
     bool isLogical = manager->isLogicalCamera(mId.string(), &physicalCameraIds);
     if (isLogical) {
         for (auto& physicalId : physicalCameraIds) {
+            // Do not override characteristics for physical cameras
             res = manager->getCameraCharacteristics(
-                    physicalId, &mPhysicalDeviceInfoMap[physicalId]);
+                    physicalId, /*overrideForPerfClass*/false, &mPhysicalDeviceInfoMap[physicalId]);
             if (res != OK) {
                 SET_ERR_L("Could not retrieve camera %s characteristics: %s (%d)",
                         physicalId.c_str(), strerror(-res), res);
@@ -772,16 +774,21 @@ status_t Camera3Device::dump(int fd, const Vector<String16> &args) {
     }
 
     lines = String8("    In-flight requests:\n");
-    if (mInFlightMap.size() == 0) {
-        lines.append("      None\n");
-    } else {
-        for (size_t i = 0; i < mInFlightMap.size(); i++) {
-            InFlightRequest r = mInFlightMap.valueAt(i);
-            lines.appendFormat("      Frame %d |  Timestamp: %" PRId64 ", metadata"
-                    " arrived: %s, buffers left: %d\n", mInFlightMap.keyAt(i),
-                    r.shutterTimestamp, r.haveResultMetadata ? "true" : "false",
-                    r.numBuffersLeft);
+    if (mInFlightLock.try_lock()) {
+        if (mInFlightMap.size() == 0) {
+            lines.append("      None\n");
+        } else {
+            for (size_t i = 0; i < mInFlightMap.size(); i++) {
+                InFlightRequest r = mInFlightMap.valueAt(i);
+                lines.appendFormat("      Frame %d |  Timestamp: %" PRId64 ", metadata"
+                        " arrived: %s, buffers left: %d\n", mInFlightMap.keyAt(i),
+                        r.shutterTimestamp, r.haveResultMetadata ? "true" : "false",
+                        r.numBuffersLeft);
+            }
         }
+        mInFlightLock.unlock();
+    } else {
+        lines.append("      Failed to acquire In-flight lock!\n");
     }
     write(fd, lines.string(), lines.size());
 

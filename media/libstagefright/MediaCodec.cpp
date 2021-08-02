@@ -31,6 +31,8 @@
 #include "include/SoftwareRenderer.h"
 #include "PlaybackDurationAccumulator.h"
 
+#include <android/binder_manager.h>
+#include <android/content/pm/IPackageManagerNative.h>
 #include <android/hardware/cas/native/1.0/IDescrambler.h>
 #include <android/hardware/media/omx/1.0/IGraphicBufferSource.h>
 
@@ -40,6 +42,7 @@
 #include <android/binder_manager.h>
 #include <android/dlext.h>
 #include <binder/IMemory.h>
+#include <binder/IServiceManager.h>
 #include <binder/MemoryDealer.h>
 #include <cutils/properties.h>
 #include <gui/BufferQueue.h>
@@ -165,8 +168,8 @@ static const char *kCodecRecentLatencyMin = "android.media.mediacodec.recent.min
 static const char *kCodecRecentLatencyAvg = "android.media.mediacodec.recent.avg";      /* in us */
 static const char *kCodecRecentLatencyCount = "android.media.mediacodec.recent.n";
 static const char *kCodecRecentLatencyHist = "android.media.mediacodec.recent.hist";    /* in us */
-static const char *kCodecPlaybackDuration =
-        "android.media.mediacodec.playback-duration"; /* in sec */
+static const char *kCodecPlaybackDurationSec =
+        "android.media.mediacodec.playback-duration-sec"; /* in sec */
 
 /* -1: shaper disabled
    >=0: number of fields changed */
@@ -865,9 +868,9 @@ void MediaCodec::updateMediametrics() {
     if (mLatencyUnknown > 0) {
         mediametrics_setInt64(mMetricsHandle, kCodecLatencyUnknown, mLatencyUnknown);
     }
-    int64_t playbackDuration = mPlaybackDurationAccumulator->getDurationInSeconds();
-    if (playbackDuration > 0) {
-        mediametrics_setInt64(mMetricsHandle, kCodecPlaybackDuration, playbackDuration);
+    int64_t playbackDurationSec = mPlaybackDurationAccumulator->getDurationInSeconds();
+    if (playbackDurationSec > 0) {
+        mediametrics_setInt64(mMetricsHandle, kCodecPlaybackDurationSec, playbackDurationSec);
     }
     if (mLifetimeStartNs > 0) {
         nsecs_t lifetime = systemTime(SYSTEM_TIME_MONOTONIC) - mLifetimeStartNs;
@@ -1710,6 +1713,7 @@ status_t MediaCodec::configure(
 //
 
 static android::mediaformatshaper::FormatShaperOps_t *sShaperOps = NULL;
+static bool sIsHandheld = true;
 
 static bool connectFormatShaper() {
     static std::once_flag sCheckOnce;
@@ -1782,6 +1786,64 @@ static bool connectFormatShaper() {
         nsecs_t loading_finished = systemTime(SYSTEM_TIME_MONOTONIC);
         ALOGV("connectFormatShaper: loaded libraries: %" PRId64 " us",
               (loading_finished - loading_started)/1000);
+
+
+        // we also want to know whether this is a handheld device
+        // start with assumption that the device is handheld.
+        sIsHandheld = true;
+        sp<IServiceManager> serviceMgr = defaultServiceManager();
+        sp<content::pm::IPackageManagerNative> packageMgr;
+        if (serviceMgr.get() != nullptr) {
+            sp<IBinder> binder = serviceMgr->waitForService(String16("package_native"));
+            packageMgr = interface_cast<content::pm::IPackageManagerNative>(binder);
+        }
+        // if we didn't get serviceMgr, we'll leave packageMgr as default null
+        if (packageMgr != nullptr) {
+
+            // MUST have these
+            static const String16 featuresNeeded[] = {
+                String16("android.hardware.touchscreen")
+            };
+            // these must be present to be a handheld
+            for (::android::String16 required : featuresNeeded) {
+                bool hasFeature = false;
+                binder::Status status = packageMgr->hasSystemFeature(required, 0, &hasFeature);
+                if (!status.isOk()) {
+                    ALOGE("%s: hasSystemFeature failed: %s",
+                        __func__, status.exceptionMessage().c_str());
+                    continue;
+                }
+                ALOGV("feature %s says %d", String8(required).c_str(), hasFeature);
+                if (!hasFeature) {
+                    ALOGV("... which means we are not handheld");
+                    sIsHandheld = false;
+                    break;
+                }
+            }
+
+            // MUST NOT have these
+            static const String16 featuresDisallowed[] = {
+                String16("android.hardware.type.automotive"),
+                String16("android.hardware.type.television"),
+                String16("android.hardware.type.watch")
+            };
+            // any of these present -- we aren't a handheld
+            for (::android::String16 forbidden : featuresDisallowed) {
+                bool hasFeature = false;
+                binder::Status status = packageMgr->hasSystemFeature(forbidden, 0, &hasFeature);
+                if (!status.isOk()) {
+                    ALOGE("%s: hasSystemFeature failed: %s",
+                        __func__, status.exceptionMessage().c_str());
+                    continue;
+                }
+                ALOGV("feature %s says %d", String8(forbidden).c_str(), hasFeature);
+                if (hasFeature) {
+                    ALOGV("... which means we are not handheld");
+                    sIsHandheld = false;
+                    break;
+                }
+            }
+        }
 
     });
 
@@ -1861,6 +1923,18 @@ static void loadCodecProperties(mediaformatshaper::shaperHandle_t shaperHandle,
             }
         }
     }
+
+    // we also carry in the codec description whether we are on a handheld device.
+    // this info is eventually used by both the Codec and the C2 machinery to inform
+    // the underlying codec whether to do any shaping.
+    //
+    if (sIsHandheld) {
+        // set if we are indeed a handheld device (or in future 'any eligible device'
+        // missing on devices that aren't eligible for minimum quality enforcement.
+        (void)(sShaperOps->setFeature)(shaperHandle, "_vq_eligible.device", 1);
+        // strictly speaking, it's a tuning, but those are strings and feature stores int
+        (void)(sShaperOps->setFeature)(shaperHandle, "_quality.target", 1 /* S_HANDHELD */);
+    }
 }
 
 status_t MediaCodec::setupFormatShaper(AString mediaType) {
@@ -1900,6 +1974,16 @@ status_t MediaCodec::setupFormatShaper(AString mediaType) {
 
 // Format Shaping
 //      Mapping and Manipulation of encoding parameters
+//
+//      All of these decisions are pushed into the shaper instead of here within MediaCodec.
+//      this includes decisions based on whether the codec implements minimum quality bars
+//      itself or needs to be shaped outside of the codec.
+//      This keeps all those decisions in one place.
+//      It also means that we push some extra decision information (is this a handheld device
+//      or one that is otherwise eligible for minimum quality manipulation, which generational
+//      quality target is in force, etc).  This allows those values to be cached in the
+//      per-codec structures that are done 1 time within a process instead of for each
+//      codec instantiation.
 //
 
 status_t MediaCodec::shapeMediaFormat(

@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cutils/properties.h>
+
 #include "SessionConfigurationUtils.h"
 #include "../api2/DepthCompositeStream.h"
 #include "../api2/HeicCompositeStream.h"
@@ -28,6 +30,11 @@ using android::hardware::camera::metadata::V3_6::CameraMetadataEnumAndroidSensor
 
 namespace android {
 namespace camera3 {
+
+int32_t SessionConfigurationUtils::PERF_CLASS_LEVEL =
+        property_get_int32("ro.odm.build.media_performance_class", 0);
+
+bool SessionConfigurationUtils::IS_PERF_CLASS = (PERF_CLASS_LEVEL == SDK_VERSION_S);
 
 void StreamConfiguration::getStreamConfigurations(
         const CameraMetadata &staticInfo, int configuration,
@@ -140,7 +147,7 @@ int64_t SessionConfigurationUtils::euclidDistSquare(int32_t x0, int32_t y0, int3
 bool SessionConfigurationUtils::roundBufferDimensionNearest(int32_t width, int32_t height,
         int32_t format, android_dataspace dataSpace,
         const CameraMetadata& info, bool maxResolution, /*out*/int32_t* outWidth,
-        /*out*/int32_t* outHeight) {
+        /*out*/int32_t* outHeight, bool isPriviledgedClient) {
     const int32_t depthSizesTag =
             getAppropriateModeTag(ANDROID_DEPTH_AVAILABLE_DEPTH_STREAM_CONFIGURATIONS,
                     maxResolution);
@@ -178,6 +185,25 @@ bool SessionConfigurationUtils::roundBufferDimensionNearest(int32_t width, int32
                 bestWidth = w;
                 bestHeight = h;
             }
+        }
+    }
+
+    if (isPriviledgedClient == true && bestWidth == -1 &&
+        (format == HAL_PIXEL_FORMAT_RAW10 || format == HAL_PIXEL_FORMAT_RAW12 ||
+         format == HAL_PIXEL_FORMAT_RAW16 || format == HAL_PIXEL_FORMAT_RAW_OPAQUE)) {
+        bool isLogicalCamera = false;
+        auto entry = info.find(ANDROID_REQUEST_AVAILABLE_CAPABILITIES);
+        for (size_t i = 0; i < entry.count; ++i) {
+            uint8_t capability = entry.data.u8[i];
+            if (capability == ANDROID_REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) {
+                isLogicalCamera = true;
+                break;
+            }
+        }
+
+        if (isLogicalCamera == true) {
+            bestWidth = width;
+            bestHeight = height;
         }
     }
 
@@ -260,7 +286,7 @@ binder::Status SessionConfigurationUtils::createSurfaceFromGbp(
     uint64_t allowedFlags = GraphicBuffer::USAGE_SW_READ_MASK |
                            GraphicBuffer::USAGE_HW_TEXTURE |
                            GraphicBuffer::USAGE_HW_COMPOSER;
-    bool flexibleConsumer = !isPriviledgedClient && (consumerUsage & disallowedFlags) == 0 &&
+    bool flexibleConsumer = (consumerUsage & disallowedFlags) == 0 &&
             (consumerUsage & allowedFlags) != 0;
 
     surface = new Surface(gbp, useAsync);
@@ -322,7 +348,7 @@ binder::Status SessionConfigurationUtils::createSurfaceFromGbp(
     if (flexibleConsumer && isPublicFormat(format) &&
             !SessionConfigurationUtils::roundBufferDimensionNearest(width, height,
             format, dataSpace, physicalCameraMetadata, foundInMaxRes, /*out*/&width,
-            /*out*/&height)) {
+            /*out*/&height, isPriviledgedClient)) {
         String8 msg = String8::format("Camera %s: No supported stream configurations with "
                 "format %#x defined, failed to create output stream",
                 logicalCameraId.string(), format);
@@ -482,7 +508,8 @@ SessionConfigurationUtils::convertToHALStreamCombination(
         const SessionConfiguration& sessionConfiguration,
         const String8 &logicalCameraId, const CameraMetadata &deviceInfo,
         metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
-        hardware::camera::device::V3_7::StreamConfiguration &streamConfiguration, bool *earlyExit) {
+        hardware::camera::device::V3_7::StreamConfiguration &streamConfiguration,
+        bool overrideForPerfClass, bool *earlyExit) {
 
     auto operatingMode = sessionConfiguration.getOperatingMode();
     binder::Status res = checkOperatingMode(operatingMode, deviceInfo, logicalCameraId);
@@ -541,7 +568,8 @@ SessionConfigurationUtils::convertToHALStreamCombination(
         String8 physicalCameraId = String8(it.getPhysicalCameraId());
 
         std::vector<int32_t> sensorPixelModesUsed = it.getSensorPixelModesUsed();
-        const CameraMetadata &physicalDeviceInfo = getMetadata(physicalCameraId);
+        const CameraMetadata &physicalDeviceInfo = getMetadata(physicalCameraId,
+                overrideForPerfClass);
         const CameraMetadata &metadataChosen =
                 physicalCameraId.size() > 0 ? physicalDeviceInfo : deviceInfo;
 
@@ -768,6 +796,14 @@ bool SessionConfigurationUtils::convertHALStreamCombinationFromV37ToV34(
     streamConfigV34.sessionParams = streamConfigV37.sessionParams;
 
     return true;
+}
+
+bool SessionConfigurationUtils::targetPerfClassPrimaryCamera(
+        const std::set<std::string>& perfClassPrimaryCameraIds, const std::string& cameraId,
+        int targetSdkVersion) {
+    bool isPerfClassPrimaryCamera =
+            perfClassPrimaryCameraIds.find(cameraId) != perfClassPrimaryCameraIds.end();
+    return targetSdkVersion >= SDK_VERSION_S && isPerfClassPrimaryCamera;
 }
 
 } // namespace camera3
