@@ -142,19 +142,19 @@ int32_t SessionConfigurationUtils::getAppropriateModeTag(int32_t defaultTag, boo
         case ANDROID_DEPTH_AVAILABLE_DEPTH_MIN_FRAME_DURATIONS:
             return ANDROID_DEPTH_AVAILABLE_DEPTH_MIN_FRAME_DURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_DEPTH_AVAILABLE_DEPTH_STALL_DURATIONS:
-            return ANDROID_DEPTH_AVAILABLE_DEPTH_STALL_DURATIONS;
+            return ANDROID_DEPTH_AVAILABLE_DEPTH_STALL_DURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_STREAM_CONFIGURATIONS:
             return ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_MIN_FRAME_DURATIONS:
             return ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_MIN_FRAME_DURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_STALL_DURATIONS:
-            return ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_STALL_DURATIONS;
+            return ANDROID_DEPTH_AVAILABLE_DYNAMIC_DEPTH_STALL_DURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_HEIC_AVAILABLE_HEIC_STREAM_CONFIGURATIONS:
             return ANDROID_HEIC_AVAILABLE_HEIC_STREAM_CONFIGURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_HEIC_AVAILABLE_HEIC_MIN_FRAME_DURATIONS:
             return ANDROID_HEIC_AVAILABLE_HEIC_MIN_FRAME_DURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_HEIC_AVAILABLE_HEIC_STALL_DURATIONS:
-            return ANDROID_HEIC_AVAILABLE_HEIC_STALL_DURATIONS;
+            return ANDROID_HEIC_AVAILABLE_HEIC_STALL_DURATIONS_MAXIMUM_RESOLUTION;
         case ANDROID_SENSOR_OPAQUE_RAW_SIZE:
             return ANDROID_SENSOR_OPAQUE_RAW_SIZE_MAXIMUM_RESOLUTION;
         case ANDROID_LENS_INTRINSIC_CALIBRATION:
@@ -169,6 +169,19 @@ int32_t SessionConfigurationUtils::getAppropriateModeTag(int32_t defaultTag, boo
     return -1;
 }
 
+bool SessionConfigurationUtils::getArrayWidthAndHeight(const CameraMetadata *deviceInfo,
+        int32_t arrayTag, int32_t *width, int32_t *height) {
+    if (width == nullptr || height == nullptr) {
+        ALOGE("%s: width / height nullptr", __FUNCTION__);
+        return false;
+    }
+    camera_metadata_ro_entry_t entry;
+    entry = deviceInfo->find(arrayTag);
+    if (entry.count != 4) return false;
+    *width = entry.data.i32[2];
+    *height = entry.data.i32[3];
+    return true;
+}
 
 StreamConfigurationPair
 SessionConfigurationUtils::getStreamConfigurationPair(const CameraMetadata &staticInfo) {

@@ -32,7 +32,6 @@ cc_defaults {
         "android.hardware.media.omx@1.0",
         "libandroidicu",
         "libfmq",
-        "libbase",
         "libbinder",
         "libhidlbase",
         "liblog",
