@@ -259,7 +259,7 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
                 bool released = input->buffers->releaseBuffer(buffer, nullptr, true);
                 ALOGV("[%s] queueInputBuffer: buffer copied; %sreleased",
                       mName, released ? "" : "not ");
-                buffer.clear();
+                buffer = copy;
             } else {
                 ALOGW("[%s] queueInputBuffer: failed to copy a buffer; this may cause input "
                       "buffer starvation on component.", mName);
@@ -287,6 +287,12 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
             }
         }
     } else if (eos) {
+        Mutexed<Input>::Locked input(mInput);
+        if (input->frameReassembler) {
+            usesFrameReassembler = true;
+            // drain any pending items with eos
+            input->frameReassembler.process(buffer, &items);
+        }
         flags |= C2FrameData::FLAG_END_OF_STREAM;
     }
     if (usesFrameReassembler) {
@@ -346,10 +352,10 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
     } else {
         Mutexed<Input>::Locked input(mInput);
         bool released = false;
-        if (buffer) {
-            released = input->buffers->releaseBuffer(buffer, nullptr, true);
-        } else if (copy) {
+        if (copy) {
             released = input->extraBuffers.releaseSlot(copy, nullptr, true);
+        } else if (buffer) {
+            released = input->buffers->releaseBuffer(buffer, nullptr, true);
         }
         ALOGV("[%s] queueInputBuffer: buffer%s %sreleased",
               mName, (buffer == nullptr) ? "(copy)" : "", released ? "" : "not ");
@@ -2096,7 +2102,7 @@ PipelineWatcher::Clock::duration CCodecBufferChannel::elapsed() {
     if (!mInputMetEos) {
         size_t outputDelay = mOutput.lock()->outputDelay;
         Mutexed<Input>::Locked input(mInput);
-        n = input->inputDelay + input->pipelineDelay + outputDelay;
+        n = input->inputDelay + input->pipelineDelay + outputDelay + kSmoothnessFactor;
         ALOGD("[%s] DEBUG: elapsed: n=%zu [in=%u pipeline=%u out=%zu]", mName, n,
                 input->inputDelay, input->pipelineDelay, outputDelay);
     }
