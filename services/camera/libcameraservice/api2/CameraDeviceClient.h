@@ -213,7 +213,7 @@ public:
             const String8 &cameraId, const CameraMetadata &deviceInfo,
             metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
             hardware::camera::device::V3_4::StreamConfiguration &streamConfiguration,
-            bool *earlyExit);
+            bool *earlyExit, bool isPrivilegedClient=false);
     /**
      * Interface used by independent components of CameraDeviceClient.
      */
@@ -293,7 +293,7 @@ private:
     static const int32_t ROUNDING_WIDTH_CAP = 1920;
     static bool roundBufferDimensionNearest(int32_t width, int32_t height, int32_t format,
             android_dataspace dataSpace, const CameraMetadata& info,
-            /*out*/int32_t* outWidth, /*out*/int32_t* outHeight);
+            /*out*/int32_t* outWidth, /*out*/int32_t* outHeight, bool isPrivilegedClient);
 
     //check if format is not custom format
     static bool isPublicFormat(int32_t format);
@@ -302,7 +302,7 @@ private:
     // IGraphicBufferProducer's property doesn't match with streamInfo
     static binder::Status createSurfaceFromGbp(OutputStreamInfo& streamInfo, bool isStreamInfoValid,
             sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp, const String8 &cameraId,
-            const CameraMetadata &physicalCameraMetadata);
+            const CameraMetadata &physicalCameraMetadata, bool isPrivilegedClient);
 
 
     // Utility method to insert the surface into SurfaceMap
