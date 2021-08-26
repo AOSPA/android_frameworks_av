@@ -129,6 +129,7 @@ sp<Codec2Buffer> InputBuffers::cloneAndReleaseBuffer(const sp<MediaCodecBuffer> 
     if (!copy->copy(c2buffer)) {
         return nullptr;
     }
+    copy->meta()->extend(buffer->meta());
     return copy;
 }
 
@@ -1310,17 +1311,7 @@ RawGraphicOutputBuffers::RawGraphicOutputBuffers(
 
 sp<Codec2Buffer> RawGraphicOutputBuffers::wrap(const std::shared_ptr<C2Buffer> &buffer) {
     if (buffer == nullptr) {
-        sp<Codec2Buffer> c2buffer = ConstGraphicBlockBuffer::AllocateEmpty(
-                mFormat,
-                [lbp = mLocalBufferPool](size_t capacity) {
-                    return lbp->newBuffer(capacity);
-                });
-        if (c2buffer == nullptr) {
-            ALOGD("[%s] ConstGraphicBlockBuffer::AllocateEmpty failed", mName);
-            return nullptr;
-        }
-        c2buffer->setRange(0, 0);
-        return c2buffer;
+        return new Codec2Buffer(mFormat, new ABuffer(nullptr, 0));
     } else {
         return ConstGraphicBlockBuffer::Allocate(
                 mFormat,

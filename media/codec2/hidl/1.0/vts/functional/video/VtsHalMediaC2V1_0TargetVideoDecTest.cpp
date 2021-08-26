@@ -33,11 +33,18 @@
 #include <gui/IConsumerListener.h>
 #include <gui/IProducerListener.h>
 #include <system/window.h>
+#include <gui/GLConsumer.h>
+#include <gui/Surface.h>
+#include <gui/SurfaceComposerClient.h>
 
 #include "media_c2_hidl_test_common.h"
 #include "media_c2_video_hidl_test_common.h"
 
-using DecodeTestParameters = std::tuple<std::string, std::string, uint32_t, bool>;
+constexpr size_t kSmoothnessFactor = 4;
+constexpr size_t kRenderingDepth = 3;
+enum surfaceMode_t { NO_SURFACE, NULL_SURFACE, SURFACE };
+
+using DecodeTestParameters = std::tuple<std::string, std::string, uint32_t, bool, surfaceMode_t>;
 static std::vector<DecodeTestParameters> gDecodeTestParameters;
 
 using CsdFlushTestParameters = std::tuple<std::string, std::string, bool>;
@@ -64,13 +71,15 @@ std::vector<CompToFiles> gCompToFiles = {
         {"3gpp", "bbb_h263_352x288_300kbps_12fps.h263", "bbb_h263_352x288_300kbps_12fps.info", ""},
         {"mp4v-es", "bbb_mpeg4_352x288_512kbps_30fps.m4v", "bbb_mpeg4_352x288_512kbps_30fps.info",
          ""},
-        {"vp8", "bbb_vp8_176x144_240kbps_60fps.vp8", "bbb_vp8_176x144_240kbps_60fps.info", ""},
-        {"vp8", "bbb_vp8_640x360_2mbps_30fps.vp8", "bbb_vp8_640x360_2mbps_30fps.info",
+        {"x-vnd.on2.vp8", "bbb_vp8_176x144_240kbps_60fps.vp8", "bbb_vp8_176x144_240kbps_60fps.info",
+         ""},
+        {"x-vnd.on2.vp8", "bbb_vp8_640x360_2mbps_30fps.vp8", "bbb_vp8_640x360_2mbps_30fps.info",
          "bbb_vp8_640x360_2mbps_30fps_chksm.md5"},
-        {"vp9", "bbb_vp9_176x144_285kbps_60fps.vp9", "bbb_vp9_176x144_285kbps_60fps.info", ""},
-        {"vp9", "bbb_vp9_640x360_1600kbps_30fps.vp9", "bbb_vp9_640x360_1600kbps_30fps.info",
-         "bbb_vp9_640x360_1600kbps_30fps_chksm.md5"},
-        {"vp9", "bbb_vp9_704x480_280kbps_24fps_altref_2.vp9",
+        {"x-vnd.on2.vp9", "bbb_vp9_176x144_285kbps_60fps.vp9", "bbb_vp9_176x144_285kbps_60fps.info",
+         ""},
+        {"x-vnd.on2.vp9", "bbb_vp9_640x360_1600kbps_30fps.vp9",
+         "bbb_vp9_640x360_1600kbps_30fps.info", "bbb_vp9_640x360_1600kbps_30fps_chksm.md5"},
+        {"x-vnd.on2.vp9", "bbb_vp9_704x480_280kbps_24fps_altref_2.vp9",
          "bbb_vp9_704x480_280kbps_24fps_altref_2.info", ""},
         {"av01", "bbb_av1_640_360.av1", "bbb_av1_640_360.info", "bbb_av1_640_360_chksum.md5"},
         {"av01", "bbb_av1_176_144.av1", "bbb_av1_176_144.info", "bbb_av1_176_144_chksm.md5"},
@@ -379,7 +388,7 @@ bool Codec2VideoDecHidlTestBase::getFileNames(size_t streamIndex) {
     int streamCount = 0;
 
     for (size_t i = 0; i < gCompToFiles.size(); ++i) {
-        if (mMime.find(gCompToFiles[i].mime) != std::string::npos) {
+        if (!mMime.compare("video/" + gCompToFiles[i].mime)) {
             if (streamCount == streamIndex) {
                 mInputFile = sResourceDir + gCompToFiles[i].inputFile;
                 mInfoFile = sResourceDir + gCompToFiles[i].infoFile;
@@ -390,6 +399,36 @@ bool Codec2VideoDecHidlTestBase::getFileNames(size_t streamIndex) {
         }
     }
     return false;
+}
+
+void setOutputSurface(const std::shared_ptr<android::Codec2Client::Component>& component,
+                      surfaceMode_t surfMode) {
+    using namespace android;
+    sp<IGraphicBufferProducer> producer = nullptr;
+    static std::atomic_uint32_t surfaceGeneration{0};
+    uint32_t generation =
+            (getpid() << 10) |
+            ((surfaceGeneration.fetch_add(1, std::memory_order_relaxed) + 1) & ((1 << 10) - 1));
+    int32_t maxDequeueBuffers = kSmoothnessFactor + kRenderingDepth;
+    if (surfMode == SURFACE) {
+        sp<IGraphicBufferConsumer> consumer = nullptr;
+        BufferQueue::createBufferQueue(&producer, &consumer);
+        ASSERT_NE(producer, nullptr) << "createBufferQueue returned invalid producer";
+        ASSERT_NE(consumer, nullptr) << "createBufferQueue returned invalid consumer";
+
+        sp<GLConsumer> texture =
+                new GLConsumer(consumer, 0 /* tex */, GLConsumer::TEXTURE_EXTERNAL,
+                               true /* useFenceSync */, false /* isControlledByApp */);
+
+        sp<ANativeWindow> gSurface = new Surface(producer);
+        ASSERT_NE(gSurface, nullptr) << "getSurface failed";
+
+        producer->setGenerationNumber(generation);
+    }
+
+    c2_status_t err = component->setOutputSurface(C2BlockPool::BASIC_GRAPHIC, producer, generation,
+                                                  maxDequeueBuffers);
+    ASSERT_EQ(err, C2_OK) << "setOutputSurface failed";
 }
 
 void decodeNFrames(const std::shared_ptr<android::Codec2Client::Component>& component,
@@ -550,6 +589,7 @@ TEST_P(Codec2VideoDecDecodeTest, DecodeTest) {
     if (mDisableTest) GTEST_SKIP() << "Test is disabled";
 
     bool signalEOS = std::get<3>(GetParam());
+    surfaceMode_t surfMode = std::get<4>(GetParam());
     mTimestampDevTest = true;
 
     android::Vector<FrameInfo> Info;
@@ -592,6 +632,10 @@ TEST_P(Codec2VideoDecDecodeTest, DecodeTest) {
         refChksum.read(mRefMd5, refChksmSize);
         ASSERT_EQ(refChksum.gcount(), refChksmSize);
         refChksum.close();
+    }
+
+    if (surfMode != NO_SURFACE) {
+        ASSERT_NO_FATAL_FAILURE(setOutputSurface(mComponent, surfMode));
     }
 
     ASSERT_NO_FATAL_FAILURE(decodeNFrames(mComponent, mQueueLock, mQueueCondition, mWorkQueue,
@@ -1061,18 +1105,23 @@ int main(int argc, char** argv) {
     parseArgs(argc, argv);
     gTestParameters = getTestParameters(C2Component::DOMAIN_VIDEO, C2Component::KIND_DECODER);
     for (auto params : gTestParameters) {
+        // mOutputBufferQueue->configure() crashes when surface is NULL
+        std::initializer_list<surfaceMode_t> surfaceMode = {
+                surfaceMode_t::NO_SURFACE, surfaceMode_t::NULL_SURFACE, surfaceMode_t::SURFACE};
+        for (surfaceMode_t mode : surfaceMode) {
+            gDecodeTestParameters.push_back(
+                    std::make_tuple(std::get<0>(params), std::get<1>(params), 0, false, mode));
+            gDecodeTestParameters.push_back(
+                    std::make_tuple(std::get<0>(params), std::get<1>(params), 0, true, mode));
+        }
         gDecodeTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), 0, false));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 1, false, NO_SURFACE));
         gDecodeTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), 0, true));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 1, true, NO_SURFACE));
         gDecodeTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), 1, false));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 2, false, NO_SURFACE));
         gDecodeTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), 1, true));
-        gDecodeTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), 2, false));
-        gDecodeTestParameters.push_back(
-                std::make_tuple(std::get<0>(params), std::get<1>(params), 2, true));
+                std::make_tuple(std::get<0>(params), std::get<1>(params), 2, true, NO_SURFACE));
 
         gCsdFlushTestParameters.push_back(
                 std::make_tuple(std::get<0>(params), std::get<1>(params), true));

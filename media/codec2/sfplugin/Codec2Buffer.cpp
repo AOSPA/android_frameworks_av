@@ -289,6 +289,9 @@ public:
 
         bool tryWrapping = !copy;
 
+        // Temporarily disable wrapping
+        tryWrapping = false;
+
         switch (layout.type) {
             case C2PlanarLayout::TYPE_YUV: {
                 mediaImage->mType = MediaImage2::MEDIA_IMAGE_TYPE_YUV;
@@ -528,7 +531,7 @@ public:
                         * align(mHeight, 64) / plane.rowSampling;
             }
 
-            if ((maxPtr - minPtr + 1) <= planeSize) {
+            if (minPtr == mView.data()[0] && (maxPtr - minPtr + 1) <= planeSize) {
                 // FIXME: this is risky as reading/writing data out of bound results
                 //        in an undefined behavior, but gralloc does assume a
                 //        contiguous mapping
