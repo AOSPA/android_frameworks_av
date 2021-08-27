@@ -50,17 +50,6 @@ cc_defaults {
         "frameworks/av/services/mediaresourcemanager",
     ],
 
-    // By default mediaserver runs in 32-bit to save memory, except
-    // on 64-bit-only lunch targets.
-    // Mediaserver has only been verified on 32-bit, see b/126502613
-    // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
-    // targets, which allows them to reach 'boot_complete'.
-    // ****************************************************************
-    // TO ENABLE 64-BIT MEDIASERVER ON MIXED 32/64-BIT DEVICES, COMMENT
-    // OUT THE FOLLOWING LINE:
-    // ****************************************************************
-    compile_multilib: "prefer32",
-
     cflags: [
         "-Werror",
         "-Wall",
@@ -77,8 +66,15 @@ cc_binary {
     srcs: ["main_mediaserver.cpp"],
     init_rc: ["mediaserver.rc"],
     // mediaserver has only been verified on 32-bit, see b/126502613
+    // By default mediaserver runs in 32-bit to save memory, except
+    // on 64-bit-only lunch targets.
+    // Mediaserver has only been verified on 32-bit, see b/126502613
     // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
     // targets, which allows them to reach 'boot_complete'.
+    // ****************************************************************
+    // TO ENABLE 64-BIT MEDIASERVER ON MIXED 32/64-BIT DEVICES, COMMENT
+    // OUT THE FOLLOWING LINE:
+    // ****************************************************************
     compile_multilib: "32",
 }
 cc_binary {
@@ -88,9 +84,6 @@ cc_binary {
               ],
     srcs: ["main_mediaserver.cpp"],
     init_rc: ["mediaserver.rc"],
-    // mediaserver has only been verified on 32-bit, see b/126502613
-    // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
-    // targets, which allows them to reach 'boot_complete'.
     compile_multilib: "64",
 }
 cc_binary {
@@ -100,4 +93,5 @@ cc_binary {
               ],
     srcs: ["mediaserverwrapper.cpp"],
     init_rc: ["mediaserverwrapper.rc"],
+    compile_multilib: "64",
 }
