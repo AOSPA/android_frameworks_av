@@ -85,6 +85,9 @@ public:
             android_dataspace dataSpace, const CameraMetadata& info, bool maxResolution,
             /*out*/int32_t* outWidth, /*out*/int32_t* outHeight, bool isPriviledgedClient);
 
+    static bool getArrayWidthAndHeight(const CameraMetadata *deviceInfo, int32_t arrayTag,
+            int32_t *width, int32_t *height);
+
     //check if format is not custom format
     static bool isPublicFormat(int32_t format);
 
@@ -121,7 +124,7 @@ public:
             const String8 &cameraId, const CameraMetadata &deviceInfo,
             metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
             hardware::camera::device::V3_7::StreamConfiguration &streamConfiguration,
-            bool overrideForPerfClass, bool *earlyExit);
+            bool overrideForPerfClass, bool *earlyExit, bool isPriviledgedClient = false);
 
     // Utility function to convert a V3_7::StreamConfiguration to
     // V3_4::StreamConfiguration. Return false if the original V3_7 configuration cannot

@@ -37,6 +37,8 @@ int mediaserverwrapper(){
     int status = 0;
     bool MediaServer_PathSelect = property_get_bool("ro.mediaserver.64b.enable", false);
     const char *mediapath;
+    const char *processName = "/system/bin/mediaserver";
+    ALOGI("Mediaserver Wrapper Has been started");
     if (MediaServer_PathSelect){
         mediapath= "/system/bin/mediaserver64";
     }
@@ -44,7 +46,7 @@ int mediaserverwrapper(){
     {
         mediapath= "/system/bin/mediaserver";
     }
-    status = execl(mediapath,mediapath,NULL,NULL);
+    status = execl(mediapath,processName,NULL,NULL);
     return status;
 }
 
