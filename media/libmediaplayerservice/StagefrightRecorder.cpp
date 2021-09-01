@@ -16,6 +16,8 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "StagefrightRecorder"
+#define ATRACE_TAG ATRACE_TAG_VIDEO
+#include <utils/Trace.h>
 #include <inttypes.h>
 #include <utils/Log.h>
 
@@ -1663,6 +1665,7 @@ void StagefrightRecorder::clipVideoFrameHeight() {
 // Set up the appropriate MediaSource depending on the chosen option
 status_t StagefrightRecorder::setupMediaSource(
                       sp<MediaSource> *mediaSource) {
+    ATRACE_CALL();
     if (mVideoSource == VIDEO_SOURCE_DEFAULT
             || mVideoSource == VIDEO_SOURCE_CAMERA) {
         sp<CameraSource> cameraSource;
@@ -1741,6 +1744,7 @@ status_t StagefrightRecorder::setupCameraSource(
 status_t StagefrightRecorder::setupVideoEncoder(
         const sp<MediaSource> &cameraSource,
         sp<MediaCodecSource> *source) {
+    ATRACE_CALL();
     source->clear();
 
     sp<AMessage> format = new AMessage();
@@ -1927,6 +1931,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
 }
 
 status_t StagefrightRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
+    ATRACE_CALL();
     status_t status = BAD_VALUE;
     if (OK != (status = checkAudioEncoderCapabilities())) {
         return status;
