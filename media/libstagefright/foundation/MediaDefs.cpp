@@ -94,7 +94,6 @@ const char *MEDIA_MIMETYPE_TEXT_CEA_708 = "text/cea-708";
 const char *MEDIA_MIMETYPE_DATA_TIMED_ID3 = "application/x-id3v4";
 
 #ifdef __ANDROID_VNDK_EXT__
-const char *MEDIA_MIMETYPE_AUDIO_EVRC = "audio/evrc";
 const char *MEDIA_MIMETYPE_VIDEO_WMV = "video/x-ms-wmv";
 const char *MEDIA_MIMETYPE_VIDEO_WMV_VC1 = "video/wvc1";
 const char *MEDIA_MIMETYPE_AUDIO_WMA_PRO = "audio/x-ms-wma-pro";
@@ -106,9 +105,7 @@ const char *MEDIA_MIMETYPE_VIDEO_DIVX311 = "video/divx311";
 const char *MEDIA_MIMETYPE_VIDEO_DIVX4 = "video/divx4";
 const char *MEDIA_MIMETYPE_CONTAINER_MPEG2 = "video/mp2";
 const char *MEDIA_MIMETYPE_CONTAINER_3G2 = "video/3g2";
-const char *MEDIA_MIMETYPE_AUDIO_DTS = "audio/dts";
 const char *MEDIA_MIMETYPE_AUDIO_DTS_LBR = "audio/dts-lbr";
-const char *MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS = "audio/amr-wb-plus";
 const char *MEDIA_MIMETYPE_AUDIO_AIFF = "audio/x-aiff";
 const char *MEDIA_MIMETYPE_AUDIO_APE = "audio/x-ape";
 const char *MEDIA_MIMETYPE_CONTAINER_QCAMR_NB = "audio/qc-amr";
