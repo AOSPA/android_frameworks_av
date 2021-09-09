@@ -1503,6 +1503,8 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
                     (~(AUDIO_OUTPUT_FLAG_FAST|AUDIO_OUTPUT_FLAG_RAW)));
     }
 
+    audio_stream_type_t stream = mEngine->getStreamTypeForAttributes(*attr);
+
     /*
     * WFD audio routes back to target speaker when starting a ringtone playback.
     * This is because primary output is reused for ringtone, so output device is
@@ -1531,8 +1533,6 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     if ((*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) != 0) {
         *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_DIRECT);
     }
-
-    audio_stream_type_t stream = mEngine->getStreamTypeForAttributes(*attr);
 
     // Force direct flags for PCM data, this can help to maintain audio bitstream
     // quality by avoiding resampling/downmixing by using direct track when hal/DSP
