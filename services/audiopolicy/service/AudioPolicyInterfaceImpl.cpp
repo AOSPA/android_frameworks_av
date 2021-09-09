@@ -660,7 +660,7 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
                     if (property_get_bool("vendor.audio.enable.mirrorlink", false)) {
                         media::AudioPolicyDeviceState aidlRet;
                         media::AudioDevice deviceAidl;
-                        deviceAidl.type    = AUDIO_DEVICE_IN_REMOTE_SUBMIX;
+                        deviceAidl.type    = legacy2aidl_audio_devices_t_AudioDeviceDescription(AUDIO_DEVICE_IN_REMOTE_SUBMIX).value();
                         deviceAidl.address = "";
                         auto _ret = getDeviceConnectionState(deviceAidl,&aidlRet);
                         if( _ret.isOk() && (media::AudioPolicyDeviceState::UNAVAILABLE != aidlRet)){
