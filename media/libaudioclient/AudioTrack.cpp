@@ -1792,6 +1792,15 @@ status_t AudioTrack::createTrack_l()
         isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
         input.config.offload_info = AUDIO_INFO_INITIALIZER;
     }
+
+    // enable the deep buffer flag, whenever mPlaybackRate is not equal to
+    // default
+    if (!isAudioPlaybackRateEqual(mPlaybackRate, AUDIO_PLAYBACK_RATE_DEFAULT)) {
+        mFlags = (audio_output_flags_t)(mFlags | AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
+        ALOGV("%s: mPlaybackRate is changed, request for deep buffer path",
+              __func__);
+    }
+
     input.sharedBuffer = mSharedBuffer;
     input.notificationsPerBuffer = mNotificationsPerBufferReq;
     input.speed = 1.0;
