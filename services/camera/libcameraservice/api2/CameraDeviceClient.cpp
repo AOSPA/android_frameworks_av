@@ -656,7 +656,7 @@ CameraDeviceClient::convertToHALStreamCombination(const SessionConfiguration& se
         const String8 &logicalCameraId, const CameraMetadata &deviceInfo,
         metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
         hardware::camera::device::V3_4::StreamConfiguration &streamConfiguration,
-        bool *unsupported) {
+        bool *unsupported, bool isPrivilegedClient) {
     auto operatingMode = sessionConfiguration.getOperatingMode();
     binder::Status res = checkOperatingMode(operatingMode, deviceInfo, logicalCameraId);
     if (!res.isOk()) {
@@ -743,7 +743,8 @@ CameraDeviceClient::convertToHALStreamCombination(const SessionConfiguration& se
             const CameraMetadata &physicalDeviceInfo = getMetadata(physicalCameraId);
             res = createSurfaceFromGbp(streamInfo, isStreamInfoValid, surface, bufferProducer,
                     logicalCameraId,
-                    physicalCameraId.size() > 0 ? physicalDeviceInfo : deviceInfo );
+                    physicalCameraId.size() > 0 ? physicalDeviceInfo : deviceInfo,
+                    isPrivilegedClient);
 
             if (!res.isOk())
                 return res;
@@ -830,7 +831,8 @@ binder::Status CameraDeviceClient::isSessionConfigurationSupported(
     std::vector<std::string> physicalCameraIds;
     mProviderManager->isLogicalCamera(mCameraIdStr.string(), &physicalCameraIds);
     res = convertToHALStreamCombination(sessionConfiguration, mCameraIdStr,
-            mDevice->info(), getMetadata, physicalCameraIds, streamConfiguration, &earlyExit);
+            mDevice->info(), getMetadata, physicalCameraIds, streamConfiguration,
+            &earlyExit, mPrivilegedClient);
     if (!res.isOk()) {
         return res;
     }
@@ -1018,7 +1020,7 @@ binder::Status CameraDeviceClient::createStream(
 
         sp<Surface> surface;
         res = createSurfaceFromGbp(streamInfo, isStreamInfoValid, surface, bufferProducer,
-                mCameraIdStr, mDevice->infoPhysical(physicalCameraId));
+                mCameraIdStr, mDevice->infoPhysical(physicalCameraId), mPrivilegedClient);
 
         if (!res.isOk())
             return res;
@@ -1322,7 +1324,8 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
         OutputStreamInfo outInfo;
         sp<Surface> surface;
         res = createSurfaceFromGbp(outInfo, /*isStreamInfoValid*/ false, surface,
-                newOutputsMap.valueAt(i), mCameraIdStr, mDevice->infoPhysical(physicalCameraId));
+                newOutputsMap.valueAt(i), mCameraIdStr, mDevice->infoPhysical(physicalCameraId),
+                mPrivilegedClient);
         if (!res.isOk())
             return res;
 
@@ -1402,7 +1405,8 @@ bool CameraDeviceClient::isPublicFormat(int32_t format)
 binder::Status CameraDeviceClient::createSurfaceFromGbp(
         OutputStreamInfo& streamInfo, bool isStreamInfoValid,
         sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp,
-        const String8 &cameraId, const CameraMetadata &physicalCameraMetadata) {
+        const String8 &cameraId, const CameraMetadata &physicalCameraMetadata,
+        bool isPrivilegedClient) {
 
     // bufferProducer must be non-null
     if (gbp == nullptr) {
@@ -1480,7 +1484,8 @@ binder::Status CameraDeviceClient::createSurfaceFromGbp(
     // Round dimensions to the nearest dimensions available for this format
     if (flexibleConsumer && isPublicFormat(format) &&
             !CameraDeviceClient::roundBufferDimensionNearest(width, height,
-            format, dataSpace, physicalCameraMetadata, /*out*/&width, /*out*/&height)) {
+            format, dataSpace, physicalCameraMetadata, /*out*/&width,
+            /*out*/&height, isPrivilegedClient)) {
         String8 msg = String8::format("Camera %s: No supported stream configurations with "
                 "format %#x defined, failed to create output stream",
                 cameraId.string(), format);
@@ -1536,7 +1541,7 @@ binder::Status CameraDeviceClient::createSurfaceFromGbp(
 
 bool CameraDeviceClient::roundBufferDimensionNearest(int32_t width, int32_t height,
         int32_t format, android_dataspace dataSpace, const CameraMetadata& info,
-        /*out*/int32_t* outWidth, /*out*/int32_t* outHeight) {
+        /*out*/int32_t* outWidth, /*out*/int32_t* outHeight, bool isPrivilegedClient) {
 
     camera_metadata_ro_entry streamConfigs =
             (dataSpace == HAL_DATASPACE_DEPTH) ?
@@ -1585,6 +1590,19 @@ bool CameraDeviceClient::roundBufferDimensionNearest(int32_t width, int32_t heig
             bestWidth = width;
             bestHeight = height;
         }
+    }
+
+    // Avoid roundBufferDimensionsNearest for privileged client YUV streams to meet the AIDE2
+    // requirement. AIDE2 is vendor enhanced feature which requires special resolutions and
+    // those are not populated in static capabilities.
+    if (isPrivilegedClient == true && format == HAL_PIXEL_FORMAT_YCbCr_420_888) {
+
+        ALOGI("Bypass roundBufferDimensionNearest for privilegedClient YUV streams "
+              "width %d height %d",
+              width, height);
+
+        bestWidth  = width;
+        bestHeight = height;
     }
 
     if (bestWidth == -1) {
@@ -1923,7 +1941,8 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
 
         sp<Surface> surface;
         res = createSurfaceFromGbp(mStreamInfoMap[streamId], true /*isStreamInfoValid*/,
-                surface, bufferProducer, mCameraIdStr, mDevice->infoPhysical(physicalId));
+                surface, bufferProducer, mCameraIdStr, mDevice->infoPhysical(physicalId),
+                mPrivilegedClient);
 
         if (!res.isOk())
             return res;
