@@ -761,26 +761,26 @@ status_t VideoFrameDecoder::captureSurface() {
 
 ////////////////////////////////////////////////////////////////////////
 
-struct MediaImageDecoder::ImageInputThread : public Thread {
-    ImageInputThread(MediaImageDecoder *mediaImageDecoder)
+struct MediaImageDecoder::ImageOutputThread : public Thread {
+    ImageOutputThread(MediaImageDecoder *mediaImageDecoder)
         : Thread(false /*canCallJava*/),
           mImageDecoder(mediaImageDecoder) {
-        ALOGD("ImageInputThread created");
+        ALOGD("ImageOutputThread created");
     }
 
     virtual bool threadLoop() {
-        return mImageDecoder->inputLoop();
+        return mImageDecoder->outputLoop();
     }
 
 protected:
-    virtual ~ImageInputThread() {
-        ALOGD("ImageInputThread destroyed");
+    virtual ~ImageOutputThread() {
+        ALOGD("ImageOutputThread destroyed");
     }
 
 private:
     MediaImageDecoder *mImageDecoder;
 
-    DISALLOW_EVIL_CONSTRUCTORS(ImageInputThread);
+    DISALLOW_EVIL_CONSTRUCTORS(ImageOutputThread);
 };
 
 MediaImageDecoder::MediaImageDecoder(
@@ -803,6 +803,8 @@ MediaImageDecoder::MediaImageDecoder(
 
 MediaImageDecoder::~MediaImageDecoder() {
     if (mThread != NULL) {
+        mOutInfo.lock()->mExitThr = true;
+        mOutInfo.lock()->mCond.signal();
         mThread->requestExitAndWait();
         mThread.clear();
     }
@@ -884,8 +886,8 @@ sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
         videoFormat->setInt32("thumbnail-mode", 1);
         videoFormat->setInt32("vendor.qti-ext-dec-thumbnail-mode.value", 1);
     } else {
-        ALOGD("Disable multi-thread for Heif");
-        mUseMultiThread = false;
+        ALOGD("Enable multi-thread for Heif");
+        mUseMultiThread = true;
     }
     return videoFormat;
 }
@@ -1024,90 +1026,99 @@ status_t MediaImageDecoder::onOutputReceived(
     return ERROR_UNSUPPORTED;
 }
 
-bool MediaImageDecoder::inputLoop() {
+bool MediaImageDecoder::outputLoop() {
     status_t err = OK;
     size_t index;
     int64_t ptsUs = 0LL;
     uint32_t flags = 0;
+    mOutInfo.lock()->mThrStarted = true;
+    if (mOutInfo.lock()->mExitThr) {
+        ALOGI("Exiting the MediaImageDecoder output thread");
+        return 0;
+    }
+    {
+        Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+        outInfo.waitForCondition(outInfo->mCond);
+    }
+    bool done = mOutInfo.lock()->mDone;
 
-    while (mHaveMoreInputs) {
-        err = mDecoder->dequeueInputBuffer(&index, 1000LL);
-        if (err != OK) {
-            ALOGV("Timed out waiting for input");
-            break;
-        }
-        sp<MediaCodecBuffer> codecBuffer;
-        err = mDecoder->getInputBuffer(index, &codecBuffer);
-        if (err != OK) {
-            ALOGE("failed to get input buffer %zu", index);
-            break;
-        }
-
-        MediaBufferBase *mediaBuffer = NULL;
-
-        err = mSource->read(&mediaBuffer, &mReadOptions);
-        mReadOptions.clearSeekTo();
-        if (err != OK) {
-            mHaveMoreInputs = false;
-            if (!mFirstSample && err == ERROR_END_OF_STREAM) {
-                ALOGV("EOS reached");
-                (void)mDecoder->queueInputBuffer(
-                        index, 0, 0, 0, MediaCodec::BUFFER_FLAG_EOS);
-                err = OK;
-                flags |= MediaCodec::BUFFER_FLAG_EOS;
-            } else {
-                ALOGW("Input Error: err=%d", err);
-            }
-            break;
+    while (err == OK && !done) {
+        if (mOutInfo.lock()->mExitThr) {
+            ALOGI("Exiting the MediaImageDecoder output thread");
+            return 0;
         }
 
-        if (mediaBuffer->range_length() > codecBuffer->capacity()) {
-            ALOGE("buffer size (%zu) too large for codec input size (%zu)",
-                    mediaBuffer->range_length(), codecBuffer->capacity());
-            mHaveMoreInputs = false;
-            err = BAD_VALUE;
+        size_t offset, size;
+        // wait for a decoded buffer
+        err = mDecoder->dequeueOutputBuffer(
+                &index,
+                &offset,
+                &size,
+                &ptsUs,
+                &flags,
+                kBufferTimeOutUs);
+        if (err == INFO_FORMAT_CHANGED) {
+            ALOGV("Received format change");
+            err = mDecoder->getOutputFormat(&mOutputFormat);
+        } else if (err == INFO_OUTPUT_BUFFERS_CHANGED) {
+            ALOGV("Output buffers changed");
+            err = OK;
         } else {
-            codecBuffer->setRange(0, mediaBuffer->range_length());
-
-            CHECK(mediaBuffer->meta_data().findInt64(kKeyTime, &ptsUs));
-            memcpy(codecBuffer->data(),
-                    (const uint8_t*)mediaBuffer->data() + mediaBuffer->range_offset(),
-                    mediaBuffer->range_length());
-            mFirstSample = false;
-        }
-
-        mediaBuffer->release();
-
-        if (mHaveMoreInputs) {
-            ALOGV("QueueInput: size=%zu ts=%" PRId64 " us flags=%x",
-                    codecBuffer->size(), ptsUs, flags);
-
-            err = mDecoder->queueInputBuffer(
-                    index,
-                    codecBuffer->offset(),
-                    codecBuffer->size(),
-                    ptsUs,
-                    flags);
-
-            if (flags & MediaCodec::BUFFER_FLAG_EOS) {
-                mHaveMoreInputs = false;
+            if (err == -EAGAIN && --mOutInfo.lock()->mRetriesLeft > 0) {
+                ALOGV("Timed-out waiting for output.. retries left = %zu",
+                    mOutInfo.lock()->mRetriesLeft);
+                err = OK;
+            } else if (err == OK) {
+                // If we're seeking with CLOSEST option and obtained a valid targetTimeUs
+                // from the extractor, decode to the specified frame. Otherwise we're done.
+                ALOGV("Received an output buffer, timeUs=%lld", (long long)ptsUs);
+                sp<MediaCodecBuffer> videoFrameBuffer;
+                err = mDecoder->getOutputBuffer(index, &videoFrameBuffer);
+                if (err != OK) {
+                    ALOGE("failed to get output buffer %zu", index);
+                    break;
+                }
+                if (mSurface != nullptr) {
+                    if (!shouldDropOutput(ptsUs)) {
+                        mDecoder->renderOutputBufferAndRelease(index);
+                    } else {
+                        mDecoder->releaseOutputBuffer(index);
+                    }
+                    err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
+                } else {
+                    err = onOutputReceived(videoFrameBuffer, mOutputFormat, ptsUs, &done);
+                    mDecoder->releaseOutputBuffer(index);
+                }
+            } else {
+                ALOGW("Received error %d (%s) instead of output", err, asString(err));
+                done = true;
+            }
+            if(done) {
+                mOutInfo.lock()->mDone = done;
             }
         }
     }
+    mOutInfo.lock()->mErrorCode = err;
 
-    return mHaveMoreInputs;
+    return done;
 }
 
 status_t MediaImageDecoder::extractInternal() {
     status_t err = OK;
     bool done = false;
-    size_t retriesLeft = kRetryCount;
+    bool outThreadRunning = false;
+    {
+        Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+        outInfo->mRetriesLeft = kRetryCount;
+        outInfo->mErrorCode = OK;
+        outInfo->mDone = false;
+    }
 
     if (mUseMultiThread && mThread == NULL) {
-        mThread = new ImageInputThread(this);
-        err = mThread->run("ImageDecoderInput");
+        mThread = new ImageOutputThread(this);
+        err = mThread->run("ImageDecoderOutput");
         if (err != OK) {
-            ALOGE("Failed to create ImageDecoder input thread");
+            ALOGE("Failed to create MediaImageDecoder output thread");
             mThread.clear();
             return err;
         }
@@ -1121,11 +1132,11 @@ status_t MediaImageDecoder::extractInternal() {
         // Queue as many inputs as we possibly can, then block on dequeuing
         // outputs. After getting each output, come back and queue the inputs
         // again to keep the decoder busy.
-        while (!mUseMultiThread && mHaveMoreInputs) {
+        while (mHaveMoreInputs) {
             err = mDecoder->dequeueInputBuffer(&index, 0);
             if (err != OK) {
                 ALOGV("Timed out waiting for input");
-                if (retriesLeft) {
+                if (mOutInfo.lock()->mRetriesLeft) {
                     err = OK;
                 }
                 break;
@@ -1185,10 +1196,22 @@ status_t MediaImageDecoder::extractInternal() {
                 if (flags & MediaCodec::BUFFER_FLAG_EOS) {
                     mHaveMoreInputs = false;
                 }
+
+                // Signal output thread after queueing at least 1 input
+                if (mUseMultiThread && !outThreadRunning && mOutInfo.lock()->mThrStarted) {
+                    mOutInfo.lock()->mCond.signal();
+                    outThreadRunning = true;
+                }
             }
         }
 
-        while (err == OK) {
+        // If output thread is still not running, signal it now.
+        if (mUseMultiThread && !outThreadRunning && mOutInfo.lock()->mThrStarted) {
+            mOutInfo.lock()->mCond.signal();
+            outThreadRunning = true;
+        }
+
+        while (!mUseMultiThread && err == OK) {
             size_t offset, size;
             // wait for a decoded buffer
             err = mDecoder->dequeueOutputBuffer(
@@ -1206,8 +1229,9 @@ status_t MediaImageDecoder::extractInternal() {
                 ALOGV("Output buffers changed");
                 err = OK;
             } else {
-                if (err == -EAGAIN /* INFO_TRY_AGAIN_LATER */ && --retriesLeft > 0) {
-                    ALOGV("Timed-out waiting for output.. retries left = %zu", retriesLeft);
+                if (err == -EAGAIN && --mOutInfo.lock()->mRetriesLeft > 0) {
+                    ALOGV("Timed-out waiting for output.. retries left = %zu",
+                        mOutInfo.lock()->mRetriesLeft);
                     err = OK;
                 } else if (err == OK) {
                     // If we're seeking with CLOSEST option and obtained a valid targetTimeUs
@@ -1234,10 +1258,14 @@ status_t MediaImageDecoder::extractInternal() {
                     ALOGW("Received error %d (%s) instead of output", err, asString(err));
                     done = true;
                 }
+                if(done) {
+                    mOutInfo.lock()->mDone = done;
+                }
                 break;
             }
         }
-    } while (err == OK && !done);
+        err |= mOutInfo.lock()->mErrorCode;
+    } while (err == OK && !mOutInfo.lock()->mDone);
 
     if (err != OK) {
         ALOGE("failed to get video frame (err %d)", err);
