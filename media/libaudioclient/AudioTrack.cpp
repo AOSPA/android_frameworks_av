@@ -174,7 +174,7 @@ bool AudioTrack::isDirectOutputSupported(const audio_config_base_t& config,
 
     auto result = [&]() -> ConversionResult<bool> {
         media::AudioConfigBase configAidl = VALUE_OR_RETURN(
-                legacy2aidl_audio_config_base_t_AudioConfigBase(config));
+                legacy2aidl_audio_config_base_t_AudioConfigBase(config, false /*isInput*/));
         media::AudioAttributesInternal attributesAidl = VALUE_OR_RETURN(
                 legacy2aidl_audio_attributes_t_AudioAttributesInternal(attributes));
         bool retAidl;
@@ -1351,10 +1351,6 @@ ssize_t AudioTrack::setBufferSizeInFrames(size_t bufferSizeInFrames)
     if (mOutput == AUDIO_IO_HANDLE_NONE || mProxy.get() == 0) {
         return NO_INIT;
     }
-    // Reject if timed track or compressed audio.
-    if (!audio_is_linear_pcm(mFormat)) {
-        return INVALID_OPERATION;
-    }
 
     ssize_t originalBufferSize = mProxy->getBufferSizeInFrames();
     ssize_t finalBufferSize  = mProxy->setBufferSizeInFrames((uint32_t) bufferSizeInFrames);
@@ -1635,6 +1631,8 @@ audio_io_handle_t AudioTrack::getOutput() const
 
 status_t AudioTrack::setOutputDevice(audio_port_handle_t deviceId) {
     AutoMutex lock(mLock);
+    ALOGV("%s(%d): deviceId=%d mSelectedDeviceId=%d",
+            __func__, mPortId, deviceId, mSelectedDeviceId);
     if (mSelectedDeviceId != deviceId) {
         mSelectedDeviceId = deviceId;
         if (mStatus == NO_ERROR) {

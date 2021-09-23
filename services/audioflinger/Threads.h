@@ -32,6 +32,7 @@ public:
         OFFLOAD,            // Thread class is OffloadThread
         MMAP_PLAYBACK,      // Thread class for MMAP playback stream
         MMAP_CAPTURE,       // Thread class for MMAP capture stream
+        VIRTUALIZER_STAGE,  //
         // If you add any values here, also update ThreadBase::threadTypeToString()
     };
 
@@ -53,7 +54,8 @@ public:
         CFG_EVENT_CREATE_AUDIO_PATCH,
         CFG_EVENT_RELEASE_AUDIO_PATCH,
         CFG_EVENT_UPDATE_OUT_DEVICE,
-        CFG_EVENT_RESIZE_BUFFER
+        CFG_EVENT_RESIZE_BUFFER,
+        CFG_EVENT_CHECK_OUTPUT_STAGE_EFFECTS
     };
 
     class ConfigEventData: public RefBase {
@@ -87,7 +89,13 @@ public:
     public:
         virtual ~ConfigEvent() {}
 
-        void dump(char *buffer, size_t size) { mData->dump(buffer, size); }
+        void dump(char *buffer, size_t size) {
+            snprintf(buffer, size, "Event type: %d\n", mType);
+            if (mData != nullptr) {
+                snprintf(buffer, size, "Data:\n");
+                mData->dump(buffer, size);
+            }
+        }
 
         const int mType; // event type e.g. CFG_EVENT_IO
         Mutex mLock;     // mutex associated with mCond
@@ -105,22 +113,22 @@ public:
 
     class IoConfigEventData : public ConfigEventData {
     public:
-        IoConfigEventData(audio_io_config_event event, pid_t pid,
+        IoConfigEventData(audio_io_config_event_t event, pid_t pid,
                           audio_port_handle_t portId) :
             mEvent(event), mPid(pid), mPortId(portId) {}
 
         virtual  void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "IO event: event %d\n", mEvent);
+            snprintf(buffer, size, "- IO event: event %d\n", mEvent);
         }
 
-        const audio_io_config_event mEvent;
+        const audio_io_config_event_t mEvent;
         const pid_t                 mPid;
         const audio_port_handle_t   mPortId;
     };
 
     class IoConfigEvent : public ConfigEvent {
     public:
-        IoConfigEvent(audio_io_config_event event, pid_t pid, audio_port_handle_t portId) :
+        IoConfigEvent(audio_io_config_event_t event, pid_t pid, audio_port_handle_t portId) :
             ConfigEvent(CFG_EVENT_IO) {
             mData = new IoConfigEventData(event, pid, portId);
         }
@@ -133,7 +141,7 @@ public:
             mPid(pid), mTid(tid), mPrio(prio), mForApp(forApp) {}
 
         virtual  void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "Prio event: pid %d, tid %d, prio %d, for app? %d\n",
+            snprintf(buffer, size, "- Prio event: pid %d, tid %d, prio %d, for app? %d\n",
                     mPid, mTid, mPrio, mForApp);
         }
 
@@ -158,7 +166,7 @@ public:
             mKeyValuePairs(keyValuePairs) {}
 
         virtual  void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "KeyValue: %s\n", mKeyValuePairs.string());
+            snprintf(buffer, size, "- KeyValue: %s\n", mKeyValuePairs.string());
         }
 
         const String8 mKeyValuePairs;
@@ -181,7 +189,7 @@ public:
             mPatch(patch), mHandle(handle) {}
 
         virtual  void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "Patch handle: %u\n", mHandle);
+            snprintf(buffer, size, "- Patch handle: %u\n", mHandle);
         }
 
         const struct audio_patch mPatch;
@@ -205,7 +213,7 @@ public:
             mHandle(handle) {}
 
         virtual  void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "Patch handle: %u\n", mHandle);
+            snprintf(buffer, size, "- Patch handle: %u\n", mHandle);
         }
 
         audio_patch_handle_t mHandle;
@@ -227,7 +235,7 @@ public:
             mOutDevices(outDevices) {}
 
         virtual void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "Devices: %s", android::toString(mOutDevices).c_str());
+            snprintf(buffer, size, "- Devices: %s", android::toString(mOutDevices).c_str());
         }
 
         DeviceDescriptorBaseVector mOutDevices;
@@ -249,7 +257,7 @@ public:
             mMaxSharedAudioHistoryMs(maxSharedAudioHistoryMs) {}
 
         virtual void dump(char *buffer, size_t size) {
-            snprintf(buffer, size, "mMaxSharedAudioHistoryMs: %d", mMaxSharedAudioHistoryMs);
+            snprintf(buffer, size, "- mMaxSharedAudioHistoryMs: %d", mMaxSharedAudioHistoryMs);
         }
 
         int32_t mMaxSharedAudioHistoryMs;
@@ -264,6 +272,16 @@ public:
 
         virtual ~ResizeBufferConfigEvent() {}
     };
+
+    class CheckOutputStageEffectsEvent : public ConfigEvent {
+    public:
+        CheckOutputStageEffectsEvent() :
+            ConfigEvent(CFG_EVENT_CHECK_OUTPUT_STAGE_EFFECTS) {
+        }
+
+        virtual ~CheckOutputStageEffectsEvent() {}
+    };
+
 
     class PMDeathRecipient : public IBinder::DeathRecipient {
     public:
@@ -290,8 +308,11 @@ public:
                 // dynamic externally-visible
                 uint32_t    sampleRate() const { return mSampleRate; }
                 audio_channel_mask_t channelMask() const { return mChannelMask; }
+    virtual     audio_channel_mask_t mixerChannelMask() const { return mChannelMask; }
+
                 audio_format_t format() const { return mHALFormat; }
                 uint32_t channelCount() const { return mChannelCount; }
+
                 // Called by AudioFlinger::frameCount(audio_io_handle_t output) and effects,
                 // and returns the [normal mix] buffer's frame count.
     virtual     size_t      frameCount() const = 0;
@@ -311,15 +332,15 @@ public:
                                                     status_t& status) = 0;
     virtual     status_t    setParameters(const String8& keyValuePairs);
     virtual     String8     getParameters(const String8& keys) = 0;
-    virtual     void        ioConfigChanged(audio_io_config_event event, pid_t pid = 0,
+    virtual     void        ioConfigChanged(audio_io_config_event_t event, pid_t pid = 0,
                                         audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE) = 0;
                 // sendConfigEvent_l() must be called with ThreadBase::mLock held
                 // Can temporarily release the lock if waiting for a reply from
                 // processConfigEvents_l().
                 status_t    sendConfigEvent_l(sp<ConfigEvent>& event);
-                void        sendIoConfigEvent(audio_io_config_event event, pid_t pid = 0,
+                void        sendIoConfigEvent(audio_io_config_event_t event, pid_t pid = 0,
                                               audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
-                void        sendIoConfigEvent_l(audio_io_config_event event, pid_t pid = 0,
+                void        sendIoConfigEvent_l(audio_io_config_event_t event, pid_t pid = 0,
                                             audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
                 void        sendPrioConfigEvent(pid_t pid, pid_t tid, int32_t prio, bool forApp);
                 void        sendPrioConfigEvent_l(pid_t pid, pid_t tid, int32_t prio, bool forApp);
@@ -330,7 +351,11 @@ public:
                 status_t    sendUpdateOutDeviceConfigEvent(
                                     const DeviceDescriptorBaseVector& outDevices);
                 void        sendResizeBufferConfigEvent_l(int32_t maxSharedAudioHistoryMs);
+                void        sendCheckOutputStageEffectsEvent();
+                void        sendCheckOutputStageEffectsEvent_l();
+
                 void        processConfigEvents_l();
+    virtual     void        setCheckOutputStageEffects() {}
     virtual     void        cacheParameters_l() = 0;
     virtual     status_t    createAudioPatch_l(const struct audio_patch *patch,
                                                audio_patch_handle_t *handle) = 0;
@@ -573,6 +598,8 @@ protected:
                                     ExtendedTimestamp *timestamp __unused) const {
                                 return INVALID_OPERATION;
                             }
+
+                product_strategy_t getStrategyForStream(audio_stream_type_t stream) const;
 
     virtual     void        dumpInternals_l(int fd __unused, const Vector<String16>& args __unused)
                             { }
@@ -824,7 +851,8 @@ public:
     static const nsecs_t kMaxNextBufferDelayNs = 100000000;
 
     PlaybackThread(const sp<AudioFlinger>& audioFlinger, AudioStreamOut* output,
-                   audio_io_handle_t id, type_t type, bool systemReady);
+                   audio_io_handle_t id, type_t type, bool systemReady,
+                   audio_config_base_t *mixerConfig = nullptr);
     virtual             ~PlaybackThread();
 
     // Thread virtuals
@@ -881,6 +909,8 @@ protected:
                                 ThreadBase::acquireWakeLock_l();
                                 mActiveTracks.updatePowerState(this, true /* force */);
                             }
+
+    virtual     void        checkOutputStageEffects() {}
 
                 void        dumpInternals_l(int fd, const Vector<String16>& args) override;
                 void        dumpTracks_l(int fd, const Vector<String16>& args) override;
@@ -943,7 +973,7 @@ public:
                                 { return android_atomic_acquire_load(&mSuspended) > 0; }
 
     virtual     String8     getParameters(const String8& keys);
-    virtual     void        ioConfigChanged(audio_io_config_event event, pid_t pid = 0,
+    virtual     void        ioConfigChanged(audio_io_config_event_t event, pid_t pid = 0,
                                             audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
                 status_t    getRenderPosition(uint32_t *halFrames, uint32_t *dspFrames);
                 // Consider also removing and passing an explicit mMainBuffer initialization
@@ -973,6 +1003,10 @@ public:
                 virtual void     invalidateTracks(audio_stream_type_t streamType);
 
     virtual     size_t      frameCount() const { return mNormalFrameCount; }
+
+                audio_channel_mask_t mixerChannelMask() const override {
+                    return mMixerChannelMask;
+                }
 
     virtual     status_t    getTimestamp_l(AudioTimestamp& timestamp);
 
@@ -1016,6 +1050,9 @@ public:
 
                 PlaybackThread::Track* getTrackById_l(audio_port_handle_t trackId);
 
+                bool hasMixer() const {
+                    return mType == MIXER || mType == DUPLICATING || mType == VIRTUALIZER_STAGE;
+                }
 protected:
     // updated by readOutputParameters_l()
     size_t                          mNormalFrameCount;  // normal mixer and effects
@@ -1102,6 +1139,9 @@ protected:
     // haptic playback.
     audio_channel_mask_t            mHapticChannelMask = AUDIO_CHANNEL_NONE;
     uint32_t                        mHapticChannelCount = 0;
+
+    audio_channel_mask_t            mMixerChannelMask = AUDIO_CHANNEL_NONE;
+
 private:
     // mMasterMute is in both PlaybackThread and in AudioFlinger.  When a
     // PlaybackThread needs to find out if master-muted, it checks it's local
@@ -1135,6 +1175,9 @@ protected:
 
     // Cache various calculated values, at threadLoop() entry and after a parameter change
     virtual     void        cacheParameters_l();
+                void        setCheckOutputStageEffects() override {
+                                mCheckOutputStageEffects.store(true);
+                            }
 
     virtual     uint32_t    correctLatency_l(uint32_t latency) const;
 
@@ -1316,6 +1359,8 @@ protected:
                 // audio patch used by the downstream software patch.
                 // Only used if ThreadBase::mIsMsdDevice is true.
                 struct audio_patch mDownStreamPatch;
+
+                std::atomic_bool mCheckOutputStageEffects{};
 };
 
 class MixerThread : public PlaybackThread {
@@ -1324,7 +1369,8 @@ public:
                 AudioStreamOut* output,
                 audio_io_handle_t id,
                 bool systemReady,
-                type_t type = MIXER);
+                type_t type = MIXER,
+                audio_config_base_t *mixerConfig = nullptr);
     virtual             ~MixerThread();
 
     // Thread virtuals
@@ -1620,6 +1666,24 @@ public:
     }
 };
 
+class VirtualizerStageThread : public MixerThread {
+public:
+    VirtualizerStageThread(const sp<AudioFlinger>& audioFlinger,
+                           AudioStreamOut* output,
+                           audio_io_handle_t id,
+                           bool systemReady,
+                           audio_config_base_t *mixerConfig);
+            ~VirtualizerStageThread() override {}
+
+            bool hasFastMixer() const override { return false; }
+
+protected:
+            void checkOutputStageEffects() override;
+
+private:
+            sp<EffectHandle> mFinalDownMixer;
+};
+
 // record thread
 class RecordThread : public ThreadBase
 {
@@ -1730,7 +1794,7 @@ public:
                                                status_t& status);
     virtual void        cacheParameters_l() {}
     virtual String8     getParameters(const String8& keys);
-    virtual void        ioConfigChanged(audio_io_config_event event, pid_t pid = 0,
+    virtual void        ioConfigChanged(audio_io_config_event_t event, pid_t pid = 0,
                                         audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
     virtual status_t    createAudioPatch_l(const struct audio_patch *patch,
                                            audio_patch_handle_t *handle);
@@ -1939,7 +2003,7 @@ class MmapThread : public ThreadBase
     virtual     bool        checkForNewParameter_l(const String8& keyValuePair,
                                                     status_t& status);
     virtual     String8     getParameters(const String8& keys);
-    virtual     void        ioConfigChanged(audio_io_config_event event, pid_t pid = 0,
+    virtual     void        ioConfigChanged(audio_io_config_event_t event, pid_t pid = 0,
                                             audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
                 void        readHalParameters_l();
     virtual     void        cacheParameters_l() {}

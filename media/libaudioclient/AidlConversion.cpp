@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 
+#include <algorithm>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #define LOG_TAG "AidlConversion"
 //#define LOG_NDEBUG 0
 #include <utils/Log.h>
@@ -21,6 +26,7 @@
 #include "media/AidlConversion.h"
 
 #include <media/ShmemCompat.h>
+#include <media/stagefright/foundation/MediaDefs.h>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Utilities
@@ -273,21 +279,7 @@ ConversionResult<int32_t> legacy2aidl_config_mask_int32_t(unsigned int legacy) {
             enumToMask_index<int32_t, media::AudioPortConfigType>);
 }
 
-ConversionResult<audio_channel_mask_t> aidl2legacy_int32_t_audio_channel_mask_t(int32_t aidl) {
-    // TODO(ytai): should we convert bit-by-bit?
-    // One problem here is that the representation is both opaque and is different based on the
-    // context (input vs. output). Can determine based on type and role, as per useInChannelMask().
-    return convertReinterpret<audio_channel_mask_t>(aidl);
-}
-
-ConversionResult<int32_t> legacy2aidl_audio_channel_mask_t_int32_t(audio_channel_mask_t legacy) {
-    // TODO(ytai): should we convert bit-by-bit?
-    // One problem here is that the representation is both opaque and is different based on the
-    // context (input vs. output). Can determine based on type and role, as per useInChannelMask().
-    return convertReinterpret<int32_t>(legacy);
-}
-
-ConversionResult<audio_io_config_event> aidl2legacy_AudioIoConfigEvent_audio_io_config_event(
+ConversionResult<audio_io_config_event_t> aidl2legacy_AudioIoConfigEvent_audio_io_config_event_t(
         media::AudioIoConfigEvent aidl) {
     switch (aidl) {
         case media::AudioIoConfigEvent::OUTPUT_REGISTERED:
@@ -312,8 +304,8 @@ ConversionResult<audio_io_config_event> aidl2legacy_AudioIoConfigEvent_audio_io_
     return unexpected(BAD_VALUE);
 }
 
-ConversionResult<media::AudioIoConfigEvent> legacy2aidl_audio_io_config_event_AudioIoConfigEvent(
-        audio_io_config_event legacy) {
+ConversionResult<media::AudioIoConfigEvent> legacy2aidl_audio_io_config_event_t_AudioIoConfigEvent(
+        audio_io_config_event_t legacy) {
     switch (legacy) {
         case AUDIO_OUTPUT_REGISTERED:
             return media::AudioIoConfigEvent::OUTPUT_REGISTERED;
@@ -393,18 +385,814 @@ ConversionResult<media::AudioPortType> legacy2aidl_audio_port_type_t_AudioPortTy
     return unexpected(BAD_VALUE);
 }
 
-ConversionResult<audio_format_t> aidl2legacy_AudioFormat_audio_format_t(
-        media::audio::common::AudioFormat aidl) {
-    // This relies on AudioFormat being kept in sync with audio_format_t.
-    static_assert(sizeof(media::audio::common::AudioFormat) == sizeof(audio_format_t));
-    return static_cast<audio_format_t>(aidl);
+namespace {
+
+namespace detail {
+using AudioChannelPair = std::pair<audio_channel_mask_t, media::AudioChannelLayout>;
+using AudioChannelPairs = std::vector<AudioChannelPair>;
+using AudioDevicePair = std::pair<audio_devices_t, media::AudioDeviceDescription>;
+using AudioDevicePairs = std::vector<AudioDevicePair>;
+using AudioFormatPair = std::pair<audio_format_t, media::AudioFormatDescription>;
+using AudioFormatPairs = std::vector<AudioFormatPair>;
 }
 
-ConversionResult<media::audio::common::AudioFormat> legacy2aidl_audio_format_t_AudioFormat(
+const detail::AudioChannelPairs& getInAudioChannelPairs() {
+    static const detail::AudioChannelPairs pairs = {
+#define DEFINE_INPUT_LAYOUT(n)                                                               \
+            {                                                                                \
+                AUDIO_CHANNEL_IN_##n,                                                        \
+                media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::layoutMask>( \
+                        media::AudioChannelLayout::LAYOUT_##n)                               \
+            }
+
+        DEFINE_INPUT_LAYOUT(MONO),
+        DEFINE_INPUT_LAYOUT(STEREO),
+        DEFINE_INPUT_LAYOUT(FRONT_BACK),
+        // AUDIO_CHANNEL_IN_6 not supported
+        DEFINE_INPUT_LAYOUT(2POINT0POINT2),
+        DEFINE_INPUT_LAYOUT(2POINT1POINT2),
+        DEFINE_INPUT_LAYOUT(3POINT0POINT2),
+        DEFINE_INPUT_LAYOUT(3POINT1POINT2),
+        DEFINE_INPUT_LAYOUT(5POINT1)
+#undef DEFINE_INPUT_LAYOUT
+    };
+    return pairs;
+}
+
+const detail::AudioChannelPairs& getOutAudioChannelPairs() {
+    static const detail::AudioChannelPairs pairs = {
+#define DEFINE_OUTPUT_LAYOUT(n)                                                              \
+            {                                                                                \
+                AUDIO_CHANNEL_OUT_##n,                                                       \
+                media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::layoutMask>( \
+                        media::AudioChannelLayout::LAYOUT_##n)                               \
+            }
+
+        DEFINE_OUTPUT_LAYOUT(MONO),
+        DEFINE_OUTPUT_LAYOUT(STEREO),
+        DEFINE_OUTPUT_LAYOUT(2POINT1),
+        DEFINE_OUTPUT_LAYOUT(TRI),
+        DEFINE_OUTPUT_LAYOUT(TRI_BACK),
+        DEFINE_OUTPUT_LAYOUT(3POINT1),
+        DEFINE_OUTPUT_LAYOUT(2POINT0POINT2),
+        DEFINE_OUTPUT_LAYOUT(2POINT1POINT2),
+        DEFINE_OUTPUT_LAYOUT(3POINT0POINT2),
+        DEFINE_OUTPUT_LAYOUT(3POINT1POINT2),
+        DEFINE_OUTPUT_LAYOUT(QUAD),
+        DEFINE_OUTPUT_LAYOUT(QUAD_SIDE),
+        DEFINE_OUTPUT_LAYOUT(SURROUND),
+        DEFINE_OUTPUT_LAYOUT(PENTA),
+        DEFINE_OUTPUT_LAYOUT(5POINT1),
+        DEFINE_OUTPUT_LAYOUT(5POINT1_SIDE),
+        DEFINE_OUTPUT_LAYOUT(5POINT1POINT2),
+        DEFINE_OUTPUT_LAYOUT(5POINT1POINT4),
+        DEFINE_OUTPUT_LAYOUT(6POINT1),
+        DEFINE_OUTPUT_LAYOUT(7POINT1),
+        DEFINE_OUTPUT_LAYOUT(7POINT1POINT2),
+        DEFINE_OUTPUT_LAYOUT(7POINT1POINT4),
+        DEFINE_OUTPUT_LAYOUT(13POINT_360RA),
+        DEFINE_OUTPUT_LAYOUT(22POINT2),
+        DEFINE_OUTPUT_LAYOUT(MONO_HAPTIC_A),
+        DEFINE_OUTPUT_LAYOUT(STEREO_HAPTIC_A),
+        DEFINE_OUTPUT_LAYOUT(HAPTIC_AB),
+        DEFINE_OUTPUT_LAYOUT(MONO_HAPTIC_AB),
+        DEFINE_OUTPUT_LAYOUT(STEREO_HAPTIC_AB)
+#undef DEFINE_OUTPUT_LAYOUT
+    };
+    return pairs;
+}
+
+const detail::AudioChannelPairs& getVoiceAudioChannelPairs() {
+    static const detail::AudioChannelPairs pairs = {
+#define DEFINE_VOICE_LAYOUT(n)                                                               \
+            {                                                                                \
+                AUDIO_CHANNEL_IN_VOICE_##n,                                                  \
+                media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::voiceMask>(  \
+                        media::AudioChannelLayout::VOICE_##n)                                \
+            }
+        DEFINE_VOICE_LAYOUT(UPLINK_MONO),
+        DEFINE_VOICE_LAYOUT(DNLINK_MONO),
+        DEFINE_VOICE_LAYOUT(CALL_MONO)
+#undef DEFINE_VOICE_LAYOUT
+    };
+    return pairs;
+}
+
+media::AudioDeviceDescription make_AudioDeviceDescription(media::AudioDeviceType type,
+        const std::string& connection = "") {
+    media::AudioDeviceDescription result;
+    result.type = type;
+    result.connection = connection;
+    return result;
+}
+
+void append_AudioDeviceDescription(detail::AudioDevicePairs& pairs,
+        audio_devices_t inputType, audio_devices_t outputType,
+        media::AudioDeviceType inType, media::AudioDeviceType outType,
+        const std::string& connection = "") {
+    pairs.push_back(std::make_pair(inputType, make_AudioDeviceDescription(inType, connection)));
+    pairs.push_back(std::make_pair(outputType, make_AudioDeviceDescription(outType, connection)));
+}
+
+const detail::AudioDevicePairs& getAudioDevicePairs() {
+    static const detail::AudioDevicePairs pairs = []() {
+        detail::AudioDevicePairs pairs = {{
+            {
+                AUDIO_DEVICE_NONE, media::AudioDeviceDescription{}
+            },
+            {
+                AUDIO_DEVICE_OUT_EARPIECE, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_SPEAKER_EARPIECE)
+            },
+            {
+                AUDIO_DEVICE_OUT_SPEAKER, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_SPEAKER)
+            },
+            {
+                AUDIO_DEVICE_OUT_WIRED_HEADPHONE, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_HEADPHONE,
+                        media::AudioDeviceDescription::CONNECTION_ANALOG())
+            },
+            {
+                AUDIO_DEVICE_OUT_BLUETOOTH_SCO, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_DEVICE,
+                        media::AudioDeviceDescription::CONNECTION_BT_SCO())
+            },
+            {
+                AUDIO_DEVICE_OUT_BLUETOOTH_SCO_CARKIT, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_CARKIT,
+                        media::AudioDeviceDescription::CONNECTION_BT_SCO())
+            },
+            {
+                AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_HEADPHONE,
+                        media::AudioDeviceDescription::CONNECTION_BT_A2DP())
+            },
+            {
+                AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_SPEAKER,
+                        media::AudioDeviceDescription::CONNECTION_BT_A2DP())
+            },
+            {
+                AUDIO_DEVICE_OUT_TELEPHONY_TX, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_TELEPHONY_TX)
+            },
+            {
+                AUDIO_DEVICE_OUT_AUX_LINE, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_LINE_AUX)
+            },
+            {
+                AUDIO_DEVICE_OUT_SPEAKER_SAFE, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_SPEAKER_SAFE)
+            },
+            {
+                AUDIO_DEVICE_OUT_HEARING_AID, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_HEARING_AID,
+                        media::AudioDeviceDescription::CONNECTION_WIRELESS())
+            },
+            {
+                AUDIO_DEVICE_OUT_ECHO_CANCELLER, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_ECHO_CANCELLER)
+            },
+            {
+                AUDIO_DEVICE_OUT_BLE_SPEAKER, make_AudioDeviceDescription(
+                        media::AudioDeviceType::OUT_SPEAKER,
+                        media::AudioDeviceDescription::CONNECTION_BT_LE())
+            },
+            // AUDIO_DEVICE_IN_AMBIENT and IN_COMMUNICATION are removed since they were deprecated.
+            {
+                AUDIO_DEVICE_IN_BUILTIN_MIC, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_MICROPHONE)
+            },
+            {
+                AUDIO_DEVICE_IN_BACK_MIC, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_MICROPHONE_BACK)
+            },
+            {
+                AUDIO_DEVICE_IN_TELEPHONY_RX, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_TELEPHONY_RX)
+            },
+            {
+                AUDIO_DEVICE_IN_TV_TUNER, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_TV_TUNER)
+            },
+            {
+                AUDIO_DEVICE_IN_LOOPBACK, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_LOOPBACK)
+            },
+            {
+                AUDIO_DEVICE_IN_BLUETOOTH_BLE, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_DEVICE,
+                        media::AudioDeviceDescription::CONNECTION_BT_LE())
+            },
+            {
+                AUDIO_DEVICE_IN_ECHO_REFERENCE, make_AudioDeviceDescription(
+                        media::AudioDeviceType::IN_ECHO_REFERENCE)
+            }
+        }};
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_DEFAULT, AUDIO_DEVICE_OUT_DEFAULT,
+                media::AudioDeviceType::IN_DEFAULT, media::AudioDeviceType::OUT_DEFAULT);
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_WIRED_HEADSET, AUDIO_DEVICE_OUT_WIRED_HEADSET,
+                media::AudioDeviceType::IN_HEADSET, media::AudioDeviceType::OUT_HEADSET,
+                media::AudioDeviceDescription::CONNECTION_ANALOG());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET, AUDIO_DEVICE_OUT_BLUETOOTH_SCO_HEADSET,
+                media::AudioDeviceType::IN_HEADSET, media::AudioDeviceType::OUT_HEADSET,
+                media::AudioDeviceDescription::CONNECTION_BT_SCO());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_HDMI, AUDIO_DEVICE_OUT_HDMI,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_HDMI());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_REMOTE_SUBMIX, AUDIO_DEVICE_OUT_REMOTE_SUBMIX,
+                media::AudioDeviceType::IN_SUBMIX, media::AudioDeviceType::OUT_SUBMIX);
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_ANLG_DOCK_HEADSET, AUDIO_DEVICE_OUT_ANLG_DOCK_HEADSET,
+                media::AudioDeviceType::IN_HEADSET, media::AudioDeviceType::OUT_HEADSET,
+                media::AudioDeviceDescription::CONNECTION_ANALOG_DOCK());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_DGTL_DOCK_HEADSET, AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET,
+                media::AudioDeviceType::IN_HEADSET, media::AudioDeviceType::OUT_HEADSET,
+                media::AudioDeviceDescription::CONNECTION_DIGITAL_DOCK());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_USB_ACCESSORY, AUDIO_DEVICE_OUT_USB_ACCESSORY,
+                media::AudioDeviceType::IN_ACCESSORY, media::AudioDeviceType::OUT_ACCESSORY,
+                media::AudioDeviceDescription::CONNECTION_USB());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_OUT_USB_DEVICE,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_USB());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_FM_TUNER, AUDIO_DEVICE_OUT_FM,
+                media::AudioDeviceType::IN_FM_TUNER, media::AudioDeviceType::OUT_FM);
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_LINE, AUDIO_DEVICE_OUT_LINE,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_ANALOG());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_SPDIF, AUDIO_DEVICE_OUT_SPDIF,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_SPDIF());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_BLUETOOTH_A2DP, AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_BT_A2DP());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_IP, AUDIO_DEVICE_OUT_IP,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_IP_V4());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_BUS, AUDIO_DEVICE_OUT_BUS,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_BUS());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_PROXY, AUDIO_DEVICE_OUT_PROXY,
+                media::AudioDeviceType::IN_AFE_PROXY, media::AudioDeviceType::OUT_AFE_PROXY);
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_OUT_USB_HEADSET,
+                media::AudioDeviceType::IN_HEADSET, media::AudioDeviceType::OUT_HEADSET,
+                media::AudioDeviceDescription::CONNECTION_USB());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_HDMI_ARC, AUDIO_DEVICE_OUT_HDMI_ARC,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_HDMI_ARC());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_HDMI_EARC, AUDIO_DEVICE_OUT_HDMI_EARC,
+                media::AudioDeviceType::IN_DEVICE, media::AudioDeviceType::OUT_DEVICE,
+                media::AudioDeviceDescription::CONNECTION_HDMI_EARC());
+        append_AudioDeviceDescription(pairs,
+                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_OUT_BLE_HEADSET,
+                media::AudioDeviceType::IN_HEADSET, media::AudioDeviceType::OUT_HEADSET,
+                media::AudioDeviceDescription::CONNECTION_BT_LE());
+        return pairs;
+    }();
+    return pairs;
+}
+
+media::AudioFormatDescription make_AudioFormatDescription(media::AudioFormatType type) {
+    media::AudioFormatDescription result;
+    result.type = type;
+    return result;
+}
+
+media::AudioFormatDescription make_AudioFormatDescription(media::PcmType pcm) {
+    auto result = make_AudioFormatDescription(media::AudioFormatType::PCM);
+    result.pcm = pcm;
+    return result;
+}
+
+media::AudioFormatDescription make_AudioFormatDescription(const std::string& encoding) {
+    media::AudioFormatDescription result;
+    result.encoding = encoding;
+    return result;
+}
+
+media::AudioFormatDescription make_AudioFormatDescription(media::PcmType transport,
+        const std::string& encoding) {
+    auto result = make_AudioFormatDescription(encoding);
+    result.pcm = transport;
+    return result;
+}
+
+const detail::AudioFormatPairs& getAudioFormatPairs() {
+    static const detail::AudioFormatPairs pairs = {{
+        {
+            AUDIO_FORMAT_INVALID,
+            make_AudioFormatDescription(media::AudioFormatType::SYS_RESERVED_INVALID)
+        },
+        {
+            AUDIO_FORMAT_DEFAULT, media::AudioFormatDescription{}
+        },
+        {
+            AUDIO_FORMAT_PCM_16_BIT, make_AudioFormatDescription(media::PcmType::INT_16_BIT)
+        },
+        {
+            AUDIO_FORMAT_PCM_8_BIT, make_AudioFormatDescription(media::PcmType::UINT_8_BIT)
+        },
+        {
+            AUDIO_FORMAT_PCM_32_BIT, make_AudioFormatDescription(media::PcmType::INT_32_BIT)
+        },
+        {
+            AUDIO_FORMAT_PCM_8_24_BIT, make_AudioFormatDescription(media::PcmType::FIXED_Q_8_24)
+        },
+        {
+            AUDIO_FORMAT_PCM_FLOAT, make_AudioFormatDescription(media::PcmType::FLOAT_32_BIT)
+        },
+        {
+            AUDIO_FORMAT_PCM_24_BIT_PACKED, make_AudioFormatDescription(media::PcmType::INT_24_BIT)
+        },
+        {
+            // See the comment in MediaDefs.h.
+            AUDIO_FORMAT_MP3, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_MPEG)
+        },
+        {
+            AUDIO_FORMAT_AMR_NB, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AMR_NB)
+        },
+        {
+            AUDIO_FORMAT_AMR_WB, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AMR_WB)
+        },
+        {
+            // Note: in MediaDefs.cpp MEDIA_MIMETYPE_AUDIO_AAC = "audio/mp4a-latm".
+            AUDIO_FORMAT_AAC, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AAC_FORMAT)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_MAIN, make_AudioFormatDescription("audio/aac.main")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_LC, make_AudioFormatDescription("audio/aac.lc")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_SSR, make_AudioFormatDescription("audio/aac.ssr")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_LTP, make_AudioFormatDescription("audio/aac.ltp")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_HE_V1, make_AudioFormatDescription("audio/aac.he.v1")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_SCALABLE, make_AudioFormatDescription("audio/aac.scalable")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ERLC, make_AudioFormatDescription("audio/aac.erlc")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_LD, make_AudioFormatDescription("audio/aac.ld")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_HE_V2, make_AudioFormatDescription("audio/aac.he.v2")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ELD, make_AudioFormatDescription("audio/aac.eld")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_XHE, make_AudioFormatDescription("audio/aac.xhe")
+        },
+        // AUDIO_FORMAT_HE_AAC_V1 and HE_AAC_V2 are removed since they were deprecated long time
+        // ago.
+        {
+            AUDIO_FORMAT_VORBIS, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_VORBIS)
+        },
+        {
+            AUDIO_FORMAT_OPUS, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_OPUS)
+        },
+        {
+            AUDIO_FORMAT_AC3, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AC3)
+        },
+        {
+            AUDIO_FORMAT_E_AC3, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_EAC3)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_E_AC3_JOC, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_EAC3_JOC)
+        },
+        {
+            AUDIO_FORMAT_DTS, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_DTS)
+        },
+        {
+            AUDIO_FORMAT_DTS_HD, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_DTS_HD)
+        },
+        // In the future, we would like to represent encapsulated bitstreams as
+        // nested AudioFormatDescriptions. The legacy 'AUDIO_FORMAT_IEC61937' type doesn't
+        // specify the format of the encapsulated bitstream.
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_IEC61937,
+            make_AudioFormatDescription(media::PcmType::INT_16_BIT, "audio/x-iec61937")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_DOLBY_TRUEHD, make_AudioFormatDescription("audio/vnd.dolby.truehd")
+        },
+        {
+            AUDIO_FORMAT_EVRC, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_EVRC)
+        },
+        {
+            AUDIO_FORMAT_EVRCB, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_EVRCB)
+        },
+        {
+            AUDIO_FORMAT_EVRCWB, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_EVRCWB)
+        },
+        {
+            AUDIO_FORMAT_EVRCNW, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_EVRCNW)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADIF, make_AudioFormatDescription("audio/aac.adif")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_WMA, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_WMA)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_WMA_PRO, make_AudioFormatDescription("audio/x-ms-wma.pro")
+        },
+        {
+            AUDIO_FORMAT_AMR_WB_PLUS, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MP2, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_MPEG_LAYER_II)
+        },
+        {
+            AUDIO_FORMAT_QCELP, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_QCELP)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_DSD, make_AudioFormatDescription("audio/vnd.sony.dsd")
+        },
+        {
+            AUDIO_FORMAT_FLAC, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_FLAC)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_ALAC, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_ALAC)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_APE, make_AudioFormatDescription("audio/x-ape")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AAC_ADTS)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_MAIN, make_AudioFormatDescription("audio/aac-adts.main")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_LC, make_AudioFormatDescription("audio/aac-adts.lc")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_SSR, make_AudioFormatDescription("audio/aac-adts.ssr")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_LTP, make_AudioFormatDescription("audio/aac-adts.ltp")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_HE_V1, make_AudioFormatDescription("audio/aac-adts.he.v1")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_SCALABLE, make_AudioFormatDescription("audio/aac-adts.scalable")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_ERLC, make_AudioFormatDescription("audio/aac-adts.erlc")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_LD, make_AudioFormatDescription("audio/aac-adts.ld")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_HE_V2, make_AudioFormatDescription("audio/aac-adts.he.v2")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_ELD, make_AudioFormatDescription("audio/aac-adts.eld")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_ADTS_XHE, make_AudioFormatDescription("audio/aac-adts.xhe")
+        },
+        {
+            // Note: not in the IANA registry. "vnd.octel.sbc" is not BT SBC.
+            AUDIO_FORMAT_SBC, make_AudioFormatDescription("audio/x-sbc")
+        },
+        {
+            AUDIO_FORMAT_APTX, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_APTX)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_APTX_HD, make_AudioFormatDescription("audio/vnd.qcom.aptx.hd")
+        },
+        {
+            // Note: not in the IANA registry. Matches MediaDefs.cpp.
+            AUDIO_FORMAT_AC4, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AC4)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_LDAC, make_AudioFormatDescription("audio/vnd.sony.ldac")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MAT, make_AudioFormatDescription("audio/vnd.dolby.mat")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MAT_1_0, make_AudioFormatDescription("audio/vnd.dolby.mat.1.0")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MAT_2_0, make_AudioFormatDescription("audio/vnd.dolby.mat.2.0")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MAT_2_1, make_AudioFormatDescription("audio/vnd.dolby.mat.2.1")
+        },
+        {
+            AUDIO_FORMAT_AAC_LATM, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_AAC)
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_LATM_LC, make_AudioFormatDescription("audio/mp4a-latm.lc")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_LATM_HE_V1, make_AudioFormatDescription("audio/mp4a-latm.he.v1")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_AAC_LATM_HE_V2, make_AudioFormatDescription("audio/mp4a-latm.he.v2")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_CELT, make_AudioFormatDescription("audio/x-celt")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_APTX_ADAPTIVE, make_AudioFormatDescription("audio/vnd.qcom.aptx.adaptive")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_LHDC, make_AudioFormatDescription("audio/vnd.savitech.lhdc")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_LHDC_LL, make_AudioFormatDescription("audio/vnd.savitech.lhdc.ll")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_APTX_TWSP, make_AudioFormatDescription("audio/vnd.qcom.aptx.twsp")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_LC3, make_AudioFormatDescription("audio/x-lc3")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MPEGH, make_AudioFormatDescription("audio/x-mpegh")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MPEGH_BL_L3, make_AudioFormatDescription("audio/x-mpegh.bl.l3")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MPEGH_BL_L4, make_AudioFormatDescription("audio/x-mpegh.bl.l4")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MPEGH_LC_L3, make_AudioFormatDescription("audio/x-mpegh.lc.l3")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_MPEGH_LC_L4, make_AudioFormatDescription("audio/x-mpegh.lc.l4")
+        },
+        {
+            // Note: not in the IANA registry.
+            AUDIO_FORMAT_IEC60958,
+            make_AudioFormatDescription(media::PcmType::INT_24_BIT, "audio/x-iec60958")
+        },
+        {
+            AUDIO_FORMAT_DTS_UHD, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_DTS_UHD)
+        },
+        {
+            AUDIO_FORMAT_DRA, make_AudioFormatDescription(MEDIA_MIMETYPE_AUDIO_DRA)
+        },
+    }};
+    return pairs;
+}
+
+template<typename S, typename T>
+std::unordered_map<S, T> make_DirectMap(const std::vector<std::pair<S, T>>& v) {
+    std::unordered_map<S, T> result(v.begin(), v.end());
+    LOG_ALWAYS_FATAL_IF(result.size() != v.size(), "Duplicate key elements detected");
+    return result;
+}
+
+template<typename S, typename T>
+std::unordered_map<S, T> make_DirectMap(
+        const std::vector<std::pair<S, T>>& v1, const std::vector<std::pair<S, T>>& v2) {
+    std::unordered_map<S, T> result(v1.begin(), v1.end());
+    LOG_ALWAYS_FATAL_IF(result.size() != v1.size(), "Duplicate key elements detected in v1");
+    result.insert(v2.begin(), v2.end());
+    LOG_ALWAYS_FATAL_IF(result.size() != v1.size() + v2.size(),
+            "Duplicate key elements detected in v1+v2");
+    return result;
+}
+
+template<typename S, typename T>
+std::unordered_map<T, S> make_ReverseMap(const std::vector<std::pair<S, T>>& v) {
+    std::unordered_map<T, S> result;
+    std::transform(v.begin(), v.end(), std::inserter(result, result.begin()),
+            [](const std::pair<S, T>& p) {
+                return std::make_pair(p.second, p.first);
+            });
+    LOG_ALWAYS_FATAL_IF(result.size() != v.size(), "Duplicate key elements detected");
+    return result;
+}
+
+}  // namespace
+
+ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_channel_mask_t(
+        const media::AudioChannelLayout& aidl, bool isInput) {
+    using ReverseMap = std::unordered_map<media::AudioChannelLayout, audio_channel_mask_t>;
+    using Tag = media::AudioChannelLayout::Tag;
+    static const ReverseMap mIn = make_ReverseMap(getInAudioChannelPairs());
+    static const ReverseMap mOut = make_ReverseMap(getOutAudioChannelPairs());
+    static const ReverseMap mVoice = make_ReverseMap(getVoiceAudioChannelPairs());
+
+    auto convert = [](const media::AudioChannelLayout& aidl, const ReverseMap& m,
+            const char* func, const char* type) -> ConversionResult<audio_channel_mask_t> {
+        if (auto it = m.find(aidl); it != m.end()) {
+            return it->second;
+        } else {
+            ALOGE("%s: no legacy %s audio_channel_mask_t found for %s", func, type,
+                    aidl.toString().c_str());
+            return unexpected(BAD_VALUE);
+        }
+    };
+
+    switch (aidl.getTag()) {
+        case Tag::none:
+            return AUDIO_CHANNEL_NONE;
+        case Tag::invalid:
+            return AUDIO_CHANNEL_INVALID;
+        case Tag::indexMask: {
+            // Index masks do not have pre-defined values.
+            const int bits = aidl.get<Tag::indexMask>();
+            if (__builtin_popcount(bits) != 0 &&
+                    __builtin_popcount(bits) <= AUDIO_CHANNEL_COUNT_MAX) {
+                return audio_channel_mask_from_representation_and_bits(
+                        AUDIO_CHANNEL_REPRESENTATION_INDEX, bits);
+            } else {
+                ALOGE("%s: invalid indexMask value 0x%x in %s",
+                        __func__, bits, aidl.toString().c_str());
+                return unexpected(BAD_VALUE);
+            }
+        }
+        case Tag::layoutMask:
+            return convert(aidl, isInput ? mIn : mOut, __func__, isInput ? "input" : "output");
+        case Tag::voiceMask:
+            return convert(aidl, mVoice, __func__, "voice");
+    }
+    ALOGE("%s: unexpected tag value %d", __func__, aidl.getTag());
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<media::AudioChannelLayout> legacy2aidl_audio_channel_mask_t_AudioChannelLayout(
+        audio_channel_mask_t legacy, bool isInput) {
+    using DirectMap = std::unordered_map<audio_channel_mask_t, media::AudioChannelLayout>;
+    using Tag = media::AudioChannelLayout::Tag;
+    static const DirectMap mInAndVoice = make_DirectMap(
+            getInAudioChannelPairs(), getVoiceAudioChannelPairs());
+    static const DirectMap mOut = make_DirectMap(getOutAudioChannelPairs());
+
+    auto convert = [](const audio_channel_mask_t legacy, const DirectMap& m,
+            const char* func, const char* type) -> ConversionResult<media::AudioChannelLayout> {
+        if (auto it = m.find(legacy); it != m.end()) {
+            return it->second;
+        } else {
+            ALOGE("%s: no AudioChannelLayout found for legacy %s audio_channel_mask_t value 0x%x",
+                    func, type, legacy);
+            return unexpected(BAD_VALUE);
+        }
+    };
+
+    if (legacy == AUDIO_CHANNEL_NONE) {
+        return media::AudioChannelLayout{};
+    } else if (legacy == AUDIO_CHANNEL_INVALID) {
+        return media::AudioChannelLayout::make<Tag::invalid>(0);
+    }
+
+    const audio_channel_representation_t repr = audio_channel_mask_get_representation(legacy);
+    if (repr == AUDIO_CHANNEL_REPRESENTATION_INDEX) {
+        if (audio_channel_mask_is_valid(legacy)) {
+            const int indexMask = VALUE_OR_RETURN(
+                    convertIntegral<int>(audio_channel_mask_get_bits(legacy)));
+            return media::AudioChannelLayout::make<Tag::indexMask>(indexMask);
+        } else {
+            ALOGE("%s: legacy audio_channel_mask_t value 0x%x is invalid", __func__, legacy);
+            return unexpected(BAD_VALUE);
+        }
+    } else if (repr == AUDIO_CHANNEL_REPRESENTATION_POSITION) {
+        return convert(legacy, isInput ? mInAndVoice : mOut, __func__,
+                isInput ? "input / voice" : "output");
+    }
+
+    ALOGE("%s: unknown representation %d in audio_channel_mask_t value 0x%x",
+            __func__, repr, legacy);
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<audio_devices_t> aidl2legacy_AudioDeviceDescription_audio_devices_t(
+        const media::AudioDeviceDescription& aidl) {
+    static const std::unordered_map<media::AudioDeviceDescription, audio_devices_t> m =
+            make_ReverseMap(getAudioDevicePairs());
+    if (auto it = m.find(aidl); it != m.end()) {
+        return it->second;
+    } else {
+        ALOGE("%s: no legacy audio_devices_t found for %s", __func__, aidl.toString().c_str());
+        return unexpected(BAD_VALUE);
+    }
+}
+
+ConversionResult<media::AudioDeviceDescription> legacy2aidl_audio_devices_t_AudioDeviceDescription(
+        audio_devices_t legacy) {
+    static const std::unordered_map<audio_devices_t, media::AudioDeviceDescription> m =
+            make_DirectMap(getAudioDevicePairs());
+    if (auto it = m.find(legacy); it != m.end()) {
+        return it->second;
+    } else {
+        ALOGE("%s: no AudioDeviceDescription found for legacy audio_devices_t value 0x%x",
+                __func__, legacy);
+        return unexpected(BAD_VALUE);
+    }
+}
+
+ConversionResult<audio_format_t> aidl2legacy_AudioFormatDescription_audio_format_t(
+        const media::AudioFormatDescription& aidl) {
+    static const std::unordered_map<media::AudioFormatDescription, audio_format_t> m =
+            make_ReverseMap(getAudioFormatPairs());
+    if (auto it = m.find(aidl); it != m.end()) {
+        return it->second;
+    } else {
+        ALOGE("%s: no legacy audio_format_t found for %s", __func__, aidl.toString().c_str());
+        return unexpected(BAD_VALUE);
+    }
+}
+
+ConversionResult<media::AudioFormatDescription> legacy2aidl_audio_format_t_AudioFormatDescription(
         audio_format_t legacy) {
-    // This relies on AudioFormat being kept in sync with audio_format_t.
-    static_assert(sizeof(media::audio::common::AudioFormat) == sizeof(audio_format_t));
-    return static_cast<media::audio::common::AudioFormat>(legacy);
+    static const std::unordered_map<audio_format_t, media::AudioFormatDescription> m =
+            make_DirectMap(getAudioFormatPairs());
+    if (auto it = m.find(legacy); it != m.end()) {
+        return it->second;
+    } else {
+        ALOGE("%s: no AudioFormatDescription found for legacy audio_format_t value 0x%x",
+                __func__, legacy);
+        return unexpected(BAD_VALUE);
+    }
 }
 
 ConversionResult<audio_gain_mode_t> aidl2legacy_AudioGainMode_audio_gain_mode_t(media::AudioGainMode aidl) {
@@ -449,24 +1237,14 @@ ConversionResult<int32_t> legacy2aidl_audio_gain_mode_t_int32_t_mask(audio_gain_
             enumToMask_index<int32_t, media::AudioGainMode>);
 }
 
-ConversionResult<audio_devices_t> aidl2legacy_int32_t_audio_devices_t(int32_t aidl) {
-    // TODO(ytai): bitfield?
-    return convertReinterpret<audio_devices_t>(aidl);
-}
-
-ConversionResult<int32_t> legacy2aidl_audio_devices_t_int32_t(audio_devices_t legacy) {
-    // TODO(ytai): bitfield?
-    return convertReinterpret<int32_t>(legacy);
-}
-
 ConversionResult<audio_gain_config> aidl2legacy_AudioGainConfig_audio_gain_config(
         const media::AudioGainConfig& aidl, media::AudioPortRole role, media::AudioPortType type) {
     audio_gain_config legacy;
     legacy.index = VALUE_OR_RETURN(convertIntegral<int>(aidl.index));
     legacy.mode = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_gain_mode_t_mask(aidl.mode));
-    legacy.channel_mask =
-            VALUE_OR_RETURN(aidl2legacy_int32_t_audio_channel_mask_t(aidl.channelMask));
     const bool isInput = VALUE_OR_RETURN(direction(role, type)) == Direction::INPUT;
+    legacy.channel_mask = VALUE_OR_RETURN(
+            aidl2legacy_AudioChannelLayout_audio_channel_mask_t(aidl.channelMask, isInput));
     const bool isJoint = bitmaskIsSet(aidl.mode, media::AudioGainMode::JOINT);
     size_t numValues = isJoint ? 1
                                : isInput ? audio_channel_count_from_in_mask(legacy.channel_mask)
@@ -486,9 +1264,9 @@ ConversionResult<media::AudioGainConfig> legacy2aidl_audio_gain_config_AudioGain
     media::AudioGainConfig aidl;
     aidl.index = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.index));
     aidl.mode = VALUE_OR_RETURN(legacy2aidl_audio_gain_mode_t_int32_t_mask(legacy.mode));
-    aidl.channelMask =
-            VALUE_OR_RETURN(legacy2aidl_audio_channel_mask_t_int32_t(legacy.channel_mask));
     const bool isInput = VALUE_OR_RETURN(direction(role, type)) == Direction::INPUT;
+    aidl.channelMask = VALUE_OR_RETURN(
+            legacy2aidl_audio_channel_mask_t_AudioChannelLayout(legacy.channel_mask, isInput));
     const bool isJoint = (legacy.mode & AUDIO_GAIN_MODE_JOINT) != 0;
     size_t numValues = isJoint ? 1
                                : isInput ? audio_channel_count_from_in_mask(legacy.channel_mask)
@@ -722,7 +1500,7 @@ aidl2legacy_AudioPortConfigDeviceExt_audio_port_config_device_ext(
         const media::AudioPortConfigDeviceExt& aidl) {
     audio_port_config_device_ext legacy;
     legacy.hw_module = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_module_handle_t(aidl.hwModule));
-    legacy.type = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_devices_t(aidl.type));
+    legacy.type = VALUE_OR_RETURN(aidl2legacy_AudioDeviceDescription_audio_devices_t(aidl.type));
     RETURN_IF_ERROR(aidl2legacy_string(aidl.address, legacy.address, AUDIO_DEVICE_MAX_ADDRESS_LEN));
     return legacy;
 }
@@ -732,7 +1510,7 @@ legacy2aidl_audio_port_config_device_ext_AudioPortConfigDeviceExt(
         const audio_port_config_device_ext& legacy) {
     media::AudioPortConfigDeviceExt aidl;
     aidl.hwModule = VALUE_OR_RETURN(legacy2aidl_audio_module_handle_t_int32_t(legacy.hw_module));
-    aidl.type = VALUE_OR_RETURN(legacy2aidl_audio_devices_t_int32_t(legacy.type));
+    aidl.type = VALUE_OR_RETURN(legacy2aidl_audio_devices_t_AudioDeviceDescription(legacy.type));
     aidl.address = VALUE_OR_RETURN(
             legacy2aidl_string(legacy.address, AUDIO_DEVICE_MAX_ADDRESS_LEN));
     return aidl;
@@ -1053,11 +1831,15 @@ ConversionResult<audio_port_config> aidl2legacy_AudioPortConfig_audio_port_confi
         legacy.sample_rate = VALUE_OR_RETURN(convertIntegral<unsigned int>(aidl.sampleRate));
     }
     if (bitmaskIsSet(aidl.configMask, media::AudioPortConfigType::CHANNEL_MASK)) {
+        const bool isInput = VALUE_OR_RETURN(direction(aidl.role, aidl.type)) == Direction::INPUT;
         legacy.channel_mask =
-                VALUE_OR_RETURN(aidl2legacy_int32_t_audio_channel_mask_t(aidl.channelMask));
+                VALUE_OR_RETURN(
+                        aidl2legacy_AudioChannelLayout_audio_channel_mask_t(
+                                aidl.channelMask, isInput));
     }
     if (bitmaskIsSet(aidl.configMask, media::AudioPortConfigType::FORMAT)) {
-        legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormat_audio_format_t(aidl.format));
+        legacy.format = VALUE_OR_RETURN(
+                aidl2legacy_AudioFormatDescription_audio_format_t(aidl.format));
     }
     if (bitmaskIsSet(aidl.configMask, media::AudioPortConfigType::GAIN)) {
         legacy.gain = VALUE_OR_RETURN(
@@ -1082,11 +1864,14 @@ ConversionResult<media::AudioPortConfig> legacy2aidl_audio_port_config_AudioPort
         aidl.sampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.sample_rate));
     }
     if (legacy.config_mask & AUDIO_PORT_CONFIG_CHANNEL_MASK) {
-        aidl.channelMask =
-                VALUE_OR_RETURN(legacy2aidl_audio_channel_mask_t_int32_t(legacy.channel_mask));
+        const bool isInput = VALUE_OR_RETURN(
+                direction(legacy.role, legacy.type)) == Direction::INPUT;
+        aidl.channelMask = VALUE_OR_RETURN(
+                legacy2aidl_audio_channel_mask_t_AudioChannelLayout(legacy.channel_mask, isInput));
     }
     if (legacy.config_mask & AUDIO_PORT_CONFIG_FORMAT) {
-        aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormat(legacy.format));
+        aidl.format = VALUE_OR_RETURN(
+                legacy2aidl_audio_format_t_AudioFormatDescription(legacy.format));
     }
     if (legacy.config_mask & AUDIO_PORT_CONFIG_GAIN) {
         aidl.gain = VALUE_OR_RETURN(legacy2aidl_audio_gain_config_AudioGainConfig(
@@ -1148,33 +1933,40 @@ ConversionResult<media::AudioPatch> legacy2aidl_audio_patch_AudioPatch(
 
 ConversionResult<sp<AudioIoDescriptor>> aidl2legacy_AudioIoDescriptor_AudioIoDescriptor(
         const media::AudioIoDescriptor& aidl) {
-    sp<AudioIoDescriptor> legacy(new AudioIoDescriptor());
-    legacy->mIoHandle = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_io_handle_t(aidl.ioHandle));
-    legacy->mPatch = VALUE_OR_RETURN(aidl2legacy_AudioPatch_audio_patch(aidl.patch));
-    legacy->mSamplingRate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.samplingRate));
-    legacy->mFormat = VALUE_OR_RETURN(aidl2legacy_AudioFormat_audio_format_t(aidl.format));
-    legacy->mChannelMask =
-            VALUE_OR_RETURN(aidl2legacy_int32_t_audio_channel_mask_t(aidl.channelMask));
-    legacy->mFrameCount = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCount));
-    legacy->mFrameCountHAL = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCountHAL));
-    legacy->mLatency = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.latency));
-    legacy->mPortId = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_port_handle_t(aidl.portId));
-    return legacy;
+    const audio_io_handle_t io_handle = VALUE_OR_RETURN(
+            aidl2legacy_int32_t_audio_io_handle_t(aidl.ioHandle));
+    const struct audio_patch patch = VALUE_OR_RETURN(
+            aidl2legacy_AudioPatch_audio_patch(aidl.patch));
+    const bool isInput = aidl.isInput;
+    const uint32_t sampling_rate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.samplingRate));
+    const audio_format_t format = VALUE_OR_RETURN(
+            aidl2legacy_AudioFormatDescription_audio_format_t(aidl.format));
+    const audio_channel_mask_t channel_mask = VALUE_OR_RETURN(
+            aidl2legacy_AudioChannelLayout_audio_channel_mask_t(aidl.channelMask, isInput));
+    const size_t frame_count = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCount));
+    const size_t frame_count_hal = VALUE_OR_RETURN(convertIntegral<size_t>(aidl.frameCountHAL));
+    const uint32_t latency = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.latency));
+    const audio_port_handle_t port_id = VALUE_OR_RETURN(
+            aidl2legacy_int32_t_audio_port_handle_t(aidl.portId));
+    return sp<AudioIoDescriptor>::make(io_handle, patch, isInput, sampling_rate, format,
+            channel_mask, frame_count, frame_count_hal, latency, port_id);
 }
 
 ConversionResult<media::AudioIoDescriptor> legacy2aidl_AudioIoDescriptor_AudioIoDescriptor(
         const sp<AudioIoDescriptor>& legacy) {
     media::AudioIoDescriptor aidl;
-    aidl.ioHandle = VALUE_OR_RETURN(legacy2aidl_audio_io_handle_t_int32_t(legacy->mIoHandle));
-    aidl.patch = VALUE_OR_RETURN(legacy2aidl_audio_patch_AudioPatch(legacy->mPatch));
-    aidl.samplingRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy->mSamplingRate));
-    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormat(legacy->mFormat));
-    aidl.channelMask = VALUE_OR_RETURN(
-            legacy2aidl_audio_channel_mask_t_int32_t(legacy->mChannelMask));
-    aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(legacy->mFrameCount));
-    aidl.frameCountHAL = VALUE_OR_RETURN(convertIntegral<int64_t>(legacy->mFrameCountHAL));
-    aidl.latency = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy->mLatency));
-    aidl.portId = VALUE_OR_RETURN(legacy2aidl_audio_port_handle_t_int32_t(legacy->mPortId));
+    aidl.ioHandle = VALUE_OR_RETURN(legacy2aidl_audio_io_handle_t_int32_t(legacy->getIoHandle()));
+    aidl.patch = VALUE_OR_RETURN(legacy2aidl_audio_patch_AudioPatch(legacy->getPatch()));
+    aidl.isInput = legacy->getIsInput();
+    aidl.samplingRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy->getSamplingRate()));
+    aidl.format = VALUE_OR_RETURN(
+            legacy2aidl_audio_format_t_AudioFormatDescription(legacy->getFormat()));
+    aidl.channelMask = VALUE_OR_RETURN(legacy2aidl_audio_channel_mask_t_AudioChannelLayout(
+                    legacy->getChannelMask(), legacy->getIsInput()));
+    aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(legacy->getFrameCount()));
+    aidl.frameCountHAL = VALUE_OR_RETURN(convertIntegral<int64_t>(legacy->getFrameCountHAL()));
+    aidl.latency = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy->getLatency()));
+    aidl.portId = VALUE_OR_RETURN(legacy2aidl_audio_port_handle_t_int32_t(legacy->getPortId()));
     return aidl;
 }
 
@@ -1473,7 +2265,7 @@ aidl2legacy_AudioOffloadInfo_audio_offload_info_t(const media::AudioOffloadInfo&
     legacy.version = VALUE_OR_RETURN(convertIntegral<uint16_t>(aidl.version));
     legacy.size = sizeof(audio_offload_info_t);
     audio_config_base_t config = VALUE_OR_RETURN(
-            aidl2legacy_AudioConfigBase_audio_config_base_t(aidl.config));
+            aidl2legacy_AudioConfigBase_audio_config_base_t(aidl.config, false /*isInput*/));
     legacy.sample_rate = config.sample_rate;
     legacy.channel_mask = config.channel_mask;
     legacy.format = config.format;
@@ -1502,9 +2294,10 @@ legacy2aidl_audio_offload_info_t_AudioOffloadInfo(const audio_offload_info_t& le
     }
     aidl.version = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.version));
     aidl.config.sampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.sample_rate));
-    aidl.config.channelMask = VALUE_OR_RETURN(
-            legacy2aidl_audio_channel_mask_t_int32_t(legacy.channel_mask));
-    aidl.config.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormat(legacy.format));
+    aidl.config.channelMask = VALUE_OR_RETURN(legacy2aidl_audio_channel_mask_t_AudioChannelLayout(
+                    legacy.channel_mask, false /*isInput*/));
+    aidl.config.format = VALUE_OR_RETURN(
+            legacy2aidl_audio_format_t_AudioFormatDescription(legacy.format));
     aidl.streamType = VALUE_OR_RETURN(
             legacy2aidl_audio_stream_type_t_AudioStreamType(legacy.stream_type));
     aidl.bitRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.bit_rate));
@@ -1531,12 +2324,12 @@ legacy2aidl_audio_offload_info_t_AudioOffloadInfo(const audio_offload_info_t& le
 }
 
 ConversionResult<audio_config_t>
-aidl2legacy_AudioConfig_audio_config_t(const media::AudioConfig& aidl) {
+aidl2legacy_AudioConfig_audio_config_t(const media::AudioConfig& aidl, bool isInput) {
     audio_config_t legacy;
     legacy.sample_rate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.sampleRate));
     legacy.channel_mask = VALUE_OR_RETURN(
-            aidl2legacy_int32_t_audio_channel_mask_t(aidl.channelMask));
-    legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormat_audio_format_t(aidl.format));
+            aidl2legacy_AudioChannelLayout_audio_channel_mask_t(aidl.channelMask, isInput));
+    legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormatDescription_audio_format_t(aidl.format));
     legacy.offload_info = VALUE_OR_RETURN(
             aidl2legacy_AudioOffloadInfo_audio_offload_info_t(aidl.offloadInfo));
     legacy.frame_count = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.frameCount));
@@ -1544,12 +2337,12 @@ aidl2legacy_AudioConfig_audio_config_t(const media::AudioConfig& aidl) {
 }
 
 ConversionResult<media::AudioConfig>
-legacy2aidl_audio_config_t_AudioConfig(const audio_config_t& legacy) {
+legacy2aidl_audio_config_t_AudioConfig(const audio_config_t& legacy, bool isInput) {
     media::AudioConfig aidl;
     aidl.sampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.sample_rate));
     aidl.channelMask = VALUE_OR_RETURN(
-            legacy2aidl_audio_channel_mask_t_int32_t(legacy.channel_mask));
-    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormat(legacy.format));
+            legacy2aidl_audio_channel_mask_t_AudioChannelLayout(legacy.channel_mask, isInput));
+    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormatDescription(legacy.format));
     aidl.offloadInfo = VALUE_OR_RETURN(
             legacy2aidl_audio_offload_info_t_AudioOffloadInfo(legacy.offload_info));
     aidl.frameCount = VALUE_OR_RETURN(convertIntegral<int64_t>(legacy.frame_count));
@@ -1557,22 +2350,22 @@ legacy2aidl_audio_config_t_AudioConfig(const audio_config_t& legacy) {
 }
 
 ConversionResult<audio_config_base_t>
-aidl2legacy_AudioConfigBase_audio_config_base_t(const media::AudioConfigBase& aidl) {
+aidl2legacy_AudioConfigBase_audio_config_base_t(const media::AudioConfigBase& aidl, bool isInput) {
     audio_config_base_t legacy;
     legacy.sample_rate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.sampleRate));
     legacy.channel_mask = VALUE_OR_RETURN(
-            aidl2legacy_int32_t_audio_channel_mask_t(aidl.channelMask));
-    legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormat_audio_format_t(aidl.format));
+            aidl2legacy_AudioChannelLayout_audio_channel_mask_t(aidl.channelMask, isInput));
+    legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormatDescription_audio_format_t(aidl.format));
     return legacy;
 }
 
 ConversionResult<media::AudioConfigBase>
-legacy2aidl_audio_config_base_t_AudioConfigBase(const audio_config_base_t& legacy) {
+legacy2aidl_audio_config_base_t_AudioConfigBase(const audio_config_base_t& legacy, bool isInput) {
     media::AudioConfigBase aidl;
     aidl.sampleRate = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.sample_rate));
     aidl.channelMask = VALUE_OR_RETURN(
-            legacy2aidl_audio_channel_mask_t_int32_t(legacy.channel_mask));
-    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormat(legacy.format));
+            legacy2aidl_audio_channel_mask_t_AudioChannelLayout(legacy.channel_mask, isInput));
+    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormatDescription(legacy.format));
     return aidl;
 }
 
@@ -1785,7 +2578,8 @@ ConversionResult<audio_port_device_ext>
 aidl2legacy_AudioPortDeviceExt_audio_port_device_ext(const media::AudioPortDeviceExt& aidl) {
     audio_port_device_ext legacy;
     legacy.hw_module = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_module_handle_t(aidl.hwModule));
-    legacy.type = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_devices_t(aidl.device.type));
+    legacy.type = VALUE_OR_RETURN(
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(aidl.device.type));
     RETURN_IF_ERROR(
             aidl2legacy_string(aidl.device.address, legacy.address, sizeof(legacy.address)));
     legacy.encapsulation_modes = VALUE_OR_RETURN(
@@ -1799,7 +2593,8 @@ ConversionResult<media::AudioPortDeviceExt>
 legacy2aidl_audio_port_device_ext_AudioPortDeviceExt(const audio_port_device_ext& legacy) {
     media::AudioPortDeviceExt aidl;
     aidl.hwModule = VALUE_OR_RETURN(legacy2aidl_audio_module_handle_t_int32_t(legacy.hw_module));
-    aidl.device.type = VALUE_OR_RETURN(legacy2aidl_audio_devices_t_int32_t(legacy.type));
+    aidl.device.type = VALUE_OR_RETURN(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(legacy.type));
     aidl.device.address = VALUE_OR_RETURN(
             legacy2aidl_string(legacy.address, sizeof(legacy.address)));
     aidl.encapsulationModes = VALUE_OR_RETURN(
@@ -1899,9 +2694,9 @@ ConversionResult<media::AudioPortExt> legacy2aidl_AudioPortExt(
 }
 
 ConversionResult<audio_profile>
-aidl2legacy_AudioProfile_audio_profile(const media::AudioProfile& aidl) {
+aidl2legacy_AudioProfile_audio_profile(const media::AudioProfile& aidl, bool isInput) {
     audio_profile legacy;
-    legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormat_audio_format_t(aidl.format));
+    legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormatDescription_audio_format_t(aidl.format));
 
     if (aidl.samplingRates.size() > std::size(legacy.sample_rates)) {
         return unexpected(BAD_VALUE);
@@ -1916,7 +2711,9 @@ aidl2legacy_AudioProfile_audio_profile(const media::AudioProfile& aidl) {
     }
     RETURN_IF_ERROR(
             convertRange(aidl.channelMasks.begin(), aidl.channelMasks.end(), legacy.channel_masks,
-                         aidl2legacy_int32_t_audio_channel_mask_t));
+                    [isInput](const media::AudioChannelLayout& l) {
+                        return aidl2legacy_AudioChannelLayout_audio_channel_mask_t(l, isInput);
+                    }));
     legacy.num_channel_masks = aidl.channelMasks.size();
 
     legacy.encapsulation_type = VALUE_OR_RETURN(
@@ -1925,9 +2722,9 @@ aidl2legacy_AudioProfile_audio_profile(const media::AudioProfile& aidl) {
 }
 
 ConversionResult<media::AudioProfile>
-legacy2aidl_audio_profile_AudioProfile(const audio_profile& legacy) {
+legacy2aidl_audio_profile_AudioProfile(const audio_profile& legacy, bool isInput) {
     media::AudioProfile aidl;
-    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormat(legacy.format));
+    aidl.format = VALUE_OR_RETURN(legacy2aidl_audio_format_t_AudioFormatDescription(legacy.format));
 
     if (legacy.num_sample_rates > std::size(legacy.sample_rates)) {
         return unexpected(BAD_VALUE);
@@ -1943,7 +2740,9 @@ legacy2aidl_audio_profile_AudioProfile(const audio_profile& legacy) {
     RETURN_IF_ERROR(
             convertRange(legacy.channel_masks, legacy.channel_masks + legacy.num_channel_masks,
                          std::back_inserter(aidl.channelMasks),
-                         legacy2aidl_audio_channel_mask_t_int32_t));
+                    [isInput](audio_channel_mask_t m) {
+                        return legacy2aidl_audio_channel_mask_t_AudioChannelLayout(m, isInput);
+                    }));
 
     aidl.encapsulationType = VALUE_OR_RETURN(
             legacy2aidl_audio_encapsulation_type_t_AudioEncapsulationType(
@@ -1955,8 +2754,8 @@ ConversionResult<audio_gain>
 aidl2legacy_AudioGain_audio_gain(const media::AudioGain& aidl) {
     audio_gain legacy;
     legacy.mode = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_gain_mode_t_mask(aidl.mode));
-    legacy.channel_mask = VALUE_OR_RETURN(
-            aidl2legacy_int32_t_audio_channel_mask_t(aidl.channelMask));
+    legacy.channel_mask = VALUE_OR_RETURN(aidl2legacy_AudioChannelLayout_audio_channel_mask_t(
+                    aidl.channelMask, aidl.isInput));
     legacy.min_value = VALUE_OR_RETURN(convertIntegral<int>(aidl.minValue));
     legacy.max_value = VALUE_OR_RETURN(convertIntegral<int>(aidl.maxValue));
     legacy.default_value = VALUE_OR_RETURN(convertIntegral<int>(aidl.defaultValue));
@@ -1967,11 +2766,12 @@ aidl2legacy_AudioGain_audio_gain(const media::AudioGain& aidl) {
 }
 
 ConversionResult<media::AudioGain>
-legacy2aidl_audio_gain_AudioGain(const audio_gain& legacy) {
+legacy2aidl_audio_gain_AudioGain(const audio_gain& legacy, bool isInput) {
     media::AudioGain aidl;
     aidl.mode = VALUE_OR_RETURN(legacy2aidl_audio_gain_mode_t_int32_t_mask(legacy.mode));
+    aidl.isInput = isInput;
     aidl.channelMask = VALUE_OR_RETURN(
-            legacy2aidl_audio_channel_mask_t_int32_t(legacy.channel_mask));
+            legacy2aidl_audio_channel_mask_t_AudioChannelLayout(legacy.channel_mask, isInput));
     aidl.minValue = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.min_value));
     aidl.maxValue = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.max_value));
     aidl.defaultValue = VALUE_OR_RETURN(convertIntegral<int32_t>(legacy.default_value));
@@ -1992,8 +2792,11 @@ aidl2legacy_AudioPort_audio_port_v7(const media::AudioPort& aidl) {
     if (aidl.profiles.size() > std::size(legacy.audio_profiles)) {
         return unexpected(BAD_VALUE);
     }
+    const bool isInput = VALUE_OR_RETURN(direction(aidl.role, aidl.type)) == Direction::INPUT;
     RETURN_IF_ERROR(convertRange(aidl.profiles.begin(), aidl.profiles.end(), legacy.audio_profiles,
-                                 aidl2legacy_AudioProfile_audio_profile));
+                                 [isInput](const media::AudioProfile& p) {
+                                     return aidl2legacy_AudioProfile_audio_profile(p, isInput);
+                                 }));
     legacy.num_audio_profiles = aidl.profiles.size();
 
     if (aidl.extraAudioDescriptors.size() > std::size(legacy.extra_audio_descriptors)) {
@@ -2029,10 +2832,13 @@ legacy2aidl_audio_port_v7_AudioPort(const audio_port_v7& legacy) {
     if (legacy.num_audio_profiles > std::size(legacy.audio_profiles)) {
         return unexpected(BAD_VALUE);
     }
+    const bool isInput = VALUE_OR_RETURN(direction(legacy.role, legacy.type)) == Direction::INPUT;
     RETURN_IF_ERROR(
             convertRange(legacy.audio_profiles, legacy.audio_profiles + legacy.num_audio_profiles,
                          std::back_inserter(aidl.profiles),
-                         legacy2aidl_audio_profile_AudioProfile));
+                         [isInput](const audio_profile& p) {
+                             return legacy2aidl_audio_profile_AudioProfile(p, isInput);
+                         }));
 
     if (legacy.num_extra_audio_descriptors > std::size(legacy.extra_audio_descriptors)) {
         return unexpected(BAD_VALUE);
@@ -2049,7 +2855,9 @@ legacy2aidl_audio_port_v7_AudioPort(const audio_port_v7& legacy) {
     RETURN_IF_ERROR(
             convertRange(legacy.gains, legacy.gains + legacy.num_gains,
                          std::back_inserter(aidl.gains),
-                         legacy2aidl_audio_gain_AudioGain));
+                         [isInput](const audio_gain& g) {
+                             return legacy2aidl_audio_gain_AudioGain(g, isInput);
+                         }));
 
     aidl.activeConfig = VALUE_OR_RETURN(
             legacy2aidl_audio_port_config_AudioPortConfig(legacy.active_config));

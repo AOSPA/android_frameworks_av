@@ -24,6 +24,7 @@
 #include <android/media/BnAudioPolicyServiceClient.h>
 #include <android/content/AttributionSourceState.h>
 #include <media/AidlConversionUtil.h>
+#include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioPolicy.h>
 #include <media/AudioProductStrategy.h>
@@ -225,6 +226,9 @@ public:
     // Indicate JAVA services are ready (scheduling, power management ...)
     static status_t systemReady();
 
+    // Indicate audio policy service is ready
+    static status_t audioPolicyReady();
+
     // Returns the number of frames per audio HAL buffer.
     // Corresponds to audio_stream->get_buffer_size()/audio_stream_in_frame_size() for input.
     // See also getFrameCount().
@@ -318,7 +322,7 @@ public:
     static status_t getMinVolumeIndexForAttributes(const audio_attributes_t &attr, int &index);
 
     static product_strategy_t getStrategyForStream(audio_stream_type_t stream);
-    static audio_devices_t getDevicesForStream(audio_stream_type_t stream);
+    static DeviceTypeSet getDevicesForStream(audio_stream_type_t stream);
     static status_t getDevicesForAttributes(const AudioAttributes &aa,
                                             AudioDeviceTypeAddrVector *devices);
 

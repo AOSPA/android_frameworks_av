@@ -100,13 +100,13 @@ Status AudioPolicyService::setDeviceConnectionState(
         const media::AudioDevice& deviceAidl,
         media::AudioPolicyDeviceState stateAidl,
         const std::string& deviceNameAidl,
-        media::audio::common::AudioFormat encodedFormatAidl) {
+        const media::AudioFormatDescription& encodedFormatAidl) {
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl.type));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl.type));
     audio_policy_dev_state_t state = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioPolicyDeviceState_audio_policy_dev_state_t(stateAidl));
     audio_format_t encodedFormat = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioFormat_audio_format_t(encodedFormatAidl));
+            aidl2legacy_AudioFormatDescription_audio_format_t(encodedFormatAidl));
 
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
@@ -132,7 +132,7 @@ Status AudioPolicyService::setDeviceConnectionState(
 Status AudioPolicyService::getDeviceConnectionState(const media::AudioDevice& deviceAidl,
                                                     media::AudioPolicyDeviceState* _aidl_return) {
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl.type));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl.type));
     if (mAudioPolicyManager == NULL) {
         *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
                 legacy2aidl_audio_policy_dev_state_t_AudioPolicyDeviceState(
@@ -150,11 +150,11 @@ Status AudioPolicyService::getDeviceConnectionState(const media::AudioDevice& de
 Status AudioPolicyService::handleDeviceConfigChange(
         const media::AudioDevice& deviceAidl,
         const std::string& deviceNameAidl,
-        media::audio::common::AudioFormat encodedFormatAidl) {
+        const media::AudioFormatDescription& encodedFormatAidl) {
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl.type));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl.type));
     audio_format_t encodedFormat = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioFormat_audio_format_t(encodedFormatAidl));
+            aidl2legacy_AudioFormatDescription_audio_format_t(encodedFormatAidl));
 
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
@@ -293,7 +293,7 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
             aidl2legacy_int32_t_audio_session_t(sessionAidl));
     audio_stream_type_t stream = AUDIO_STREAM_DEFAULT;
     audio_config_t config = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioConfig_audio_config_t(configAidl));
+            aidl2legacy_AudioConfig_audio_config_t(configAidl, false /*isInput*/));
     audio_output_flags_t flags = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_int32_t_audio_output_flags_t_mask(flagsAidl));
     audio_port_handle_t selectedDeviceId = VALUE_OR_RETURN_BINDER_STATUS(
@@ -533,7 +533,7 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
     audio_session_t session = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_int32_t_audio_session_t(sessionAidl));
     audio_config_base_t config = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioConfigBase_audio_config_base_t(configAidl));
+            aidl2legacy_AudioConfigBase_audio_config_base_t(configAidl, true /*isInput*/));
     audio_input_flags_t flags = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_int32_t_audio_input_flags_t_mask(flagsAidl));
     audio_port_handle_t selectedDeviceId = VALUE_OR_RETURN_BINDER_STATUS(
@@ -945,12 +945,13 @@ Status AudioPolicyService::initStreamVolume(media::AudioStreamType streamAidl,
 }
 
 Status AudioPolicyService::setStreamVolumeIndex(media::AudioStreamType streamAidl,
-                                                int32_t deviceAidl, int32_t indexAidl) {
+                                                const media::AudioDeviceDescription& deviceAidl,
+                                                int32_t indexAidl) {
     audio_stream_type_t stream = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioStreamType_audio_stream_type_t(streamAidl));
     int index = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<int>(indexAidl));
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
 
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
@@ -969,11 +970,12 @@ Status AudioPolicyService::setStreamVolumeIndex(media::AudioStreamType streamAid
 }
 
 Status AudioPolicyService::getStreamVolumeIndex(media::AudioStreamType streamAidl,
-                                                int32_t deviceAidl, int32_t* _aidl_return) {
+                                                const media::AudioDeviceDescription& deviceAidl,
+                                                int32_t* _aidl_return) {
     audio_stream_type_t stream = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioStreamType_audio_stream_type_t(streamAidl));
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
     int index;
 
     if (mAudioPolicyManager == NULL) {
@@ -991,12 +993,13 @@ Status AudioPolicyService::getStreamVolumeIndex(media::AudioStreamType streamAid
 }
 
 Status AudioPolicyService::setVolumeIndexForAttributes(
-        const media::AudioAttributesInternal& attrAidl, int32_t deviceAidl, int32_t indexAidl) {
+        const media::AudioAttributesInternal& attrAidl,
+        const media::AudioDeviceDescription& deviceAidl, int32_t indexAidl) {
     audio_attributes_t attributes = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioAttributesInternal_audio_attributes_t(attrAidl));
     int index = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<int>(indexAidl));
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             AudioValidator::validateAudioAttributes(attributes, "169572641")));
 
@@ -1013,11 +1016,12 @@ Status AudioPolicyService::setVolumeIndexForAttributes(
 }
 
 Status AudioPolicyService::getVolumeIndexForAttributes(
-        const media::AudioAttributesInternal& attrAidl, int32_t deviceAidl, int32_t* _aidl_return) {
+        const media::AudioAttributesInternal& attrAidl,
+        const media::AudioDeviceDescription& deviceAidl, int32_t* _aidl_return) {
     audio_attributes_t attributes = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioAttributesInternal_audio_attributes_t(attrAidl));
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
     int index;
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             AudioValidator::validateAudioAttributes(attributes, "169572641")));
@@ -1095,14 +1099,14 @@ Status AudioPolicyService::getStrategyForStream(media::AudioStreamType streamAid
 
 //audio policy: use audio_device_t appropriately
 
-Status AudioPolicyService::getDevicesForStream(media::AudioStreamType streamAidl,
-                                               int32_t* _aidl_return) {
+Status AudioPolicyService::getDevicesForStream(
+        media::AudioStreamType streamAidl,
+        std::vector<media::AudioDeviceDescription>* _aidl_return) {
     audio_stream_type_t stream = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioStreamType_audio_stream_type_t(streamAidl));
 
     if (uint32_t(stream) >= AUDIO_STREAM_PUBLIC_CNT) {
-        *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
-                legacy2aidl_audio_devices_t_int32_t(AUDIO_DEVICE_NONE));
+        *_aidl_return = std::vector<media::AudioDeviceDescription>{};
         return Status::ok();
     }
     if (mAudioPolicyManager == NULL) {
@@ -1111,7 +1115,9 @@ Status AudioPolicyService::getDevicesForStream(media::AudioStreamType streamAidl
     Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
-            legacy2aidl_audio_devices_t_int32_t(mAudioPolicyManager->getDevicesForStream(stream)));
+            convertContainer<std::vector<media::AudioDeviceDescription>>(
+                    mAudioPolicyManager->getDevicesForStream(stream),
+                    legacy2aidl_audio_devices_t_AudioDeviceDescription));
     return Status::ok();
 }
 
@@ -1447,7 +1453,7 @@ Status AudioPolicyService::isDirectOutputSupported(
         const media::AudioAttributesInternal& attributesAidl,
         bool* _aidl_return) {
     audio_config_base_t config = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioConfigBase_audio_config_base_t(configAidl));
+            aidl2legacy_AudioConfigBase_audio_config_base_t(configAidl, false /*isInput*/));
     audio_attributes_t attributes = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioAttributesInternal_audio_attributes_t(attributesAidl));
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
@@ -1622,7 +1628,7 @@ Status AudioPolicyService::acquireSoundTriggerSession(media::SoundTriggerSession
     _aidl_return->ioHandle = VALUE_OR_RETURN_BINDER_STATUS(
             legacy2aidl_audio_io_handle_t_int32_t(ioHandle));
     _aidl_return->device = VALUE_OR_RETURN_BINDER_STATUS(
-            legacy2aidl_audio_devices_t_int32_t(device));
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     return Status::ok();
 }
 
@@ -1822,13 +1828,14 @@ Status AudioPolicyService::getMasterMono(bool* _aidl_return)
 }
 
 
-Status AudioPolicyService::getStreamVolumeDB(media::AudioStreamType streamAidl, int32_t indexAidl,
-                                             int32_t deviceAidl, float* _aidl_return) {
+Status AudioPolicyService::getStreamVolumeDB(
+        media::AudioStreamType streamAidl, int32_t indexAidl,
+        const media::AudioDeviceDescription& deviceAidl, float* _aidl_return) {
     audio_stream_type_t stream = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioStreamType_audio_stream_type_t(streamAidl));
     int index = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<int>(indexAidl));
     audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_int32_t_audio_devices_t(deviceAidl));
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
 
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
@@ -1840,7 +1847,7 @@ Status AudioPolicyService::getStreamVolumeDB(media::AudioStreamType streamAidl, 
 }
 
 Status AudioPolicyService::getSurroundFormats(media::Int* count,
-        std::vector<media::audio::common::AudioFormat>* formats,
+        std::vector<media::AudioFormatDescription>* formats,
         std::vector<bool>* formatsEnabled) {
     unsigned int numSurroundFormats = VALUE_OR_RETURN_BINDER_STATUS(
             convertIntegral<unsigned int>(count->value));
@@ -1862,7 +1869,8 @@ Status AudioPolicyService::getSurroundFormats(media::Int* count,
     numSurroundFormatsReq = std::min(numSurroundFormats, numSurroundFormatsReq);
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             convertRange(surroundFormats.get(), surroundFormats.get() + numSurroundFormatsReq,
-                         std::back_inserter(*formats), legacy2aidl_audio_format_t_AudioFormat)));
+                         std::back_inserter(*formats),
+                         legacy2aidl_audio_format_t_AudioFormatDescription)));
     formatsEnabled->insert(
             formatsEnabled->begin(),
             surroundFormatsEnabled.get(),
@@ -1872,7 +1880,7 @@ Status AudioPolicyService::getSurroundFormats(media::Int* count,
 }
 
 Status AudioPolicyService::getReportedSurroundFormats(
-        media::Int* count, std::vector<media::audio::common::AudioFormat>* formats) {
+        media::Int* count, std::vector<media::AudioFormatDescription>* formats) {
     unsigned int numSurroundFormats = VALUE_OR_RETURN_BINDER_STATUS(
             convertIntegral<unsigned int>(count->value));
     if (numSurroundFormats > MAX_ITEMS_PER_LIST) {
@@ -1892,13 +1900,14 @@ Status AudioPolicyService::getReportedSurroundFormats(
     numSurroundFormatsReq = std::min(numSurroundFormats, numSurroundFormatsReq);
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             convertRange(surroundFormats.get(), surroundFormats.get() + numSurroundFormatsReq,
-                         std::back_inserter(*formats), legacy2aidl_audio_format_t_AudioFormat)));
+                         std::back_inserter(*formats),
+                         legacy2aidl_audio_format_t_AudioFormatDescription)));
     count->value = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<uint32_t>(numSurroundFormats));
     return Status::ok();
 }
 
 Status AudioPolicyService::getHwOffloadEncodingFormatsSupportedForA2DP(
-        std::vector<media::audio::common::AudioFormat>* _aidl_return) {
+        std::vector<media::AudioFormatDescription>* _aidl_return) {
     std::vector<audio_format_t> formats;
 
     if (mAudioPolicyManager == NULL) {
@@ -1909,16 +1918,16 @@ Status AudioPolicyService::getHwOffloadEncodingFormatsSupportedForA2DP(
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
             mAudioPolicyManager->getHwOffloadEncodingFormatsSupportedForA2DP(&formats)));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
-            convertContainer<std::vector<media::audio::common::AudioFormat>>(
+            convertContainer<std::vector<media::AudioFormatDescription>>(
                     formats,
-                    legacy2aidl_audio_format_t_AudioFormat));
+                    legacy2aidl_audio_format_t_AudioFormatDescription));
     return Status::ok();
 }
 
 Status AudioPolicyService::setSurroundFormatEnabled(
-        media::audio::common::AudioFormat audioFormatAidl, bool enabled) {
+        const media::AudioFormatDescription& audioFormatAidl, bool enabled) {
     audio_format_t audioFormat = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioFormat_audio_format_t(audioFormatAidl));
+            aidl2legacy_AudioFormatDescription_audio_format_t(audioFormatAidl));
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
     }

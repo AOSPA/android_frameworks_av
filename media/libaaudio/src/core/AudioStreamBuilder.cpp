@@ -53,16 +53,10 @@ using namespace aaudio;
 /*
  * AudioStreamBuilder
  */
-AudioStreamBuilder::AudioStreamBuilder() {
-}
-
-AudioStreamBuilder::~AudioStreamBuilder() {
-}
-
 static aaudio_result_t builder_createStream(aaudio_direction_t direction,
-                                         aaudio_sharing_mode_t sharingMode,
-                                         bool tryMMap,
-                                         android::sp<AudioStream> &stream) {
+                                            aaudio_sharing_mode_t /*sharingMode*/,
+                                            bool tryMMap,
+                                            android::sp<AudioStream> &stream) {
     aaudio_result_t result = AAUDIO_OK;
 
     switch (direction) {
@@ -268,8 +262,8 @@ static const char *AAudio_convertDirectionToText(aaudio_direction_t direction) {
 
 void AudioStreamBuilder::logParameters() const {
     // This is very helpful for debugging in the future. Please leave it in.
-    ALOGI("rate   = %6d, channels  = %d, format   = %d, sharing = %s, dir = %s",
-          getSampleRate(), getSamplesPerFrame(), getFormat(),
+    ALOGI("rate   = %6d, channels  = %d, channelMask = %#x, format   = %d, sharing = %s, dir = %s",
+          getSampleRate(), getSamplesPerFrame(), getChannelMask(), getFormat(),
           AAudio_convertSharingModeToShortText(getSharingMode()),
           AAudio_convertDirectionToText(getDirection()));
     ALOGI("device = %6d, sessionId = %d, perfMode = %d, callback: %s with frames = %d",

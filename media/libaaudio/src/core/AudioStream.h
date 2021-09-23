@@ -270,7 +270,8 @@ public:
     }
 
     /**
-     * This is only valid after setSamplesPerFrame() and setFormat() have been called.
+     * This is only valid after setChannelMask() and setFormat()
+     * have been called.
      */
     int32_t getBytesPerFrame() const {
         return mSamplesPerFrame * getBytesPerSample();
@@ -284,7 +285,7 @@ public:
     }
 
     /**
-     * This is only valid after setSamplesPerFrame() and setDeviceFormat() have been called.
+     * This is only valid after setChannelMask() and setDeviceFormat() have been called.
      */
     int32_t getBytesPerDeviceFrame() const {
         return getSamplesPerFrame() * audio_bytes_per_sample(getDeviceFormat());
@@ -316,6 +317,15 @@ public:
 
     int32_t getFramesPerDataCallback() const {
         return mFramesPerDataCallback;
+    }
+
+    aaudio_channel_mask_t getChannelMask() const {
+        return mChannelMask;
+    }
+
+    void setChannelMask(aaudio_channel_mask_t channelMask) {
+        mChannelMask = channelMask;
+        mSamplesPerFrame = AAudioConvert_channelMaskToCount(channelMask);
     }
 
     /**
@@ -429,7 +439,7 @@ protected:
     // PlayerBase allows the system to control the stream volume.
     class MyPlayerBase : public android::PlayerBase {
     public:
-        MyPlayerBase() {};
+        MyPlayerBase() = default;
 
         virtual ~MyPlayerBase() = default;
 
@@ -492,11 +502,6 @@ protected:
      */
     void setSampleRate(int32_t sampleRate) {
         mSampleRate = sampleRate;
-    }
-
-    // This should not be called after the open() call.
-    void setSamplesPerFrame(int32_t samplesPerFrame) {
-        mSamplesPerFrame = samplesPerFrame;
     }
 
     // This should not be called after the open() call.
@@ -563,7 +568,7 @@ protected:
      * @param numFrames
      * @return original pointer or the conversion buffer
      */
-    virtual const void * maybeConvertDeviceData(const void *audioData, int32_t numFrames) {
+    virtual const void * maybeConvertDeviceData(const void *audioData, int32_t /*numFrames*/) {
         return audioData;
     }
 
@@ -633,6 +638,7 @@ private:
 
     // These do not change after open().
     int32_t                     mSamplesPerFrame = AAUDIO_UNSPECIFIED;
+    aaudio_channel_mask_t       mChannelMask = AAUDIO_UNSPECIFIED;
     int32_t                     mSampleRate = AAUDIO_UNSPECIFIED;
     int32_t                     mDeviceId = AAUDIO_UNSPECIFIED;
     aaudio_sharing_mode_t       mSharingMode = AAUDIO_SHARING_MODE_SHARED;

@@ -163,8 +163,13 @@ public:
     bool isOffloadOrMmap() const override { return false; }
 
     uint32_t  sampleRate() const override { return 0; }
-    audio_channel_mask_t channelMask() const override { return AUDIO_CHANNEL_NONE; }
-    uint32_t channelCount() const override { return 0; }
+    audio_channel_mask_t inChannelMask(int id __unused) const override {
+        return AUDIO_CHANNEL_NONE;
+    }
+    uint32_t inChannelCount(int id __unused) const override { return 0; }
+    audio_channel_mask_t outChannelMask() const override { return AUDIO_CHANNEL_NONE; }
+    uint32_t outChannelCount() const override { return 0; }
+
     audio_channel_mask_t hapticChannelMask() const override { return AUDIO_CHANNEL_NONE; }
     size_t    frameCount() const override  { return 0; }
     uint32_t  latency() const override  { return 0; }
@@ -189,6 +194,10 @@ public:
     void onEffectDisable(const sp<EffectBase>& effect __unused) override {}
 
     wp<EffectChain> chain() const override { return nullptr; }
+
+    bool isAudioPolicyReady() const override {
+        return mManager.audioFlinger().isAudioPolicyReady();
+    }
 
     int newEffectId() { return mManager.audioFlinger().nextUniqueId(AUDIO_UNIQUE_ID_USE_EFFECT); }
 

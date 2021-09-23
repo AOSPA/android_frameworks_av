@@ -16,6 +16,7 @@
 
 package android.media;
 
+import android.media.AudioChannelLayout;
 import android.media.AudioMode;
 import android.media.AudioPatch;
 import android.media.AudioPort;
@@ -41,7 +42,7 @@ import android.media.IAudioTrack;
 import android.media.MicrophoneInfoData;
 import android.media.RenderPosition;
 import android.media.TrackSecondaryOutputInfo;
-import android.media.audio.common.AudioFormat;
+import android.media.AudioFormatDescription;
 
 /**
  * {@hide}
@@ -62,7 +63,7 @@ interface IAudioFlingerService {
      */
     int sampleRate(int /* audio_io_handle_t */ ioHandle);
 
-    AudioFormat format(int /* audio_io_handle_t */ output);
+    AudioFormatDescription format(int /* audio_io_handle_t */ output);
 
     long frameCount(int /* audio_io_handle_t */ ioHandle);
 
@@ -115,8 +116,8 @@ interface IAudioFlingerService {
     // Retrieve the audio recording buffer size in bytes.
     // FIXME This API assumes a route, and so should be deprecated.
     long getInputBufferSize(int sampleRate,
-                            AudioFormat format,
-                            int /* audio_channel_mask_t */ channelMask);
+                            in AudioFormatDescription format,
+                            in AudioChannelLayout channelMask);
 
     OpenOutputResponse openOutput(in OpenOutputRequest request);
     int /* audio_io_handle_t */ openDuplicateOutput(int /* audio_io_handle_t */ output1,
@@ -196,6 +197,9 @@ interface IAudioFlingerService {
 
     /* Indicate JAVA services are ready (scheduling, power management ...) */
     oneway void systemReady();
+
+    /* Indicate audio policy service is ready */
+    oneway void audioPolicyReady();
 
     // Returns the number of frames per audio HAL buffer.
     long frameCountHAL(int /* audio_io_handle_t */ ioHandle);

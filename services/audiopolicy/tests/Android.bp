@@ -25,7 +25,7 @@ cc_test {
         "libmedia_helper",
         "libutils",
         "libxml2",
-        "libpermission",
+        "framework-permission-aidl-cpp",
         "libbinder",
     ],
 
