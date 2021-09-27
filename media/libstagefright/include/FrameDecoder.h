@@ -204,19 +204,25 @@ private:
     sp<ImageOutputThread> mThread;
     bool mUseMultiThread;
 
+    enum OutputThrSignalType {
+        NONE,
+        EXECUTE,
+        EXIT
+    };
+
     struct OutputInfo {
         OutputInfo()
             : mRetriesLeft(0),
               mErrorCode(OK),
               mDone(false),
-              mExitThr(false),
-              mThrStarted(false){
+              mThrStarted(false),
+              mSignalType(NONE) {
         }
         size_t mRetriesLeft;
         status_t mErrorCode;
         bool mDone;
-        bool mExitThr;
         bool mThrStarted;
+        OutputThrSignalType mSignalType;
         Condition mCond;
     };
     Mutexed<OutputInfo> mOutInfo;
