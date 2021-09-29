@@ -939,7 +939,10 @@ status_t MediaImageDecoder::onOutputReceived(
     int32_t width, height, stride, slice_height;
     CHECK(outputFormat->findInt32("width", &width));
     CHECK(outputFormat->findInt32("height", &height));
-    CHECK(outputFormat->findInt32("stride", &stride));
+
+    if (!outputFormat->findInt32("stride", &stride)) {
+        stride = width;
+    }
 
     if (!outputFormat->findInt32("slice-height", &slice_height)) {
         slice_height = height;
