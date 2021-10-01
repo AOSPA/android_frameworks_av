@@ -613,8 +613,10 @@ void CameraService::onTorchStatusChangedLocked(const String8& cameraId,
     broadcastTorchModeStatus(cameraId, newStatus, systemCameraKind);
 }
 
-static bool hasPermissionsForSystemCamera(int callingPid, int callingUid) {
-    return checkPermission(sSystemCameraPermission, callingPid, callingUid) &&
+static bool hasPermissionsForSystemCamera(int callingPid, int callingUid,
+        bool logPermissionFailure = false) {
+    return checkPermission(sSystemCameraPermission, callingPid, callingUid,
+            logPermissionFailure) &&
             checkPermission(sCameraPermission, callingPid, callingUid);
 }
 
@@ -693,8 +695,8 @@ std::string CameraService::cameraIdIntToStrLocked(int cameraIdInt) {
     const std::vector<std::string> *deviceIds = &mNormalDeviceIdsWithoutSystemCamera;
     auto callingPid = CameraThreadState::getCallingPid();
     auto callingUid = CameraThreadState::getCallingUid();
-    if (checkPermission(sSystemCameraPermission, callingPid, callingUid) ||
-            getpid() == callingPid) {
+    if (checkPermission(sSystemCameraPermission, callingPid, callingUid,
+            /*logPermissionFailure*/false) || getpid() == callingPid) {
         deviceIds = &mNormalDeviceIds;
     }
     if (cameraIdInt < 0 || cameraIdInt >= static_cast<int>(deviceIds->size())) {
@@ -1597,7 +1599,7 @@ bool CameraService::shouldRejectSystemCameraConnection(const String8& cameraId) 
     //     same behavior for system camera devices.
     if (getCurrentServingCall() != BinderCallType::HWBINDER &&
             systemCameraKind == SystemCameraKind::SYSTEM_ONLY_CAMERA &&
-            !hasPermissionsForSystemCamera(cPid, cUid)) {
+            !hasPermissionsForSystemCamera(cPid, cUid, /*logPermissionFailure*/true)) {
         ALOGW("Rejecting access to system only camera %s, inadequete permissions",
                 cameraId.c_str());
         return true;
@@ -1887,6 +1889,27 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
     int32_t openLatencyMs = ns2ms(systemTime() - openTimeNs);
     CameraServiceProxyWrapper::logOpen(cameraId, facing, clientPackageName,
             effectiveApiLevel, isNdk, openLatencyMs);
+
+    {
+        Mutex::Autolock lock(mInjectionParametersLock);
+        if (cameraId == mInjectionInternalCamId && mInjectionInitPending) {
+            mInjectionInitPending = false;
+            status_t res = NO_ERROR;
+            auto clientDescriptor = mActiveClientManager.get(mInjectionInternalCamId);
+            if (clientDescriptor != nullptr) {
+                BasicClient* baseClientPtr = clientDescriptor->getValue().get();
+                res = baseClientPtr->injectCamera(mInjectionExternalCamId, mCameraProviderManager);
+                if (res != OK) {
+                    mInjectionStatusListener->notifyInjectionError(mInjectionExternalCamId, res);
+                }
+            } else {
+                ALOGE("%s: Internal camera ID = %s 's client does not exist!",
+                        __FUNCTION__, mInjectionInternalCamId.string());
+                res = NO_INIT;
+                mInjectionStatusListener->notifyInjectionError(mInjectionExternalCamId, res);
+            }
+        }
+    }
 
     return ret;
 }
@@ -2336,7 +2359,7 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
     auto clientUid = CameraThreadState::getCallingUid();
     auto clientPid = CameraThreadState::getCallingPid();
     bool openCloseCallbackAllowed = checkPermission(sCameraOpenCloseListenerPermission,
-            clientPid, clientUid);
+            clientPid, clientUid, /*logPermissionFailure*/false);
 
     Mutex::Autolock lock(mServiceLock);
 
@@ -2548,7 +2571,7 @@ Status CameraService::injectCamera(
         const String16& externalCamId,
         const sp<ICameraInjectionCallback>& callback,
         /*out*/
-        sp<hardware::camera2::ICameraInjectionSession>* cameraInjectionSession) {
+        sp<ICameraInjectionSession>* cameraInjectionSession) {
     ATRACE_CALL();
 
     if (!checkCallingPermission(sCameraInjectExternalCameraPermission)) {
@@ -2565,18 +2588,30 @@ Status CameraService::injectCamera(
         __FUNCTION__, String8(packageName).string(),
         String8(internalCamId).string(), String8(externalCamId).string());
 
-    binder::Status ret = binder::Status::ok();
-    // TODO: Implement the injection camera function.
-    // ret = internalInjectCamera(...);
-    // if(!ret.isOk()) {
-    //     mInjectionStatusListener->notifyInjectionError(...);
-    //     return ret;
-    // }
-
+    {
+        Mutex::Autolock lock(mInjectionParametersLock);
+        mInjectionInternalCamId = String8(internalCamId);
+        mInjectionExternalCamId = String8(externalCamId);
+        status_t res = NO_ERROR;
+        auto clientDescriptor = mActiveClientManager.get(mInjectionInternalCamId);
+        // If the client already exists, we can directly connect to the camera device through the
+        // client's injectCamera(), otherwise we need to wait until the client is established
+        // (execute connectHelper()) before injecting the camera to the camera device.
+        if (clientDescriptor != nullptr) {
+            mInjectionInitPending = false;
+            BasicClient* baseClientPtr = clientDescriptor->getValue().get();
+            res = baseClientPtr->injectCamera(mInjectionExternalCamId, mCameraProviderManager);
+            if(res != OK) {
+                mInjectionStatusListener->notifyInjectionError(mInjectionExternalCamId, res);
+            }
+        } else {
+            mInjectionInitPending = true;
+        }
+    }
     mInjectionStatusListener->addListener(callback);
     *cameraInjectionSession = new CameraInjectionSession(this);
 
-    return ret;
+    return binder::Status::ok();
 }
 
 void CameraService::removeByClient(const BasicClient* client) {
@@ -3866,22 +3901,62 @@ void CameraService::InjectionStatusListener::removeListener() {
 }
 
 void CameraService::InjectionStatusListener::notifyInjectionError(
-        int errorCode) {
-    Mutex::Autolock lock(mListenerLock);
+        String8 injectedCamId, status_t err) {
     if (mCameraInjectionCallback == nullptr) {
         ALOGW("InjectionStatusListener: mCameraInjectionCallback == nullptr");
         return;
     }
-    mCameraInjectionCallback->onInjectionError(errorCode);
+
+    switch (err) {
+        case -ENODEV:
+            mCameraInjectionCallback->onInjectionError(
+                    ICameraInjectionCallback::ERROR_INJECTION_SESSION);
+            ALOGE("No camera device with ID \"%s\" currently available!",
+                    injectedCamId.string());
+            break;
+        case -EBUSY:
+            mCameraInjectionCallback->onInjectionError(
+                    ICameraInjectionCallback::ERROR_INJECTION_SESSION);
+            ALOGE("Higher-priority client using camera, ID \"%s\" currently unavailable!",
+                    injectedCamId.string());
+            break;
+        case DEAD_OBJECT:
+            mCameraInjectionCallback->onInjectionError(
+                    ICameraInjectionCallback::ERROR_INJECTION_SESSION);
+            ALOGE("Camera ID \"%s\" object is dead!",
+                    injectedCamId.string());
+            break;
+        case INVALID_OPERATION:
+            mCameraInjectionCallback->onInjectionError(
+                    ICameraInjectionCallback::ERROR_INJECTION_SESSION);
+            ALOGE("Camera ID \"%s\" encountered an operating or internal error!",
+                    injectedCamId.string());
+            break;
+        case UNKNOWN_TRANSACTION:
+            mCameraInjectionCallback->onInjectionError(
+                    ICameraInjectionCallback::ERROR_INJECTION_UNSUPPORTED);
+            ALOGE("Camera ID \"%s\" method doesn't support!",
+                    injectedCamId.string());
+            break;
+        default:
+            mCameraInjectionCallback->onInjectionError(
+                    ICameraInjectionCallback::ERROR_INJECTION_INVALID_ERROR);
+            ALOGE("Unexpected error %s (%d) opening camera \"%s\"!",
+                    strerror(-err), err, injectedCamId.string());
+    }
 }
 
 void CameraService::InjectionStatusListener::binderDied(
         const wp<IBinder>& /*who*/) {
-    Mutex::Autolock lock(mListenerLock);
     ALOGV("InjectionStatusListener: ICameraInjectionCallback has died");
     auto parent = mParent.promote();
     if (parent != nullptr) {
-        parent->stopInjectionImpl();
+        auto clientDescriptor = parent->mActiveClientManager.get(parent->mInjectionInternalCamId);
+        if (clientDescriptor != nullptr) {
+            BasicClient* baseClientPtr = clientDescriptor->getValue().get();
+            baseClientPtr->stopInjection();
+        }
+        parent->clearInjectionParameters();
     }
 }
 
@@ -3897,7 +3972,20 @@ binder::Status CameraService::CameraInjectionSession::stopInjection() {
         return STATUS_ERROR(ICameraInjectionCallback::ERROR_INJECTION_SERVICE,
                 "Camera service encountered error");
     }
-    parent->stopInjectionImpl();
+
+    status_t res = NO_ERROR;
+    auto clientDescriptor = parent->mActiveClientManager.get(parent->mInjectionInternalCamId);
+    if (clientDescriptor != nullptr) {
+        BasicClient* baseClientPtr = clientDescriptor->getValue().get();
+        res = baseClientPtr->stopInjection();
+        if (res != OK) {
+            ALOGE("CameraInjectionSession: Failed to stop the injection camera!"
+                " ret != NO_ERROR: %d", res);
+            return STATUS_ERROR(ICameraInjectionCallback::ERROR_INJECTION_SESSION,
+                "Camera session encountered error");
+        }
+    }
+    parent->clearInjectionParameters();
     return binder::Status::ok();
 }
 
@@ -4606,10 +4694,14 @@ int32_t CameraService::updateAudioRestrictionLocked() {
     return mode;
 }
 
-void CameraService::stopInjectionImpl() {
+void CameraService::clearInjectionParameters() {
+    {
+        Mutex::Autolock lock(mInjectionParametersLock);
+        mInjectionInitPending = true;
+        mInjectionInternalCamId = "";
+    }
+    mInjectionExternalCamId = "";
     mInjectionStatusListener->removeListener();
-
-    // TODO: Implement the stop injection function.
 }
 
 }; // namespace android

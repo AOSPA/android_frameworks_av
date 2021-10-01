@@ -336,7 +336,7 @@ status_t AudioSystem::getSamplingRate(audio_io_handle_t ioHandle,
     if (desc == 0) {
         *samplingRate = af->sampleRate(ioHandle);
     } else {
-        *samplingRate = desc->mSamplingRate;
+        *samplingRate = desc->getSamplingRate();
     }
     if (*samplingRate == 0) {
         ALOGE("AudioSystem::getSamplingRate failed for ioHandle %d", ioHandle);
@@ -371,7 +371,7 @@ status_t AudioSystem::getFrameCount(audio_io_handle_t ioHandle,
     if (desc == 0) {
         *frameCount = af->frameCount(ioHandle);
     } else {
-        *frameCount = desc->mFrameCount;
+        *frameCount = desc->getFrameCount();
     }
     if (*frameCount == 0) {
         ALOGE("AudioSystem::getFrameCount failed for ioHandle %d", ioHandle);
@@ -406,7 +406,7 @@ status_t AudioSystem::getLatency(audio_io_handle_t output,
     if (outputDesc == 0) {
         *latency = af->latency(output);
     } else {
-        *latency = outputDesc->mLatency;
+        *latency = outputDesc->getLatency();
     }
 
     ALOGV("getLatency() output %d, latency %d", output, *latency);
@@ -480,6 +480,12 @@ status_t AudioSystem::systemReady() {
     return af->systemReady();
 }
 
+status_t AudioSystem::audioPolicyReady() {
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == 0) return NO_INIT;
+    return af->audioPolicyReady();
+}
+
 status_t AudioSystem::getFrameCountHAL(audio_io_handle_t ioHandle,
                                        size_t* frameCount) {
     const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
@@ -488,7 +494,7 @@ status_t AudioSystem::getFrameCountHAL(audio_io_handle_t ioHandle,
     if (desc == 0) {
         *frameCount = af->frameCountHAL(ioHandle);
     } else {
-        *frameCount = desc->mFrameCountHAL;
+        *frameCount = desc->getFrameCountHAL();
     }
     if (*frameCount == 0) {
         ALOGE("AudioSystem::getFrameCountHAL failed for ioHandle %d", ioHandle);
@@ -529,15 +535,15 @@ void AudioSystem::AudioFlingerClient::binderDied(const wp<IBinder>& who __unused
 Status AudioSystem::AudioFlingerClient::ioConfigChanged(
         media::AudioIoConfigEvent _event,
         const media::AudioIoDescriptor& _ioDesc) {
-    audio_io_config_event event = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioIoConfigEvent_audio_io_config_event(_event));
+    audio_io_config_event_t event = VALUE_OR_RETURN_BINDER_STATUS(
+            aidl2legacy_AudioIoConfigEvent_audio_io_config_event_t(_event));
     sp<AudioIoDescriptor> ioDesc(
             VALUE_OR_RETURN_BINDER_STATUS(
                     aidl2legacy_AudioIoDescriptor_AudioIoDescriptor(_ioDesc)));
 
     ALOGV("ioConfigChanged() event %d", event);
 
-    if (ioDesc->mIoHandle == AUDIO_IO_HANDLE_NONE) return Status::ok();
+    if (ioDesc->getIoHandle() == AUDIO_IO_HANDLE_NONE) return Status::ok();
 
     audio_port_handle_t deviceId = AUDIO_PORT_HANDLE_NONE;
     std::vector<sp<AudioDeviceCallback>> callbacksToCall;
@@ -550,93 +556,88 @@ Status AudioSystem::AudioFlingerClient::ioConfigChanged(
             case AUDIO_OUTPUT_REGISTERED:
             case AUDIO_INPUT_OPENED:
             case AUDIO_INPUT_REGISTERED: {
-                sp<AudioIoDescriptor> oldDesc = getIoDescriptor_l(ioDesc->mIoHandle);
+                sp<AudioIoDescriptor> oldDesc = getIoDescriptor_l(ioDesc->getIoHandle());
                 if (oldDesc == 0) {
-                    mIoDescriptors.add(ioDesc->mIoHandle, ioDesc);
+                    mIoDescriptors.add(ioDesc->getIoHandle(), ioDesc);
                 } else {
                     deviceId = oldDesc->getDeviceId();
-                    mIoDescriptors.replaceValueFor(ioDesc->mIoHandle, ioDesc);
+                    mIoDescriptors.replaceValueFor(ioDesc->getIoHandle(), ioDesc);
                 }
 
                 if (ioDesc->getDeviceId() != AUDIO_PORT_HANDLE_NONE) {
                     deviceId = ioDesc->getDeviceId();
                     if (event == AUDIO_OUTPUT_OPENED || event == AUDIO_INPUT_OPENED) {
-                        auto it = mAudioDeviceCallbacks.find(ioDesc->mIoHandle);
+                        auto it = mAudioDeviceCallbacks.find(ioDesc->getIoHandle());
                         if (it != mAudioDeviceCallbacks.end()) {
                             callbacks = it->second;
                         }
                     }
                 }
-                ALOGV("ioConfigChanged() new %s %s %d samplingRate %u, format %#x channel mask %#x "
-                      "frameCount %zu deviceId %d",
+                ALOGV("ioConfigChanged() new %s %s %s",
                       event == AUDIO_OUTPUT_OPENED || event == AUDIO_OUTPUT_REGISTERED ?
                       "output" : "input",
                       event == AUDIO_OUTPUT_OPENED || event == AUDIO_INPUT_OPENED ?
                       "opened" : "registered",
-                      ioDesc->mIoHandle, ioDesc->mSamplingRate, ioDesc->mFormat,
-                      ioDesc->mChannelMask,
-                      ioDesc->mFrameCount, ioDesc->getDeviceId());
+                      ioDesc->toDebugString().c_str());
             }
                 break;
             case AUDIO_OUTPUT_CLOSED:
             case AUDIO_INPUT_CLOSED: {
-                if (getIoDescriptor_l(ioDesc->mIoHandle) == 0) {
+                if (getIoDescriptor_l(ioDesc->getIoHandle()) == 0) {
                     ALOGW("ioConfigChanged() closing unknown %s %d",
-                          event == AUDIO_OUTPUT_CLOSED ? "output" : "input", ioDesc->mIoHandle);
+                          event == AUDIO_OUTPUT_CLOSED ? "output" : "input", ioDesc->getIoHandle());
                     break;
                 }
                 ALOGV("ioConfigChanged() %s %d closed",
-                      event == AUDIO_OUTPUT_CLOSED ? "output" : "input", ioDesc->mIoHandle);
+                      event == AUDIO_OUTPUT_CLOSED ? "output" : "input", ioDesc->getIoHandle());
 
-                mIoDescriptors.removeItem(ioDesc->mIoHandle);
-                mAudioDeviceCallbacks.erase(ioDesc->mIoHandle);
+                mIoDescriptors.removeItem(ioDesc->getIoHandle());
+                mAudioDeviceCallbacks.erase(ioDesc->getIoHandle());
             }
                 break;
 
             case AUDIO_OUTPUT_CONFIG_CHANGED:
             case AUDIO_INPUT_CONFIG_CHANGED: {
-                sp<AudioIoDescriptor> oldDesc = getIoDescriptor_l(ioDesc->mIoHandle);
+                sp<AudioIoDescriptor> oldDesc = getIoDescriptor_l(ioDesc->getIoHandle());
                 if (oldDesc == 0) {
                     ALOGW("ioConfigChanged() modifying unknown %s! %d",
                           event == AUDIO_OUTPUT_CONFIG_CHANGED ? "output" : "input",
-                          ioDesc->mIoHandle);
+                          ioDesc->getIoHandle());
                     break;
                 }
 
                 deviceId = oldDesc->getDeviceId();
-                mIoDescriptors.replaceValueFor(ioDesc->mIoHandle, ioDesc);
+                mIoDescriptors.replaceValueFor(ioDesc->getIoHandle(), ioDesc);
 
                 if (deviceId != ioDesc->getDeviceId()) {
                     deviceId = ioDesc->getDeviceId();
-                    auto it = mAudioDeviceCallbacks.find(ioDesc->mIoHandle);
+                    auto it = mAudioDeviceCallbacks.find(ioDesc->getIoHandle());
                     if (it != mAudioDeviceCallbacks.end()) {
                         callbacks = it->second;
                     }
                 }
-                ALOGV("ioConfigChanged() new config for %s %d samplingRate %u, format %#x "
-                      "channel mask %#x frameCount %zu frameCountHAL %zu deviceId %d",
+                ALOGV("ioConfigChanged() new config for %s %s",
                       event == AUDIO_OUTPUT_CONFIG_CHANGED ? "output" : "input",
-                      ioDesc->mIoHandle, ioDesc->mSamplingRate, ioDesc->mFormat,
-                      ioDesc->mChannelMask, ioDesc->mFrameCount, ioDesc->mFrameCountHAL,
-                      ioDesc->getDeviceId());
+                      ioDesc->toDebugString().c_str());
 
             }
                 break;
             case AUDIO_CLIENT_STARTED: {
-                sp<AudioIoDescriptor> oldDesc = getIoDescriptor_l(ioDesc->mIoHandle);
+                sp<AudioIoDescriptor> oldDesc = getIoDescriptor_l(ioDesc->getIoHandle());
                 if (oldDesc == 0) {
-                    ALOGW("ioConfigChanged() start client on unknown io! %d", ioDesc->mIoHandle);
+                    ALOGW("ioConfigChanged() start client on unknown io! %d",
+                            ioDesc->getIoHandle());
                     break;
                 }
                 ALOGV("ioConfigChanged() AUDIO_CLIENT_STARTED  io %d port %d num callbacks %zu",
-                      ioDesc->mIoHandle, ioDesc->mPortId, mAudioDeviceCallbacks.size());
-                oldDesc->mPatch = ioDesc->mPatch;
-                auto it = mAudioDeviceCallbacks.find(ioDesc->mIoHandle);
+                      ioDesc->getIoHandle(), ioDesc->getPortId(), mAudioDeviceCallbacks.size());
+                oldDesc->setPatch(ioDesc->getPatch());
+                auto it = mAudioDeviceCallbacks.find(ioDesc->getIoHandle());
                 if (it != mAudioDeviceCallbacks.end()) {
                     auto cbks = it->second;
-                    auto it2 = cbks.find(ioDesc->mPortId);
+                    auto it2 = cbks.find(ioDesc->getPortId());
                     if (it2 != cbks.end()) {
-                        callbacks.emplace(ioDesc->mPortId, it2->second);
+                        callbacks.emplace(ioDesc->getPortId(), it2->second);
                         deviceId = oldDesc->getDeviceId();
                     }
                 }
@@ -655,8 +656,8 @@ Status AudioSystem::AudioFlingerClient::ioConfigChanged(
     // Callbacks must be called without mLock held. May lead to dead lock if calling for
     // example getRoutedDevice that updates the device and tries to acquire mLock.
     for (auto cb  : callbacksToCall) {
-        // If callbacksToCall is not empty, it implies ioDesc->mIoHandle and deviceId are valid
-        cb->onAudioDeviceUpdate(ioDesc->mIoHandle, deviceId);
+        // If callbacksToCall is not empty, it implies ioDesc->getIoHandle() and deviceId are valid
+        cb->onAudioDeviceUpdate(ioDesc->getIoHandle(), deviceId);
     }
 
     return Status::ok();
@@ -846,7 +847,8 @@ status_t AudioSystem::setDeviceConnectionState(audio_devices_t device,
     }
 
     media::AudioDevice deviceAidl;
-    deviceAidl.type = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_devices_t_int32_t(device));
+    deviceAidl.type = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     deviceAidl.address = address;
 
     return statusTFromBinderStatus(
@@ -855,7 +857,8 @@ status_t AudioSystem::setDeviceConnectionState(audio_devices_t device,
                     VALUE_OR_RETURN_STATUS(
                             legacy2aidl_audio_policy_dev_state_t_AudioPolicyDeviceState(state)),
                     name,
-                    VALUE_OR_RETURN_STATUS(legacy2aidl_audio_format_t_AudioFormat(encodedFormat))));
+                    VALUE_OR_RETURN_STATUS(
+                            legacy2aidl_audio_format_t_AudioFormatDescription(encodedFormat))));
 }
 
 audio_policy_dev_state_t AudioSystem::getDeviceConnectionState(audio_devices_t device,
@@ -865,7 +868,8 @@ audio_policy_dev_state_t AudioSystem::getDeviceConnectionState(audio_devices_t d
 
     auto result = [&]() -> ConversionResult<audio_policy_dev_state_t> {
         media::AudioDevice deviceAidl;
-        deviceAidl.type = VALUE_OR_RETURN(legacy2aidl_audio_devices_t_int32_t(device));
+        deviceAidl.type = VALUE_OR_RETURN(
+                legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
         deviceAidl.address = device_address;
 
         media::AudioPolicyDeviceState result;
@@ -895,12 +899,13 @@ status_t AudioSystem::handleDeviceConfigChange(audio_devices_t device,
     }
 
     media::AudioDevice deviceAidl;
-    deviceAidl.type = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_devices_t_int32_t(device));
+    deviceAidl.type = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     deviceAidl.address = address;
 
     return statusTFromBinderStatus(
             aps->handleDeviceConfigChange(deviceAidl, name, VALUE_OR_RETURN_STATUS(
-                    legacy2aidl_audio_format_t_AudioFormat(encodedFormat))));
+                    legacy2aidl_audio_format_t_AudioFormatDescription(encodedFormat))));
 }
 
 status_t AudioSystem::setPhoneState(audio_mode_t state, uid_t uid) {
@@ -998,7 +1003,7 @@ status_t AudioSystem::getOutputForAttr(audio_attributes_t* attr,
             legacy2aidl_audio_attributes_t_AudioAttributesInternal(*attr));
     int32_t sessionAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_session_t_int32_t(session));
     media::AudioConfig configAidl = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_audio_config_t_AudioConfig(*config));
+            legacy2aidl_audio_config_t_AudioConfig(*config, false /*isInput*/));
     int32_t flagsAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_output_flags_t_int32_t_mask(flags));
     int32_t selectedDeviceIdAidl = VALUE_OR_RETURN_STATUS(
@@ -1092,7 +1097,7 @@ status_t AudioSystem::getInputForAttr(const audio_attributes_t* attr,
     int32_t riidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_unique_id_t_int32_t(riid));
     int32_t sessionAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_session_t_int32_t(session));
     media::AudioConfigBase configAidl = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_audio_config_base_t_AudioConfigBase(*config));
+            legacy2aidl_audio_config_base_t_AudioConfigBase(*config, true /*isInput*/));
     int32_t flagsAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_input_flags_t_int32_t_mask(flags));
     int32_t selectedDeviceIdAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_port_handle_t_int32_t(*selectedDeviceId));
@@ -1165,7 +1170,8 @@ status_t AudioSystem::setStreamVolumeIndex(audio_stream_type_t stream,
     media::AudioStreamType streamAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_stream_type_t_AudioStreamType(stream));
     int32_t indexAidl = VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(index));
-    int32_t deviceAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_devices_t_int32_t(device));
+    media::AudioDeviceDescription deviceAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     return statusTFromBinderStatus(
             aps->setStreamVolumeIndex(streamAidl, deviceAidl, indexAidl));
 }
@@ -1178,7 +1184,8 @@ status_t AudioSystem::getStreamVolumeIndex(audio_stream_type_t stream,
 
     media::AudioStreamType streamAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_stream_type_t_AudioStreamType(stream));
-    int32_t deviceAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_devices_t_int32_t(device));
+    media::AudioDeviceDescription deviceAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     int32_t indexAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
             aps->getStreamVolumeIndex(streamAidl, deviceAidl, &indexAidl)));
@@ -1197,7 +1204,8 @@ status_t AudioSystem::setVolumeIndexForAttributes(const audio_attributes_t& attr
     media::AudioAttributesInternal attrAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_attributes_t_AudioAttributesInternal(attr));
     int32_t indexAidl = VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(index));
-    int32_t deviceAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_devices_t_int32_t(device));
+    media::AudioDeviceDescription deviceAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     return statusTFromBinderStatus(
             aps->setVolumeIndexForAttributes(attrAidl, deviceAidl, indexAidl));
 }
@@ -1210,7 +1218,8 @@ status_t AudioSystem::getVolumeIndexForAttributes(const audio_attributes_t& attr
 
     media::AudioAttributesInternal attrAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_attributes_t_AudioAttributesInternal(attr));
-    int32_t deviceAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_devices_t_int32_t(device));
+    media::AudioDeviceDescription deviceAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
     int32_t indexAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
             aps->getVolumeIndexForAttributes(attrAidl, deviceAidl, &indexAidl)));
@@ -1259,19 +1268,20 @@ product_strategy_t AudioSystem::getStrategyForStream(audio_stream_type_t stream)
     return result.value_or(PRODUCT_STRATEGY_NONE);
 }
 
-audio_devices_t AudioSystem::getDevicesForStream(audio_stream_type_t stream) {
+DeviceTypeSet AudioSystem::getDevicesForStream(audio_stream_type_t stream) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
-    if (aps == 0) return AUDIO_DEVICE_NONE;
+    if (aps == 0) return DeviceTypeSet{};
 
-    auto result = [&]() -> ConversionResult<audio_devices_t> {
+    auto result = [&]() -> ConversionResult<DeviceTypeSet> {
         media::AudioStreamType streamAidl = VALUE_OR_RETURN(
                 legacy2aidl_audio_stream_type_t_AudioStreamType(stream));
-        int32_t resultAidl;
+        std::vector<media::AudioDeviceDescription> resultAidl;
         RETURN_IF_ERROR(statusTFromBinderStatus(
                 aps->getDevicesForStream(streamAidl, &resultAidl)));
-        return aidl2legacy_int32_t_audio_devices_t(resultAidl);
+        return convertContainer<DeviceTypeSet>(resultAidl,
+                aidl2legacy_AudioDeviceDescription_audio_devices_t);
     }();
-    return result.value_or(AUDIO_DEVICE_NONE);
+    return result.value_or(DeviceTypeSet{});
 }
 
 status_t AudioSystem::getDevicesForAttributes(const AudioAttributes& aa,
@@ -1690,7 +1700,8 @@ status_t AudioSystem::acquireSoundTriggerSession(audio_session_t* session,
             statusTFromBinderStatus(aps->acquireSoundTriggerSession(&retAidl)));
     *session = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_audio_session_t(retAidl.session));
     *ioHandle = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_audio_io_handle_t(retAidl.ioHandle));
-    *device = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_audio_devices_t(retAidl.device));
+    *device = VALUE_OR_RETURN_STATUS(
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(retAidl.device));
     return OK;
 }
 
@@ -1830,7 +1841,8 @@ AudioSystem::getStreamVolumeDB(audio_stream_type_t stream, int index, audio_devi
         media::AudioStreamType streamAidl = VALUE_OR_RETURN(
                 legacy2aidl_audio_stream_type_t_AudioStreamType(stream));
         int32_t indexAidl = VALUE_OR_RETURN(convertIntegral<int32_t>(index));
-        int32_t deviceAidl = VALUE_OR_RETURN(legacy2aidl_audio_devices_t_int32_t(device));
+        media::AudioDeviceDescription deviceAidl = VALUE_OR_RETURN(
+                legacy2aidl_audio_devices_t_AudioDeviceDescription(device));
         float retAidl;
         RETURN_IF_ERROR(statusTFromBinderStatus(
                 aps->getStreamVolumeDB(streamAidl, indexAidl, deviceAidl, &retAidl)));
@@ -1865,7 +1877,7 @@ status_t AudioSystem::getSurroundFormats(unsigned int* numSurroundFormats,
     media::Int numSurroundFormatsAidl;
     numSurroundFormatsAidl.value =
             VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(*numSurroundFormats));
-    std::vector<media::audio::common::AudioFormat> surroundFormatsAidl;
+    std::vector<media::AudioFormatDescription> surroundFormatsAidl;
     std::vector<bool> surroundFormatsEnabledAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
             aps->getSurroundFormats(&numSurroundFormatsAidl, &surroundFormatsAidl,
@@ -1875,7 +1887,7 @@ status_t AudioSystem::getSurroundFormats(unsigned int* numSurroundFormats,
             convertIntegral<unsigned int>(numSurroundFormatsAidl.value));
     RETURN_STATUS_IF_ERROR(
             convertRange(surroundFormatsAidl.begin(), surroundFormatsAidl.end(), surroundFormats,
-                         aidl2legacy_AudioFormat_audio_format_t));
+                         aidl2legacy_AudioFormatDescription_audio_format_t));
     std::copy(surroundFormatsEnabledAidl.begin(), surroundFormatsEnabledAidl.end(),
             surroundFormatsEnabled);
     return OK;
@@ -1892,7 +1904,7 @@ status_t AudioSystem::getReportedSurroundFormats(unsigned int* numSurroundFormat
     media::Int numSurroundFormatsAidl;
     numSurroundFormatsAidl.value =
             VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(*numSurroundFormats));
-    std::vector<media::audio::common::AudioFormat> surroundFormatsAidl;
+    std::vector<media::AudioFormatDescription> surroundFormatsAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
             aps->getReportedSurroundFormats(&numSurroundFormatsAidl, &surroundFormatsAidl)));
 
@@ -1900,7 +1912,7 @@ status_t AudioSystem::getReportedSurroundFormats(unsigned int* numSurroundFormat
             convertIntegral<unsigned int>(numSurroundFormatsAidl.value));
     RETURN_STATUS_IF_ERROR(
             convertRange(surroundFormatsAidl.begin(), surroundFormatsAidl.end(), surroundFormats,
-                         aidl2legacy_AudioFormat_audio_format_t));
+                         aidl2legacy_AudioFormatDescription_audio_format_t));
     return OK;
 }
 
@@ -1908,8 +1920,8 @@ status_t AudioSystem::setSurroundFormatEnabled(audio_format_t audioFormat, bool 
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
-    media::audio::common::AudioFormat audioFormatAidl = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_audio_format_t_AudioFormat(audioFormat));
+    media::AudioFormatDescription audioFormatAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_format_t_AudioFormatDescription(audioFormat));
     return statusTFromBinderStatus(
             aps->setSurroundFormatEnabled(audioFormatAidl, enabled));
 }
@@ -1970,12 +1982,13 @@ status_t AudioSystem::getHwOffloadEncodingFormatsSupportedForA2DP(
             & aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
-    std::vector<media::audio::common::AudioFormat> formatsAidl;
+    std::vector<media::AudioFormatDescription> formatsAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
             aps->getHwOffloadEncodingFormatsSupportedForA2DP(&formatsAidl)));
     *formats = VALUE_OR_RETURN_STATUS(
-            convertContainer<std::vector<audio_format_t>>(formatsAidl,
-                                                          aidl2legacy_AudioFormat_audio_format_t));
+            convertContainer<std::vector<audio_format_t>>(
+                    formatsAidl,
+                    aidl2legacy_AudioFormatDescription_audio_format_t));
     return OK;
 }
 
@@ -2426,13 +2439,13 @@ Status AudioSystem::AudioPolicyServiceClient::onRecordingConfigurationUpdate(
         record_client_info_t clientInfoLegacy = VALUE_OR_RETURN_BINDER_STATUS(
                 aidl2legacy_RecordClientInfo_record_client_info_t(clientInfo));
         audio_config_base_t clientConfigLegacy = VALUE_OR_RETURN_BINDER_STATUS(
-                aidl2legacy_AudioConfigBase_audio_config_base_t(clientConfig));
+                aidl2legacy_AudioConfigBase_audio_config_base_t(clientConfig, true /*isInput*/));
         std::vector<effect_descriptor_t> clientEffectsLegacy = VALUE_OR_RETURN_BINDER_STATUS(
                 convertContainer<std::vector<effect_descriptor_t>>(
                         clientEffects,
                         aidl2legacy_EffectDescriptor_effect_descriptor_t));
         audio_config_base_t deviceConfigLegacy = VALUE_OR_RETURN_BINDER_STATUS(
-                aidl2legacy_AudioConfigBase_audio_config_base_t(deviceConfig));
+                aidl2legacy_AudioConfigBase_audio_config_base_t(deviceConfig, true /*isInput*/));
         std::vector<effect_descriptor_t> effectsLegacy = VALUE_OR_RETURN_BINDER_STATUS(
                 convertContainer<std::vector<effect_descriptor_t>>(
                         effects,

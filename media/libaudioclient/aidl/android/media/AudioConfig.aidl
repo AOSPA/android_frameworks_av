@@ -16,20 +16,17 @@
 
 package android.media;
 
+import android.media.AudioChannelLayout;
+import android.media.AudioFormatDescription;
 import android.media.AudioOffloadInfo;
-import android.media.audio.common.AudioFormat;
 
 /**
  * {@hide}
  */
 parcelable AudioConfig {
     int sampleRate;
-    /**
-     * Interpreted as audio_channel_mask_t.
-     * TODO(ytai): Create a designated type.
-     */
-    int channelMask;
-    AudioFormat format;
+    AudioChannelLayout channelMask;
+    AudioFormatDescription format;
     AudioOffloadInfo offloadInfo;
     long frameCount;
 }

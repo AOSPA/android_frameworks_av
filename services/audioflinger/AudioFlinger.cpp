@@ -336,11 +336,11 @@ status_t AudioFlinger::updateSecondaryOutputs(
 }
 
 // getDefaultVibratorInfo_l must be called with AudioFlinger lock held.
-const media::AudioVibratorInfo* AudioFlinger::getDefaultVibratorInfo_l() {
+std::optional<media::AudioVibratorInfo> AudioFlinger::getDefaultVibratorInfo_l() {
     if (mAudioVibratorInfos.empty()) {
-        return nullptr;
+        return {};
     }
-    return &mAudioVibratorInfos.front();
+    return mAudioVibratorInfos.front();
 }
 
 AudioFlinger::~AudioFlinger()
@@ -695,7 +695,7 @@ status_t AudioFlinger::dump(int fd, const Vector<String16>& args)
         // dump all hardware devs
         for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
             sp<DeviceHalInterface> dev = mAudioHwDevs.valueAt(i)->hwDevice();
-            dev->dump(fd);
+            dev->dump(fd, args);
         }
 
         mPatchPanel.dump(fd);
@@ -997,8 +997,9 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
                 }
             }
         }
-
-        setAudioHwSyncForSession_l(thread, sessionId);
+        if ((output.flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) == AUDIO_OUTPUT_FLAG_HW_AV_SYNC) {
+            setAudioHwSyncForSession_l(thread, sessionId);
+        }
     }
 
     if (lStatus != NO_ERROR) {
@@ -1873,13 +1874,13 @@ void AudioFlinger::removeNotificationClient(pid_t pid)
     }
 }
 
-void AudioFlinger::ioConfigChanged(audio_io_config_event event,
+void AudioFlinger::ioConfigChanged(audio_io_config_event_t event,
                                    const sp<AudioIoDescriptor>& ioDesc,
                                    pid_t pid) {
+    media::AudioIoConfigEvent eventAidl = VALUE_OR_FATAL(
+            legacy2aidl_audio_io_config_event_t_AudioIoConfigEvent(event));
     media::AudioIoDescriptor descAidl = VALUE_OR_FATAL(
             legacy2aidl_AudioIoDescriptor_AudioIoDescriptor(ioDesc));
-    media::AudioIoConfigEvent eventAidl = VALUE_OR_FATAL(
-            legacy2aidl_audio_io_config_event_AudioIoConfigEvent(event));
 
     Mutex::Autolock _l(mClientLock);
     size_t size = mNotificationClients.size();
@@ -2456,6 +2457,10 @@ status_t AudioFlinger::systemReady()
         ThreadBase *thread = (ThreadBase *)mRecordThreads.valueAt(i).get();
         thread->systemReady();
     }
+    for (size_t i = 0; i < mMmapThreads.size(); i++) {
+        ThreadBase *thread = (ThreadBase *)mMmapThreads.valueAt(i).get();
+        thread->systemReady();
+    }
     return NO_ERROR;
 }
 
@@ -2502,7 +2507,8 @@ void AudioFlinger::setAudioHwSyncForSession_l(PlaybackThread *thread, audio_sess
 
 sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t module,
                                                         audio_io_handle_t *output,
-                                                        audio_config_t *config,
+                                                        audio_config_t *halConfig,
+                                                        audio_config_base_t *mixerConfig __unused,
                                                         audio_devices_t deviceType,
                                                         const String8& address,
                                                         audio_output_flags_t flags)
@@ -2530,16 +2536,16 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
         // Check only for Normal Mixing mode
         if (kEnableExtendedPrecision) {
             // Specify format (uncomment one below to choose)
-            //config->format = AUDIO_FORMAT_PCM_FLOAT;
-            //config->format = AUDIO_FORMAT_PCM_24_BIT_PACKED;
-            //config->format = AUDIO_FORMAT_PCM_32_BIT;
-            //config->format = AUDIO_FORMAT_PCM_8_24_BIT;
-            // ALOGV("openOutput_l() upgrading format to %#08x", config->format);
+            //halConfig->format = AUDIO_FORMAT_PCM_FLOAT;
+            //halConfig->format = AUDIO_FORMAT_PCM_24_BIT_PACKED;
+            //halConfig->format = AUDIO_FORMAT_PCM_32_BIT;
+            //halConfig->format = AUDIO_FORMAT_PCM_8_24_BIT;
+            // ALOGV("openOutput_l() upgrading format to %#08x", halConfig->format);
         }
         if (kEnableExtendedChannels) {
             // Specify channel mask (uncomment one below to choose)
-            //config->channel_mask = audio_channel_out_mask_from_count(4);  // for USB 4ch
-            //config->channel_mask = audio_channel_mask_from_representation_and_bits(
+            //halConfig->channel_mask = audio_channel_out_mask_from_count(4);  // for USB 4ch
+            //halConfig->channel_mask = audio_channel_mask_from_representation_and_bits(
             //        AUDIO_CHANNEL_REPRESENTATION_INDEX, (1 << 4) - 1);  // another 4ch example
         }
     }
@@ -2550,7 +2556,7 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
             *output,
             deviceType,
             flags,
-            config,
+            halConfig,
             address.string());
 
     mHardwareStatus = AUDIO_HW_IDLE;
@@ -2565,13 +2571,20 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
             return thread;
         } else {
             sp<PlaybackThread> thread;
-            if (flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
+            //TODO: b/193496180 use virtualizer stage flag at audio HAL when available
+            if (flags == (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_FAST
+                                                    | AUDIO_OUTPUT_FLAG_DEEP_BUFFER)) {
+                thread = new VirtualizerStageThread(this, outputStream, *output,
+                                                    mSystemReady, mixerConfig);
+                ALOGD("openOutput_l() created virtualizer output: ID %d thread %p",
+                      *output, thread.get());
+            } else if (flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
                 thread = new OffloadThread(this, outputStream, *output, mSystemReady);
                 ALOGV("openOutput_l() created offload output: ID %d thread %p",
                       *output, thread.get());
             } else if ((flags & AUDIO_OUTPUT_FLAG_DIRECT)
-                    || !isValidPcmSinkFormat(config->format)
-                    || !isValidPcmSinkChannelMask(config->channel_mask)) {
+                    || !isValidPcmSinkFormat(halConfig->format)
+                    || !isValidPcmSinkChannelMask(halConfig->channel_mask)) {
                 thread = new DirectOutputThread(this, outputStream, *output, mSystemReady);
                 ALOGV("openOutput_l() created direct output: ID %d thread %p",
                       *output, thread.get());
@@ -2598,8 +2611,10 @@ status_t AudioFlinger::openOutput(const media::OpenOutputRequest& request,
 {
     audio_module_handle_t module = VALUE_OR_RETURN_STATUS(
             aidl2legacy_int32_t_audio_module_handle_t(request.module));
-    audio_config_t config = VALUE_OR_RETURN_STATUS(
-            aidl2legacy_AudioConfig_audio_config_t(request.config));
+    audio_config_t halConfig = VALUE_OR_RETURN_STATUS(
+            aidl2legacy_AudioConfig_audio_config_t(request.halConfig, false /*isInput*/));
+    audio_config_base_t mixerConfig = VALUE_OR_RETURN_STATUS(
+            aidl2legacy_AudioConfigBase_audio_config_base_t(request.mixerConfig, false/*isInput*/));
     sp<DeviceDescriptorBase> device = VALUE_OR_RETURN_STATUS(
             aidl2legacy_DeviceDescriptorBase(request.device));
     audio_output_flags_t flags = VALUE_OR_RETURN_STATUS(
@@ -2612,9 +2627,9 @@ status_t AudioFlinger::openOutput(const media::OpenOutputRequest& request,
               "Channels %#x, flags %#x",
               this, module,
               device->toString().c_str(),
-              config.sample_rate,
-              config.format,
-              config.channel_mask,
+              halConfig.sample_rate,
+              halConfig.format,
+              halConfig.channel_mask,
               flags);
 
     audio_devices_t deviceType = device->type();
@@ -2626,7 +2641,8 @@ status_t AudioFlinger::openOutput(const media::OpenOutputRequest& request,
 
     Mutex::Autolock _l(mLock);
 
-    sp<ThreadBase> thread = openOutput_l(module, &output, &config, deviceType, address, flags);
+    sp<ThreadBase> thread = openOutput_l(module, &output, &halConfig,
+            &mixerConfig, deviceType, address, flags);
     if (thread != 0) {
         if ((flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) == 0) {
             PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
@@ -2651,7 +2667,8 @@ status_t AudioFlinger::openOutput(const media::OpenOutputRequest& request,
             mmapThread->ioConfigChanged(AUDIO_OUTPUT_OPENED);
         }
         response->output = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_io_handle_t_int32_t(output));
-        response->config = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_config_t_AudioConfig(config));
+        response->config = VALUE_OR_RETURN_STATUS(
+                legacy2aidl_audio_config_t_AudioConfig(halConfig, false /*isInput*/));
         response->latencyMs = VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(latencyMs));
         response->flags = VALUE_OR_RETURN_STATUS(
                 legacy2aidl_audio_output_flags_t_int32_t_mask(flags));
@@ -2737,9 +2754,7 @@ status_t AudioFlinger::closeOutput_nonvirtual(audio_io_handle_t output)
             mMmapThreads.removeItem(output);
             ALOGD("closing mmapThread %p", mmapThread.get());
         }
-        const sp<AudioIoDescriptor> ioDesc = new AudioIoDescriptor();
-        ioDesc->mIoHandle = output;
-        ioConfigChanged(AUDIO_OUTPUT_CLOSED, ioDesc);
+        ioConfigChanged(AUDIO_OUTPUT_CLOSED, sp<AudioIoDescriptor>::make(output));
         mPatchPanel.notifyStreamClosed(output);
     }
     // The thread entity (active unit of execution) is no longer running here,
@@ -2812,16 +2827,16 @@ status_t AudioFlinger::openInput(const media::OpenInputRequest& request,
 {
     Mutex::Autolock _l(mLock);
 
-    if (request.device.type == AUDIO_DEVICE_NONE) {
+    AudioDeviceTypeAddr device = VALUE_OR_RETURN_STATUS(
+            aidl2legacy_AudioDeviceTypeAddress(request.device));
+    if (device.mType == AUDIO_DEVICE_NONE) {
         return BAD_VALUE;
     }
 
     audio_io_handle_t input = VALUE_OR_RETURN_STATUS(
             aidl2legacy_int32_t_audio_io_handle_t(request.input));
     audio_config_t config = VALUE_OR_RETURN_STATUS(
-            aidl2legacy_AudioConfig_audio_config_t(request.config));
-    AudioDeviceTypeAddr device = VALUE_OR_RETURN_STATUS(
-            aidl2legacy_AudioDeviceTypeAddress(request.device));
+            aidl2legacy_AudioConfig_audio_config_t(request.config, true /*isInput*/));
 
     sp<ThreadBase> thread = openInput_l(
             VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_audio_module_handle_t(request.module)),
@@ -2835,7 +2850,8 @@ status_t AudioFlinger::openInput(const media::OpenInputRequest& request,
             String8{});
 
     response->input = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_io_handle_t_int32_t(input));
-    response->config = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_config_t_AudioConfig(config));
+    response->config = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_config_t_AudioConfig(config, true /*isInput*/));
     response->device = request.device;
 
     if (thread != 0) {
@@ -2997,9 +3013,7 @@ status_t AudioFlinger::closeInput_nonvirtual(audio_io_handle_t input)
             dumpToThreadLog_l(mmapThread);
             mMmapThreads.removeItem(input);
         }
-        const sp<AudioIoDescriptor> ioDesc = new AudioIoDescriptor();
-        ioDesc->mIoHandle = input;
-        ioConfigChanged(AUDIO_INPUT_CLOSED, ioDesc);
+        ioConfigChanged(AUDIO_INPUT_CLOSED, sp<AudioIoDescriptor>::make(input));
     }
     // FIXME: calling thread->exit() without mLock held should not be needed anymore now that
     // we have a different lock for notification client
@@ -3798,7 +3812,8 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
                 io = mPlaybackThreads.keyAt(0);
             }
             ALOGV("createEffect() got io %d for effect %s", io, descOut.name);
-        } else if (checkPlaybackThread_l(io) != nullptr) {
+        } else if (checkPlaybackThread_l(io) != nullptr
+                        && sessionId != AUDIO_SESSION_OUTPUT_STAGE) {
             // allow only one effect chain per sessionId on mPlaybackThreads.
             for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
                 const audio_io_handle_t checkIo = mPlaybackThreads.keyAt(i);
@@ -4179,6 +4194,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::LIST_AUDIO_PATCHES:
         case TransactionCode::SET_AUDIO_PORT_CONFIG:
         case TransactionCode::SET_RECORD_SILENCED:
+        case TransactionCode::AUDIO_POLICY_READY:
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, code, IPCThreadState::self()->getCallingPid());
             // return status only for non void methods

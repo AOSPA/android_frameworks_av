@@ -22,14 +22,17 @@
 #include <system/audio.h>
 
 #include <android/media/AudioAttributesInternal.h>
+#include <android/media/AudioChannelLayout.h>
 #include <android/media/AudioClient.h>
 #include <android/media/AudioConfig.h>
 #include <android/media/AudioConfigBase.h>
+#include <android/media/AudioDeviceDescription.h>
 #include <android/media/AudioDualMonoMode.h>
 #include <android/media/AudioEncapsulationMode.h>
 #include <android/media/AudioEncapsulationMetadataType.h>
 #include <android/media/AudioEncapsulationType.h>
 #include <android/media/AudioFlag.h>
+#include <android/media/AudioFormatDescription.h>
 #include <android/media/AudioGain.h>
 #include <android/media/AudioGainMode.h>
 #include <android/media/AudioInputFlags.h>
@@ -96,9 +99,6 @@ ConversionResult<media::AudioPortConfigType> legacy2aidl_int32_t_AudioPortConfig
 ConversionResult<unsigned int> aidl2legacy_int32_t_config_mask(int32_t aidl);
 ConversionResult<int32_t> legacy2aidl_config_mask_int32_t(unsigned int legacy);
 
-ConversionResult<audio_channel_mask_t> aidl2legacy_int32_t_audio_channel_mask_t(int32_t aidl);
-ConversionResult<int32_t> legacy2aidl_audio_channel_mask_t_int32_t(audio_channel_mask_t legacy);
-
 ConversionResult<pid_t> aidl2legacy_int32_t_pid_t(int32_t aidl);
 ConversionResult<int32_t> legacy2aidl_pid_t_int32_t(pid_t legacy);
 
@@ -116,10 +116,10 @@ aidl2legacy_optional_string_view_optional_String16(std::optional<std::string_vie
 ConversionResult<std::optional<std::string_view>>
 legacy2aidl_optional_String16_optional_string(std::optional<String16> legacy);
 
-ConversionResult<audio_io_config_event> aidl2legacy_AudioIoConfigEvent_audio_io_config_event(
+ConversionResult<audio_io_config_event_t> aidl2legacy_AudioIoConfigEvent_audio_io_config_event_t(
         media::AudioIoConfigEvent aidl);
-ConversionResult<media::AudioIoConfigEvent> legacy2aidl_audio_io_config_event_AudioIoConfigEvent(
-        audio_io_config_event legacy);
+ConversionResult<media::AudioIoConfigEvent> legacy2aidl_audio_io_config_event_t_AudioIoConfigEvent(
+        audio_io_config_event_t legacy);
 
 ConversionResult<audio_port_role_t> aidl2legacy_AudioPortRole_audio_port_role_t(
         media::AudioPortRole aidl);
@@ -131,9 +131,19 @@ ConversionResult<audio_port_type_t> aidl2legacy_AudioPortType_audio_port_type_t(
 ConversionResult<media::AudioPortType> legacy2aidl_audio_port_type_t_AudioPortType(
         audio_port_type_t legacy);
 
-ConversionResult<audio_format_t> aidl2legacy_AudioFormat_audio_format_t(
-        media::audio::common::AudioFormat aidl);
-ConversionResult<media::audio::common::AudioFormat> legacy2aidl_audio_format_t_AudioFormat(
+ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_channel_mask_t(
+        const media::AudioChannelLayout& aidl, bool isInput);
+ConversionResult<media::AudioChannelLayout> legacy2aidl_audio_channel_mask_t_AudioChannelLayout(
+        audio_channel_mask_t legacy, bool isInput);
+
+ConversionResult<audio_devices_t> aidl2legacy_AudioDeviceDescription_audio_devices_t(
+        const media::AudioDeviceDescription& aidl);
+ConversionResult<media::AudioDeviceDescription> legacy2aidl_audio_devices_t_AudioDeviceDescription(
+        audio_devices_t legacy);
+
+ConversionResult<audio_format_t> aidl2legacy_AudioFormatDescription_audio_format_t(
+        const media::AudioFormatDescription& aidl);
+ConversionResult<media::AudioFormatDescription> legacy2aidl_audio_format_t_AudioFormatDescription(
         audio_format_t legacy);
 
 ConversionResult<audio_gain_mode_t>
@@ -143,9 +153,6 @@ legacy2aidl_audio_gain_mode_t_AudioGainMode(audio_gain_mode_t legacy);
 
 ConversionResult<audio_gain_mode_t> aidl2legacy_int32_t_audio_gain_mode_t_mask(int32_t aidl);
 ConversionResult<int32_t> legacy2aidl_audio_gain_mode_t_int32_t_mask(audio_gain_mode_t legacy);
-
-ConversionResult<audio_devices_t> aidl2legacy_int32_t_audio_devices_t(int32_t aidl);
-ConversionResult<int32_t> legacy2aidl_audio_devices_t_int32_t(audio_devices_t legacy);
 
 ConversionResult<audio_gain_config> aidl2legacy_AudioGainConfig_audio_gain_config(
         const media::AudioGainConfig& aidl, media::AudioPortRole role, media::AudioPortType type);
@@ -221,7 +228,6 @@ ConversionResult<media::AudioPatch> legacy2aidl_audio_patch_AudioPatch(
 
 ConversionResult<sp<AudioIoDescriptor>> aidl2legacy_AudioIoDescriptor_AudioIoDescriptor(
         const media::AudioIoDescriptor& aidl);
-
 ConversionResult<media::AudioIoDescriptor> legacy2aidl_AudioIoDescriptor_AudioIoDescriptor(
         const sp<AudioIoDescriptor>& legacy);
 
@@ -266,14 +272,14 @@ ConversionResult<media::AudioOffloadInfo>
 legacy2aidl_audio_offload_info_t_AudioOffloadInfo(const audio_offload_info_t& legacy);
 
 ConversionResult<audio_config_t>
-aidl2legacy_AudioConfig_audio_config_t(const media::AudioConfig& aidl);
+aidl2legacy_AudioConfig_audio_config_t(const media::AudioConfig& aidl, bool isInput);
 ConversionResult<media::AudioConfig>
-legacy2aidl_audio_config_t_AudioConfig(const audio_config_t& legacy);
+legacy2aidl_audio_config_t_AudioConfig(const audio_config_t& legacy, bool isInput);
 
 ConversionResult<audio_config_base_t>
-aidl2legacy_AudioConfigBase_audio_config_base_t(const media::AudioConfigBase& aidl);
+aidl2legacy_AudioConfigBase_audio_config_base_t(const media::AudioConfigBase& aidl, bool isInput);
 ConversionResult<media::AudioConfigBase>
-legacy2aidl_audio_config_base_t_AudioConfigBase(const audio_config_base_t& legacy);
+legacy2aidl_audio_config_base_t_AudioConfigBase(const audio_config_base_t& legacy, bool isInput);
 
 ConversionResult<sp<IMemory>>
 aidl2legacy_SharedFileRegion_IMemory(const media::SharedFileRegion& aidl);
@@ -340,14 +346,15 @@ ConversionResult<media::AudioPortSessionExt>
 legacy2aidl_audio_port_session_ext_AudioPortSessionExt(const audio_port_session_ext& legacy);
 
 ConversionResult<audio_profile>
-aidl2legacy_AudioProfile_audio_profile(const media::AudioProfile& aidl);
+aidl2legacy_AudioProfile_audio_profile(const media::AudioProfile& aidl, bool isInput);
 ConversionResult<media::AudioProfile>
-legacy2aidl_audio_profile_AudioProfile(const audio_profile& legacy);
+legacy2aidl_audio_profile_AudioProfile(const audio_profile& legacy, bool isInput);
 
 ConversionResult<audio_gain>
 aidl2legacy_AudioGain_audio_gain(const media::AudioGain& aidl);
+// The AIDL structure provides a flag for direction indication while the legacy type doesn't.
 ConversionResult<media::AudioGain>
-legacy2aidl_audio_gain_AudioGain(const audio_gain& legacy);
+legacy2aidl_audio_gain_AudioGain(const audio_gain& legacy, bool isInput);
 
 ConversionResult<audio_port_v7>
 aidl2legacy_AudioPort_audio_port_v7(const media::AudioPort& aidl);

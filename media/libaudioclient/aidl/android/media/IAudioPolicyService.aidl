@@ -16,15 +16,15 @@
 
 package android.media;
 
+import android.media.AudioFormatDescription;
 import android.content.AttributionSourceState;
-
-import android.media.audio.common.AudioFormat;
 
 import android.media.AudioAttributesEx;
 import android.media.AudioAttributesInternal;
 import android.media.AudioConfig;
 import android.media.AudioConfigBase;
 import android.media.AudioDevice;
+import android.media.AudioDeviceDescription;
 import android.media.AudioMix;
 import android.media.AudioMode;
 import android.media.AudioOffloadInfo;
@@ -63,13 +63,13 @@ interface IAudioPolicyService {
     void setDeviceConnectionState(in AudioDevice device,
                                   in AudioPolicyDeviceState state,
                                   @utf8InCpp String deviceName,
-                                  in AudioFormat encodedFormat);
+                                  in AudioFormatDescription encodedFormat);
 
     AudioPolicyDeviceState getDeviceConnectionState(in AudioDevice device);
 
     void handleDeviceConfigChange(in AudioDevice device,
                                   @utf8InCpp String deviceName,
-                                  in AudioFormat encodedFormat);
+                                  in AudioFormatDescription encodedFormat);
 
     void setPhoneState(AudioMode state, int /* uid_t */ uid);
 
@@ -114,18 +114,18 @@ interface IAudioPolicyService {
                           int indexMax);
 
     void setStreamVolumeIndex(AudioStreamType stream,
-                              int /* audio_devices_t */ device,
+                              in AudioDeviceDescription device,
                               int index);
 
     int getStreamVolumeIndex(AudioStreamType stream,
-                             int /* audio_devices_t */ device);
+                             in AudioDeviceDescription device);
 
     void setVolumeIndexForAttributes(in AudioAttributesInternal attr,
-                                     int /* audio_devices_t */ device,
+                                     in AudioDeviceDescription device,
                                      int index);
 
     int getVolumeIndexForAttributes(in AudioAttributesInternal attr,
-                                    int /* audio_devices_t */ device);
+                                    in AudioDeviceDescription device);
 
     int getMaxVolumeIndexForAttributes(in AudioAttributesInternal attr);
 
@@ -133,7 +133,7 @@ interface IAudioPolicyService {
 
     int /* product_strategy_t */ getStrategyForStream(AudioStreamType stream);
 
-    int /* bitmask of audio_devices_t */ getDevicesForStream(AudioStreamType stream);
+    AudioDeviceDescription[] getDevicesForStream(AudioStreamType stream);
 
     AudioDevice[] getDevicesForAttributes(in AudioAttributesEx attr);
 
@@ -268,7 +268,7 @@ interface IAudioPolicyService {
 
     boolean getMasterMono();
 
-    float getStreamVolumeDB(AudioStreamType stream, int index, int /* audio_devices_t */ device);
+    float getStreamVolumeDB(AudioStreamType stream, int index, in AudioDeviceDescription device);
 
     /**
      * Populates supported surround formats and their enabled state in formats and formatsEnabled.
@@ -279,7 +279,7 @@ interface IAudioPolicyService {
      * number of elements without actually retrieving them.
      */
     void getSurroundFormats(inout Int count,
-                            out AudioFormat[] formats,
+                            out AudioFormatDescription[] formats,
                             out boolean[] formatsEnabled);
 
     /**
@@ -291,11 +291,11 @@ interface IAudioPolicyService {
      * number of elements without actually retrieving them.
      */
     void getReportedSurroundFormats(inout Int count,
-                                    out AudioFormat[] formats);
+                                    out AudioFormatDescription[] formats);
 
-    AudioFormat[] getHwOffloadEncodingFormatsSupportedForA2DP();
+    AudioFormatDescription[] getHwOffloadEncodingFormatsSupportedForA2DP();
 
-    void setSurroundFormatEnabled(AudioFormat audioFormat, boolean enabled);
+    void setSurroundFormatEnabled(in AudioFormatDescription audioFormat, boolean enabled);
 
     void setAssistantUid(int /* uid_t */ uid);
 

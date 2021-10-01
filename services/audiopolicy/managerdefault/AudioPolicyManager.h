@@ -193,7 +193,7 @@ public:
         }
 
         // return the enabled output devices for the given stream type
-        virtual audio_devices_t getDevicesForStream(audio_stream_type_t stream);
+        virtual DeviceTypeSet getDevicesForStream(audio_stream_type_t stream);
 
         virtual status_t getDevicesForAttributes(
                 const audio_attributes_t &attributes,
@@ -356,6 +356,16 @@ public:
             return (fallbackOnDefault && volumeGroup == VOLUME_GROUP_NONE) ?
                     BAD_VALUE : NO_ERROR;
         }
+
+        virtual bool canBeVirtualized(const audio_attributes_t *attr,
+                                      const audio_config_t *config,
+                                      const AudioDeviceTypeAddrVector &devices) const;
+
+        virtual status_t getVirtualizerStageOutput(const audio_config_base_t *config,
+                                                const audio_attributes_t *attr,
+                                                audio_io_handle_t *output);
+
+        virtual status_t releaseVirtualizerStageOutput(audio_io_handle_t output);
 
         bool isCallScreenModeSupported() override;
 
@@ -800,6 +810,8 @@ protected:
         sp<SwAudioOutputDescriptor> mPrimaryOutput;     // primary output descriptor
         // list of descriptors for outputs currently opened
 
+        sp<SwAudioOutputDescriptor> mVirtualizerStageOutput;
+
         SwAudioOutputCollection mOutputs;
         // copy of mOutputs before setDeviceConnectionState() opens new outputs
         // reset to mOutputs when updateDevicesAndOutputs() is called.
@@ -939,7 +951,7 @@ protected:
         virtual audio_io_handle_t getOutputForDevices(
                 const DeviceVector &devices,
                 audio_session_t session,
-                audio_stream_type_t stream,
+                const audio_attributes_t *attr,
                 const audio_config_t *config,
                 audio_output_flags_t *flags,
                 bool forceMutingHaptic = false);
@@ -954,6 +966,13 @@ protected:
                 audio_output_flags_t flags,
                 const DeviceVector &devices,
                 audio_io_handle_t *output);
+
+        sp<IOProfile> getVirtualizerStageOutputProfile(const audio_config_t *config,
+                                                       const AudioDeviceTypeAddrVector &devices,
+                                                       bool forOpening) const;
+
+        void checkVirtualizerClientRoutes();
+
         // Internal method checking If direct pcm track's offloadInfo needs to be updated.
         void checkAndUpdateOffloadInfoForDirectTracks(
                 const audio_attributes_t *attr,

@@ -34,8 +34,10 @@ public:
     virtual bool isOffloadOrDirect() const = 0;
     virtual bool isOffloadOrMmap() const = 0;
     virtual uint32_t sampleRate() const = 0;
-    virtual audio_channel_mask_t channelMask() const = 0;
-    virtual uint32_t channelCount() const = 0;
+    virtual audio_channel_mask_t inChannelMask(int id) const = 0;
+    virtual uint32_t inChannelCount(int id) const = 0;
+    virtual audio_channel_mask_t outChannelMask() const = 0;
+    virtual uint32_t outChannelCount() const = 0;
     virtual audio_channel_mask_t hapticChannelMask() const = 0;
     virtual size_t frameCount() const = 0;
 
@@ -64,6 +66,8 @@ public:
     virtual void resetVolume() = 0;
 
     virtual wp<EffectChain> chain() const = 0;
+
+    virtual bool isAudioPolicyReady() const = 0;
 };
 
 // EffectBase(EffectModule) and EffectChain classes both have their own mutex to protect
@@ -164,6 +168,16 @@ public:
 
     void             dump(int fd, const Vector<String16>& args);
 
+protected:
+    bool             isInternal_l() const {
+                         for (auto handle : mHandles) {
+                            if (handle->client() != nullptr) {
+                                return false;
+                            }
+                         }
+                         return true;
+                     }
+
 private:
     friend class AudioFlinger;      // for mHandles
     bool             mPinned = false;
@@ -259,7 +273,7 @@ public:
     bool             isHapticGenerator() const;
 
     status_t         setHapticIntensity(int id, int intensity);
-    status_t         setVibratorInfo(const media::AudioVibratorInfo* vibratorInfo);
+    status_t         setVibratorInfo(const media::AudioVibratorInfo& vibratorInfo);
 
     void             dump(int fd, const Vector<String16>& args);
 
@@ -341,6 +355,8 @@ public:
                                     int32_t* _aidl_return) override;
     android::binder::Status disconnect() override;
     android::binder::Status getCblk(media::SharedFileRegion* _aidl_return) override;
+
+    sp<Client> client() const { return mClient; }
 
 private:
     void disconnect(bool unpinIfLast);
@@ -511,6 +527,8 @@ public:
     sp<EffectCallbackInterface> effectCallback() const { return mEffectCallback; }
     wp<ThreadBase> thread() const { return mEffectCallback->thread(); }
 
+    bool isFirstEffect(int id) const { return !mEffects.isEmpty() && id == mEffects[0]->id(); }
+
     void dump(int fd, const Vector<String16>& args);
 
 private:
@@ -544,8 +562,10 @@ private:
         bool isOffloadOrMmap() const override;
 
         uint32_t sampleRate() const override;
-        audio_channel_mask_t channelMask() const override;
-        uint32_t channelCount() const override;
+        audio_channel_mask_t inChannelMask(int id) const override;
+        uint32_t inChannelCount(int id) const override;
+        audio_channel_mask_t outChannelMask() const override;
+        uint32_t outChannelCount() const override;
         audio_channel_mask_t hapticChannelMask() const override;
         size_t frameCount() const override;
         uint32_t latency() const override;
@@ -565,6 +585,10 @@ private:
         void onEffectDisable(const sp<EffectBase>& effect) override;
 
         wp<EffectChain> chain() const override { return mChain; }
+
+        bool isAudioPolicyReady() const override {
+            return mAudioFlinger.isAudioPolicyReady();
+        }
 
         wp<ThreadBase> thread() const { return mThread.load(); }
 
@@ -694,8 +718,10 @@ private:
         bool isOffloadOrMmap() const override { return false; }
 
         uint32_t sampleRate() const override;
-        audio_channel_mask_t channelMask() const override;
-        uint32_t channelCount() const override;
+        audio_channel_mask_t inChannelMask(int id) const override;
+        uint32_t inChannelCount(int id) const override;
+        audio_channel_mask_t outChannelMask() const override;
+        uint32_t outChannelCount() const override;
         audio_channel_mask_t hapticChannelMask() const override { return AUDIO_CHANNEL_NONE; }
         size_t frameCount() const override  { return 0; }
         uint32_t latency() const override  { return 0; }
@@ -715,6 +741,10 @@ private:
         void onEffectDisable(const sp<EffectBase>& effect __unused) override {}
 
         wp<EffectChain> chain() const override { return nullptr; }
+
+        bool isAudioPolicyReady() const override {
+            return mManagerCallback->isAudioPolicyReady();
+        }
 
         int newEffectId();
 
