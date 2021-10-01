@@ -127,6 +127,7 @@ void AudioPolicyService::onFirstRef()
         loadAudioPolicyManager();
         mAudioPolicyManager = mCreateAudioPolicyManager(mAudioPolicyClient);
     }
+
     // load audio processing modules
     sp<AudioPolicyEffects> audioPolicyEffects = new AudioPolicyEffects();
     sp<UidPolicy> uidPolicy = new UidPolicy(this);
@@ -139,6 +140,8 @@ void AudioPolicyService::onFirstRef()
     }
     uidPolicy->registerSelf();
     sensorPrivacyPolicy->registerSelf();
+
+    AudioSystem::audioPolicyReady();
 }
 
 void AudioPolicyService::unloadAudioPolicyManager()
@@ -443,13 +446,15 @@ void AudioPolicyService::NotificationClient::onRecordingConfigurationUpdate(
             media::RecordClientInfo clientInfoAidl = VALUE_OR_RETURN_STATUS(
                     legacy2aidl_record_client_info_t_RecordClientInfo(*clientInfo));
             media::AudioConfigBase clientConfigAidl = VALUE_OR_RETURN_STATUS(
-                    legacy2aidl_audio_config_base_t_AudioConfigBase(*clientConfig));
+                    legacy2aidl_audio_config_base_t_AudioConfigBase(
+                            *clientConfig, true /*isInput*/));
             std::vector<media::EffectDescriptor> clientEffectsAidl = VALUE_OR_RETURN_STATUS(
                     convertContainer<std::vector<media::EffectDescriptor>>(
                             clientEffects,
                             legacy2aidl_effect_descriptor_t_EffectDescriptor));
             media::AudioConfigBase deviceConfigAidl = VALUE_OR_RETURN_STATUS(
-                    legacy2aidl_audio_config_base_t_AudioConfigBase(*deviceConfig));
+                    legacy2aidl_audio_config_base_t_AudioConfigBase(
+                            *deviceConfig, true /*isInput*/));
             std::vector<media::EffectDescriptor> effectsAidl = VALUE_OR_RETURN_STATUS(
                     convertContainer<std::vector<media::EffectDescriptor>>(
                             effects,

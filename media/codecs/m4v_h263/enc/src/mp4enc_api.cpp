@@ -501,13 +501,16 @@ OSCL_EXPORT_REF Bool    PVInitVideoEncoder(VideoEncControls *encoderControl, Vid
     /* check frame rate */
     for (i = 0; i < encParams->nLayers; i++)
     {
+        if (encOption->encFrameRate[i] <= 0. || encOption->encFrameRate[i] > 120)
+        {
+            goto CLEAN_UP;
+        }
         encParams->LayerFrameRate[i] = encOption->encFrameRate[i];
     }
 
     if (encParams->nLayers > 1)
     {
-        if (encOption->encFrameRate[0] == encOption->encFrameRate[1] ||
-                encOption->encFrameRate[0] == 0. || encOption->encFrameRate[1] == 0.) /* 7/31/03 */
+        if (encOption->encFrameRate[0] == encOption->encFrameRate[1])
             goto CLEAN_UP;
     }
     /* set max frame rate */
@@ -610,18 +613,19 @@ OSCL_EXPORT_REF Bool    PVInitVideoEncoder(VideoEncControls *encoderControl, Vid
     /* Find the maximum width*height for memory allocation of the VOPs */
     for (idx = 0; idx < nLayers; idx++)
     {
-        temp_w = video->encParams->LayerWidth[idx];
-        temp_h = video->encParams->LayerHeight[idx];
+        temp_w = ((video->encParams->LayerWidth[idx] + 15) >> 4) << 4;
+        temp_h = ((video->encParams->LayerHeight[idx] + 15) >> 4) << 4;
+
+        if (temp_w > 2048 || temp_h > 2048) {
+            goto CLEAN_UP;
+        }
 
         if ((temp_w*temp_h) > max)
         {
             max = temp_w * temp_h;
-            max_width = ((temp_w + 15) >> 4) << 4;
-            max_height = ((temp_h + 15) >> 4) << 4;
-            if (((uint64_t)max_width * max_height) > (uint64_t)INT32_MAX
-                    || temp_w > INT32_MAX - 15 || temp_h > INT32_MAX - 15) {
-                goto CLEAN_UP;
-            }
+            max_width = temp_w;
+            max_height = temp_h;
+
             nTotalMB = ((max_width * max_height) >> 8);
         }
 

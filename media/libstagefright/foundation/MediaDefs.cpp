@@ -65,7 +65,17 @@ const char *MEDIA_MIMETYPE_AUDIO_ALAC = "audio/alac";
 const char *MEDIA_MIMETYPE_AUDIO_WMA = "audio/x-ms-wma";
 const char *MEDIA_MIMETYPE_AUDIO_MS_ADPCM = "audio/x-adpcm-ms";
 const char *MEDIA_MIMETYPE_AUDIO_DVI_IMA_ADPCM = "audio/x-adpcm-dvi-ima";
-
+const char *MEDIA_MIMETYPE_AUDIO_DTS = "audio/vnd.dts";
+const char *MEDIA_MIMETYPE_AUDIO_DTS_HD = "audio/vnd.dts.hd";
+const char *MEDIA_MIMETYPE_AUDIO_DTS_UHD = "audio/vnd.dts.uhd";
+const char *MEDIA_MIMETYPE_AUDIO_EVRC = "audio/evrc";
+const char *MEDIA_MIMETYPE_AUDIO_EVRCB = "audio/evrcb";
+const char *MEDIA_MIMETYPE_AUDIO_EVRCWB = "audio/evrcwb";
+const char *MEDIA_MIMETYPE_AUDIO_EVRCNW = "audio/evrcnw";
+const char *MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS = "audio/amr-wb+";
+const char *MEDIA_MIMETYPE_AUDIO_APTX = "audio/aptx";
+const char *MEDIA_MIMETYPE_AUDIO_DRA = "audio/vnd.dra";
+const char *MEDIA_MIMETYPE_AUDIO_AAC_FORMAT = "audio/aac";
 
 const char *MEDIA_MIMETYPE_CONTAINER_MPEG4 = "video/mp4";
 const char *MEDIA_MIMETYPE_CONTAINER_WAV = "audio/x-wav";
@@ -84,7 +94,6 @@ const char *MEDIA_MIMETYPE_TEXT_CEA_708 = "text/cea-708";
 const char *MEDIA_MIMETYPE_DATA_TIMED_ID3 = "application/x-id3v4";
 
 #ifdef __ANDROID_VNDK_EXT__
-const char *MEDIA_MIMETYPE_AUDIO_EVRC = "audio/evrc";
 const char *MEDIA_MIMETYPE_VIDEO_WMV = "video/x-ms-wmv";
 const char *MEDIA_MIMETYPE_VIDEO_WMV_VC1 = "video/wvc1";
 const char *MEDIA_MIMETYPE_AUDIO_WMA_PRO = "audio/x-ms-wma-pro";
@@ -96,9 +105,7 @@ const char *MEDIA_MIMETYPE_VIDEO_DIVX311 = "video/divx311";
 const char *MEDIA_MIMETYPE_VIDEO_DIVX4 = "video/divx4";
 const char *MEDIA_MIMETYPE_CONTAINER_MPEG2 = "video/mp2";
 const char *MEDIA_MIMETYPE_CONTAINER_3G2 = "video/3g2";
-const char *MEDIA_MIMETYPE_AUDIO_DTS = "audio/dts";
 const char *MEDIA_MIMETYPE_AUDIO_DTS_LBR = "audio/dts-lbr";
-const char *MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS = "audio/amr-wb-plus";
 const char *MEDIA_MIMETYPE_AUDIO_AIFF = "audio/x-aiff";
 const char *MEDIA_MIMETYPE_AUDIO_APE = "audio/x-ape";
 const char *MEDIA_MIMETYPE_CONTAINER_QCAMR_NB = "audio/qc-amr";
