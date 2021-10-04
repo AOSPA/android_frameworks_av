@@ -21,7 +21,15 @@
 #include <media/stagefright/foundation/ABase.h>
 #include <media/hardware/OMXPluginBase.h>
 
+#include <vector>
+
 namespace android {
+
+struct kComponent {
+    const char *mName;
+    const char *mLibNameSuffix;
+    const char *mRole;
+};
 
 struct SoftOMXPlugin : public OMXPluginBase {
     SoftOMXPlugin();
@@ -45,6 +53,7 @@ struct SoftOMXPlugin : public OMXPluginBase {
             Vector<String8> *roles);
 
 private:
+    std::vector<kComponent> mComponents;
     DISALLOW_EVIL_CONSTRUCTORS(SoftOMXPlugin);
 };
 
