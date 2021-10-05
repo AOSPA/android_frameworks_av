@@ -228,6 +228,7 @@ cc_library_shared {
         "libstagefright_foundation",
         "liblog",
         "libutils",
+        "libcutils",
     ],
 
     cflags: [
