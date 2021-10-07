@@ -800,8 +800,12 @@ MediaImageDecoder::MediaImageDecoder(
 
 MediaImageDecoder::~MediaImageDecoder() {
     if (mThread != NULL) {
-        mOutInfo.lock()->mExitThr = true;
-        mOutInfo.lock()->mCond.signal();
+        {
+            ALOGI("Signalling ImageOutputThread to exit");
+            Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+            outInfo->mSignalType = EXIT;
+            outInfo->mCond.signal();
+        }
         mThread->requestExitAndWait();
         mThread.clear();
     }
@@ -1028,20 +1032,40 @@ bool MediaImageDecoder::outputLoop() {
     size_t index;
     int64_t ptsUs = 0LL;
     uint32_t flags = 0;
-    mOutInfo.lock()->mThrStarted = true;
-    if (mOutInfo.lock()->mExitThr) {
-        ALOGI("Exiting the MediaImageDecoder output thread");
-        return 0;
-    }
-    {
-        Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
-        outInfo.waitForCondition(outInfo->mCond);
-    }
-    bool done = mOutInfo.lock()->mDone;
+    constexpr nsecs_t kConditionTimeoutNs = nsecs_t(100) * 1000 * 1000;  // 100ms
 
+    mOutInfo.lock()->mThrStarted = true;
+    do {
+        if (err == OK){
+            Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+            if (outInfo->mSignalType == NONE) {
+                err = outInfo.waitForConditionRelative(outInfo->mCond, kConditionTimeoutNs);
+            }
+        }
+
+        if (err == OK) {
+            // Check the signal type
+            if (mOutInfo.lock()->mSignalType == EXIT) {
+                ALOGI("Exiting the ImageOutputThread");
+                return 0;
+            } else if(mOutInfo.lock()->mSignalType == EXECUTE) {
+                ALOGI("ImageOutputThread execution signalled ");
+                mOutInfo.lock()->mSignalType = NONE;
+                break;
+            }
+        } else if(err == -ETIMEDOUT) {
+            err = OK;
+            usleep(10 * 1000); // 10ms sleep
+        } else {
+            ALOGI("Error %d from waitForConditionRelative. Exiting thread!", err);
+            return err;
+        }
+    } while(1);
+
+    bool done = mOutInfo.lock()->mDone;
     while (err == OK && !done) {
-        if (mOutInfo.lock()->mExitThr) {
-            ALOGI("Exiting the MediaImageDecoder output thread");
+        if (mOutInfo.lock()->mSignalType == EXIT) {
+            ALOGI("Exiting the ImageOutputThread");
             return 0;
         }
 
@@ -1104,11 +1128,13 @@ status_t MediaImageDecoder::extractInternal() {
     status_t err = OK;
     bool done = false;
     bool outThreadRunning = false;
+
     {
         Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
         outInfo->mRetriesLeft = kRetryCount;
         outInfo->mErrorCode = OK;
         outInfo->mDone = false;
+        outInfo->mSignalType = NONE;
     }
 
     if (mUseMultiThread && mThread == NULL) {
@@ -1196,7 +1222,10 @@ status_t MediaImageDecoder::extractInternal() {
 
                 // Signal output thread after queueing at least 1 input
                 if (mUseMultiThread && !outThreadRunning && mOutInfo.lock()->mThrStarted) {
-                    mOutInfo.lock()->mCond.signal();
+                    ALOGI("Signaling ImageOutputThread to start executing");
+                    Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+                    outInfo->mSignalType = EXECUTE;
+                    outInfo->mCond.signal();
                     outThreadRunning = true;
                 }
             }
@@ -1204,7 +1233,10 @@ status_t MediaImageDecoder::extractInternal() {
 
         // If output thread is still not running, signal it now.
         if (mUseMultiThread && !outThreadRunning && mOutInfo.lock()->mThrStarted) {
-            mOutInfo.lock()->mCond.signal();
+            ALOGI("ImageOutputThread is not executing. Signaling now");
+            Mutexed<OutputInfo>::Locked outInfo(mOutInfo);
+            outInfo->mSignalType = EXECUTE;
+            outInfo->mCond.signal();
             outThreadRunning = true;
         }
 
