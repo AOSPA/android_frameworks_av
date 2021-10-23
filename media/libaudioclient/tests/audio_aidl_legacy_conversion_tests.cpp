@@ -22,116 +22,123 @@
 using namespace android;
 using namespace android::aidl_utils;
 
+using media::audio::common::AudioChannelLayout;
+using media::audio::common::AudioDeviceDescription;
+using media::audio::common::AudioDeviceType;
+using media::audio::common::AudioFormatDescription;
+using media::audio::common::AudioFormatType;
+using media::audio::common::PcmType;
+
 namespace {
 
 template<typename T> size_t hash(const T& t) {
     return std::hash<T>{}(t);
 }
 
-media::AudioChannelLayout make_ACL_None() {
-    return media::AudioChannelLayout{};
+AudioChannelLayout make_ACL_None() {
+    return AudioChannelLayout{};
 }
 
-media::AudioChannelLayout make_ACL_Invalid() {
-    return media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::invalid>(0);
+AudioChannelLayout make_ACL_Invalid() {
+    return AudioChannelLayout::make<AudioChannelLayout::Tag::invalid>(0);
 }
 
-media::AudioChannelLayout make_ACL_Stereo() {
-    return media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::layoutMask>(
-            media::AudioChannelLayout::LAYOUT_STEREO);
+AudioChannelLayout make_ACL_Stereo() {
+    return AudioChannelLayout::make<AudioChannelLayout::Tag::layoutMask>(
+            AudioChannelLayout::LAYOUT_STEREO);
 }
 
-media::AudioChannelLayout make_ACL_ChannelIndex2() {
-    return media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::indexMask>(
-            media::AudioChannelLayout::INDEX_MASK_2);
+AudioChannelLayout make_ACL_ChannelIndex2() {
+    return AudioChannelLayout::make<AudioChannelLayout::Tag::indexMask>(
+            AudioChannelLayout::INDEX_MASK_2);
 }
 
-media::AudioChannelLayout make_ACL_ChannelIndexArbitrary() {
+AudioChannelLayout make_ACL_ChannelIndexArbitrary() {
     // Use channels 1 and 3.
-    return media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::indexMask>(5);
+    return AudioChannelLayout::make<AudioChannelLayout::Tag::indexMask>(5);
 }
 
-media::AudioChannelLayout make_ACL_VoiceCall() {
-    return media::AudioChannelLayout::make<media::AudioChannelLayout::Tag::voiceMask>(
-            media::AudioChannelLayout::VOICE_CALL_MONO);
+AudioChannelLayout make_ACL_VoiceCall() {
+    return AudioChannelLayout::make<AudioChannelLayout::Tag::voiceMask>(
+            AudioChannelLayout::VOICE_CALL_MONO);
 }
 
-media::AudioDeviceDescription make_AudioDeviceDescription(media::AudioDeviceType type,
+AudioDeviceDescription make_AudioDeviceDescription(AudioDeviceType type,
         const std::string& connection = "") {
-    media::AudioDeviceDescription result;
+    AudioDeviceDescription result;
     result.type = type;
     result.connection = connection;
     return result;
 }
 
-media::AudioDeviceDescription make_ADD_None() {
-    return media::AudioDeviceDescription{};
+AudioDeviceDescription make_ADD_None() {
+    return AudioDeviceDescription{};
 }
 
-media::AudioDeviceDescription make_ADD_DefaultIn() {
-    return make_AudioDeviceDescription(media::AudioDeviceType::IN_DEFAULT);
+AudioDeviceDescription make_ADD_DefaultIn() {
+    return make_AudioDeviceDescription(AudioDeviceType::IN_DEFAULT);
 }
 
-media::AudioDeviceDescription make_ADD_DefaultOut() {
-    return make_AudioDeviceDescription(media::AudioDeviceType::OUT_DEFAULT);
+AudioDeviceDescription make_ADD_DefaultOut() {
+    return make_AudioDeviceDescription(AudioDeviceType::OUT_DEFAULT);
 }
 
-media::AudioDeviceDescription make_ADD_WiredHeadset() {
-    return make_AudioDeviceDescription(media::AudioDeviceType::OUT_HEADSET,
-            media::AudioDeviceDescription::CONNECTION_ANALOG());
+AudioDeviceDescription make_ADD_WiredHeadset() {
+    return make_AudioDeviceDescription(AudioDeviceType::OUT_HEADSET,
+            AudioDeviceDescription::CONNECTION_ANALOG());
 }
 
-media::AudioDeviceDescription make_ADD_BtScoHeadset() {
-    return make_AudioDeviceDescription(media::AudioDeviceType::OUT_HEADSET,
-            media::AudioDeviceDescription::CONNECTION_BT_SCO());
+AudioDeviceDescription make_ADD_BtScoHeadset() {
+    return make_AudioDeviceDescription(AudioDeviceType::OUT_HEADSET,
+            AudioDeviceDescription::CONNECTION_BT_SCO());
 }
 
-media::AudioFormatDescription make_AudioFormatDescription(media::AudioFormatType type) {
-    media::AudioFormatDescription result;
+AudioFormatDescription make_AudioFormatDescription(AudioFormatType type) {
+    AudioFormatDescription result;
     result.type = type;
     return result;
 }
 
-media::AudioFormatDescription make_AudioFormatDescription(media::PcmType pcm) {
-    auto result = make_AudioFormatDescription(media::AudioFormatType::PCM);
+AudioFormatDescription make_AudioFormatDescription(PcmType pcm) {
+    auto result = make_AudioFormatDescription(AudioFormatType::PCM);
     result.pcm = pcm;
     return result;
 }
 
-media::AudioFormatDescription make_AudioFormatDescription(const std::string& encoding) {
-    media::AudioFormatDescription result;
+AudioFormatDescription make_AudioFormatDescription(const std::string& encoding) {
+    AudioFormatDescription result;
     result.encoding = encoding;
     return result;
 }
 
-media::AudioFormatDescription make_AudioFormatDescription(media::PcmType transport,
+AudioFormatDescription make_AudioFormatDescription(PcmType transport,
         const std::string& encoding) {
     auto result = make_AudioFormatDescription(encoding);
     result.pcm = transport;
     return result;
 }
 
-media::AudioFormatDescription make_AFD_Default() {
-    return media::AudioFormatDescription{};
+AudioFormatDescription make_AFD_Default() {
+    return AudioFormatDescription{};
 }
 
-media::AudioFormatDescription make_AFD_Invalid() {
-    return make_AudioFormatDescription(media::AudioFormatType::SYS_RESERVED_INVALID);
+AudioFormatDescription make_AFD_Invalid() {
+    return make_AudioFormatDescription(AudioFormatType::SYS_RESERVED_INVALID);
 }
 
-media::AudioFormatDescription make_AFD_Pcm16Bit() {
-    return make_AudioFormatDescription(media::PcmType::INT_16_BIT);
+AudioFormatDescription make_AFD_Pcm16Bit() {
+    return make_AudioFormatDescription(PcmType::INT_16_BIT);
 }
 
-media::AudioFormatDescription make_AFD_Bitstream() {
+AudioFormatDescription make_AFD_Bitstream() {
     return make_AudioFormatDescription("example");
 }
 
-media::AudioFormatDescription make_AFD_Encap() {
-    return make_AudioFormatDescription(media::PcmType::INT_16_BIT, "example.encap");
+AudioFormatDescription make_AFD_Encap() {
+    return make_AudioFormatDescription(PcmType::INT_16_BIT, "example.encap");
 }
 
-media::AudioFormatDescription make_AFD_Encap_with_Enc() {
+AudioFormatDescription make_AFD_Encap_with_Enc() {
     auto afd = make_AFD_Encap();
     afd.encoding += "+example";
     return afd;
@@ -160,24 +167,24 @@ class HashIdentityTest : public ::testing::Test {
 };
 
 TEST_F(HashIdentityTest, AudioChannelLayoutHashIdentity) {
-    verifyHashIdentity<media::AudioChannelLayout>({
+    verifyHashIdentity<AudioChannelLayout>({
             make_ACL_None, make_ACL_Invalid, make_ACL_Stereo, make_ACL_ChannelIndex2,
             make_ACL_ChannelIndexArbitrary, make_ACL_VoiceCall});
 }
 
 TEST_F(HashIdentityTest, AudioDeviceDescriptionHashIdentity) {
-    verifyHashIdentity<media::AudioDeviceDescription>({
+    verifyHashIdentity<AudioDeviceDescription>({
             make_ADD_None, make_ADD_DefaultIn, make_ADD_DefaultOut, make_ADD_WiredHeadset,
             make_ADD_BtScoHeadset});
 }
 
 TEST_F(HashIdentityTest, AudioFormatDescriptionHashIdentity) {
-    verifyHashIdentity<media::AudioFormatDescription>({
+    verifyHashIdentity<AudioFormatDescription>({
             make_AFD_Default, make_AFD_Invalid, make_AFD_Pcm16Bit, make_AFD_Bitstream,
             make_AFD_Encap, make_AFD_Encap_with_Enc});
 }
 
-using ChannelLayoutParam = std::tuple<media::AudioChannelLayout, bool /*isInput*/>;
+using ChannelLayoutParam = std::tuple<AudioChannelLayout, bool /*isInput*/>;
 class AudioChannelLayoutRoundTripTest :
         public testing::TestWithParam<ChannelLayoutParam> {};
 TEST_P(AudioChannelLayoutRoundTripTest, Aidl2Legacy2Aidl) {
@@ -192,7 +199,7 @@ TEST_P(AudioChannelLayoutRoundTripTest, Aidl2Legacy2Aidl) {
 INSTANTIATE_TEST_SUITE_P(AudioChannelLayoutRoundTrip,
         AudioChannelLayoutRoundTripTest,
         testing::Combine(
-                testing::Values(media::AudioChannelLayout{}, make_ACL_Invalid(), make_ACL_Stereo(),
+                testing::Values(AudioChannelLayout{}, make_ACL_Invalid(), make_ACL_Stereo(),
                         make_ACL_ChannelIndex2(), make_ACL_ChannelIndexArbitrary()),
                 testing::Values(false, true)));
 INSTANTIATE_TEST_SUITE_P(AudioChannelVoiceRoundTrip,
@@ -201,7 +208,7 @@ INSTANTIATE_TEST_SUITE_P(AudioChannelVoiceRoundTrip,
         testing::Combine(testing::Values(make_ACL_VoiceCall()), testing::Values(true)));
 
 class AudioDeviceDescriptionRoundTripTest :
-        public testing::TestWithParam<media::AudioDeviceDescription> {};
+        public testing::TestWithParam<AudioDeviceDescription> {};
 TEST_P(AudioDeviceDescriptionRoundTripTest, Aidl2Legacy2Aidl) {
     const auto initial = GetParam();
     auto conv = aidl2legacy_AudioDeviceDescription_audio_devices_t(initial);
@@ -212,11 +219,11 @@ TEST_P(AudioDeviceDescriptionRoundTripTest, Aidl2Legacy2Aidl) {
 }
 INSTANTIATE_TEST_SUITE_P(AudioDeviceDescriptionRoundTrip,
         AudioDeviceDescriptionRoundTripTest,
-        testing::Values(media::AudioDeviceDescription{}, make_ADD_DefaultIn(),
+        testing::Values(AudioDeviceDescription{}, make_ADD_DefaultIn(),
                 make_ADD_DefaultOut(), make_ADD_WiredHeadset(), make_ADD_BtScoHeadset()));
 
 class AudioFormatDescriptionRoundTripTest :
-        public testing::TestWithParam<media::AudioFormatDescription> {};
+        public testing::TestWithParam<AudioFormatDescription> {};
 TEST_P(AudioFormatDescriptionRoundTripTest, Aidl2Legacy2Aidl) {
     const auto initial = GetParam();
     auto conv = aidl2legacy_AudioFormatDescription_audio_format_t(initial);
@@ -227,4 +234,4 @@ TEST_P(AudioFormatDescriptionRoundTripTest, Aidl2Legacy2Aidl) {
 }
 INSTANTIATE_TEST_SUITE_P(AudioFormatDescriptionRoundTrip,
         AudioFormatDescriptionRoundTripTest,
-        testing::Values(make_AFD_Invalid(), media::AudioFormatDescription{}, make_AFD_Pcm16Bit()));
+        testing::Values(make_AFD_Invalid(), AudioFormatDescription{}, make_AFD_Pcm16Bit()));

@@ -235,20 +235,46 @@ audio_source_t AAudioConvert_inputPresetToAudioSource(aaudio_input_preset_t pres
 }
 
 audio_flags_mask_t AAudioConvert_allowCapturePolicyToAudioFlagsMask(
-        aaudio_allowed_capture_policy_t policy) {
+        aaudio_allowed_capture_policy_t policy,
+        aaudio_spatialization_behavior_t spatializationBehavior,
+        bool isContentSpatialized) {
+    audio_flags_mask_t flagsMask = AUDIO_FLAG_NONE;
     switch (policy) {
         case AAUDIO_UNSPECIFIED:
         case AAUDIO_ALLOW_CAPTURE_BY_ALL:
-            return AUDIO_FLAG_NONE;
+            // flagsMask is not modified
+            break;
         case AAUDIO_ALLOW_CAPTURE_BY_SYSTEM:
-            return AUDIO_FLAG_NO_MEDIA_PROJECTION;
+            flagsMask = static_cast<audio_flags_mask_t>(flagsMask | AUDIO_FLAG_NO_MEDIA_PROJECTION);
+            break;
         case AAUDIO_ALLOW_CAPTURE_BY_NONE:
-            return static_cast<audio_flags_mask_t>(
+            flagsMask = static_cast<audio_flags_mask_t>(flagsMask |
                     AUDIO_FLAG_NO_MEDIA_PROJECTION | AUDIO_FLAG_NO_SYSTEM_CAPTURE);
+            break;
         default:
-            ALOGE("%s() 0x%08X unrecognized", __func__, policy);
-            return AUDIO_FLAG_NONE; //
+            ALOGE("%s() 0x%08X unrecognized capture policy", __func__, policy);
+            // flagsMask is not modified
     }
+
+    switch (spatializationBehavior) {
+        case AAUDIO_UNSPECIFIED:
+        case AAUDIO_SPATIALIZATION_BEHAVIOR_AUTO:
+            // flagsMask is not modified
+            break;
+        case AAUDIO_SPATIALIZATION_BEHAVIOR_NEVER:
+            flagsMask = static_cast<audio_flags_mask_t>(flagsMask | AUDIO_FLAG_NEVER_SPATIALIZE);
+            break;
+        default:
+            ALOGE("%s() 0x%08X unrecognized spatialization behavior",
+                  __func__, spatializationBehavior);
+            // flagsMask is not modified
+    }
+
+    if (isContentSpatialized) {
+        flagsMask = static_cast<audio_flags_mask_t>(flagsMask | AUDIO_FLAG_CONTENT_SPATIALIZED);
+    }
+
+    return flagsMask;
 }
 
 audio_flags_mask_t AAudioConvert_privacySensitiveToAudioFlagsMask(
@@ -518,45 +544,6 @@ int32_t AAudioConvert_framesToBytes(int32_t numFrames,
     return AAUDIO_OK;
 }
 
-static int32_t AAudioProperty_getMMapProperty(const char *propName,
-                                              int32_t defaultValue,
-                                              const char * caller) {
-    int32_t prop = property_get_int32(propName, defaultValue);
-    switch (prop) {
-        case AAUDIO_UNSPECIFIED:
-        case AAUDIO_POLICY_NEVER:
-        case AAUDIO_POLICY_ALWAYS:
-        case AAUDIO_POLICY_AUTO:
-            break;
-        default:
-            ALOGE("%s: invalid = %d", caller, prop);
-            prop = defaultValue;
-            break;
-    }
-    return prop;
-}
-
-int32_t AAudioProperty_getMMapPolicy() {
-    return AAudioProperty_getMMapProperty(AAUDIO_PROP_MMAP_POLICY,
-                                          AAUDIO_UNSPECIFIED, __func__);
-}
-
-int32_t AAudioProperty_getMMapExclusivePolicy() {
-    return AAudioProperty_getMMapProperty(AAUDIO_PROP_MMAP_EXCLUSIVE_POLICY,
-                                          AAUDIO_UNSPECIFIED, __func__);
-}
-
-int32_t AAudioProperty_getMixerBursts() {
-    const int32_t defaultBursts = 2; // arbitrary, use 2 for double buffered
-    const int32_t maxBursts = 1024; // arbitrary
-    int32_t prop = property_get_int32(AAUDIO_PROP_MIXER_BURSTS, defaultBursts);
-    if (prop < 1 || prop > maxBursts) {
-        ALOGE("AAudioProperty_getMixerBursts: invalid = %d", prop);
-        prop = defaultBursts;
-    }
-    return prop;
-}
-
 int32_t AAudioProperty_getWakeupDelayMicros() {
     const int32_t minMicros = 0; // arbitrary
     const int32_t defaultMicros = 200; // arbitrary, based on some observed jitter
@@ -583,18 +570,6 @@ int32_t AAudioProperty_getMinimumSleepMicros() {
     } else if (prop > maxMicros) {
         ALOGW("AAudioProperty_getMinimumSleepMicros: clipped %d to %d", prop, maxMicros);
         prop = maxMicros;
-    }
-    return prop;
-}
-
-int32_t AAudioProperty_getHardwareBurstMinMicros() {
-    const int32_t defaultMicros = 1000; // arbitrary
-    const int32_t maxMicros = 1000 * 1000; // arbitrary
-    int32_t prop = property_get_int32(AAUDIO_PROP_HW_BURST_MIN_USEC, defaultMicros);
-    if (prop < 1 || prop > maxMicros) {
-        ALOGE("AAudioProperty_getHardwareBurstMinMicros: invalid = %d, use %d",
-              prop, defaultMicros);
-        prop = defaultMicros;
     }
     return prop;
 }

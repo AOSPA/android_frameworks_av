@@ -16,10 +16,10 @@
 
 package android.media;
 
-import android.media.AudioDevice;
+import android.content.AttributionSourceState;
 import android.media.EffectDescriptor;
 import android.media.IEffectClient;
-import android.content.AttributionSourceState;
+import android.media.audio.common.AudioDevice;
 
 /**
  * Input arguments of the createEffect() method.
@@ -37,4 +37,6 @@ parcelable CreateEffectRequest {
     AudioDevice device;
     AttributionSourceState attributionSource;
     boolean probe;
+    /** true if a callback must be sent each time audio frames are processed */
+    boolean notifyFramesProcessed;
 }

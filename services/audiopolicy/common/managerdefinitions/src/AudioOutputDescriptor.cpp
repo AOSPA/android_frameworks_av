@@ -545,9 +545,9 @@ status_t SwAudioOutputDescriptor::open(const audio_config_t *halConfig,
 
     mFlags = (audio_output_flags_t)(mFlags | flags);
 
-    //TODO: b/193496180 use virtualizer stage flag at audio HAL when available
+    //TODO: b/193496180 use spatializer flag at audio HAL when available
     audio_output_flags_t halFlags = mFlags;
-    if ((mFlags & AUDIO_OUTPUT_FLAG_VIRTUALIZER_STAGE) != 0) {
+    if ((mFlags & AUDIO_OUTPUT_FLAG_SPATIALIZER) != 0) {
         halFlags = (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_FAST | AUDIO_OUTPUT_FLAG_DEEP_BUFFER);
     }
 
@@ -668,6 +668,15 @@ status_t SwAudioOutputDescriptor::openDuplicating(const sp<SwAudioOutputDescript
     mLatency = output2->mLatency;
 
     return NO_ERROR;
+}
+
+uint32_t SwAudioOutputDescriptor::getRecommendedMuteDurationMs() const
+{
+    if (isDuplicated()) {
+        return std::max(mOutput1->getRecommendedMuteDurationMs(),
+                mOutput2->getRecommendedMuteDurationMs());
+    }
+    return mProfile->recommendedMuteDurationMs;
 }
 
 // HwAudioOutputDescriptor implementation

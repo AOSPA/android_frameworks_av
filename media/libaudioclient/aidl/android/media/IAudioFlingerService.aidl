@@ -16,14 +16,10 @@
 
 package android.media;
 
-import android.media.AudioChannelLayout;
-import android.media.AudioMode;
 import android.media.AudioPatch;
 import android.media.AudioPort;
 import android.media.AudioPortConfig;
-import android.media.AudioStreamType;
 import android.media.AudioUniqueIdUse;
-import android.media.AudioUuid;
 import android.media.AudioVibratorInfo;
 import android.media.CreateEffectRequest;
 import android.media.CreateEffectResponse;
@@ -42,7 +38,13 @@ import android.media.IAudioTrack;
 import android.media.MicrophoneInfoData;
 import android.media.RenderPosition;
 import android.media.TrackSecondaryOutputInfo;
-import android.media.AudioFormatDescription;
+import android.media.audio.common.AudioChannelLayout;
+import android.media.audio.common.AudioFormatDescription;
+import android.media.audio.common.AudioMMapPolicyInfo;
+import android.media.audio.common.AudioMMapPolicyType;
+import android.media.audio.common.AudioMode;
+import android.media.audio.common.AudioStreamType;
+import android.media.audio.common.AudioUuid;
 
 /**
  * {@hide}
@@ -217,4 +219,10 @@ interface IAudioFlingerService {
     // This usually happens when there is a dynamic policy registered.
     void updateSecondaryOutputs(
             in TrackSecondaryOutputInfo[] trackSecondaryOutputInfos);
+
+    AudioMMapPolicyInfo[] getMmapPolicyInfos(AudioMMapPolicyType policyType);
+
+    int getAAudioMixerBurstCount();
+
+    int getAAudioHardwareBurstMinUsec();
 }

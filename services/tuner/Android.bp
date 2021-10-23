@@ -36,9 +36,12 @@ cc_library {
 
     srcs: [
         "Tuner*.cpp",
+        "hidl/Tuner*.cpp",
     ],
 
     shared_libs: [
+        "android.hardware.tv.tuner@1.0",
+        "android.hardware.tv.tuner@1.1",
         "android.hardware.tv.tuner-V1-ndk",
         "libbase",
         "libbinder",
@@ -49,6 +52,7 @@ cc_library {
         "liblog",
         "libmedia",
         "libutils",
+        "packagemanager_aidl-cpp",
         "tv_tuner_aidl_interface-ndk",
         "tv_tuner_resource_manager_aidl_interface-ndk",
     ],
@@ -79,6 +83,8 @@ cc_binary {
     ],
 
     shared_libs: [
+        "android.hardware.tv.tuner@1.0",
+        "android.hardware.tv.tuner@1.1",
         "android.hardware.tv.tuner-V1-ndk",
         "libbase",
         "libbinder",

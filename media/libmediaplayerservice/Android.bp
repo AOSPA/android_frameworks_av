@@ -66,6 +66,7 @@ cc_library {
         "libstagefright_httplive",
         "libstagefright_omx",
         "libutils",
+        "packagemanager_aidl-cpp",
     ],
 
     header_libs: [
@@ -87,6 +88,7 @@ cc_library {
     export_shared_lib_headers: [
         "libmedia",
         "framework-permission-aidl-cpp",
+        "packagemanager_aidl-cpp",
     ],
 
     include_dirs: [

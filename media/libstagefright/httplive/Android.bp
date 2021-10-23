@@ -69,6 +69,8 @@ cc_library {
 
     header_libs: [
         "libbase_headers",
+        "libstagefright_headers",
+        "libstagefright_httplive_headers",
     ],
 
     static_libs: [
@@ -77,4 +79,9 @@ cc_library {
         "libstagefright_mpeg2support",
     ],
 
+}
+
+cc_library_headers {
+    name: "libstagefright_httplive_headers",
+    export_include_dirs: ["."],
 }

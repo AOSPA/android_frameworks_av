@@ -32,16 +32,12 @@
 #include <private/media/AudioEffectShared.h>
 #include <utils/Log.h>
 
-#define RETURN_STATUS_IF_ERROR(x)    \
-    {                                \
-        auto _tmp = (x);             \
-        if (_tmp != OK) return _tmp; \
-    }
-
 namespace android {
 using aidl_utils::statusTFromBinderStatus;
 using binder::Status;
 using media::IAudioPolicyService;
+using media::audio::common::AudioSource;
+using media::audio::common::AudioUuid;
 
 namespace {
 
@@ -70,7 +66,8 @@ status_t AudioEffect::set(const effect_uuid_t *type,
                 audio_session_t sessionId,
                 audio_io_handle_t io,
                 const AudioDeviceTypeAddr& device,
-                bool probe)
+                bool probe,
+                bool notifyFramesProcessed)
 {
     sp<media::IEffect> iEffect;
     sp<IMemory> cblk;
@@ -130,6 +127,7 @@ status_t AudioEffect::set(const effect_uuid_t *type,
     request.device = VALUE_OR_RETURN_STATUS(legacy2aidl_AudioDeviceTypeAddress(device));
     request.attributionSource = mClientAttributionSource;
     request.probe = probe;
+    request.notifyFramesProcessed = notifyFramesProcessed;
 
     media::CreateEffectResponse response;
 
@@ -200,7 +198,8 @@ status_t AudioEffect::set(const char *typeStr,
                 audio_session_t sessionId,
                 audio_io_handle_t io,
                 const AudioDeviceTypeAddr& device,
-                bool probe)
+                bool probe,
+                bool notifyFramesProcessed)
 {
     effect_uuid_t type;
     effect_uuid_t *pType = nullptr;
@@ -217,7 +216,8 @@ status_t AudioEffect::set(const char *typeStr,
         pUuid = &uuid;
     }
 
-    return set(pType, pUuid, priority, cbf, user, sessionId, io, device, probe);
+    return set(pType, pUuid, priority, cbf, user, sessionId, io,
+               device, probe, notifyFramesProcessed);
 }
 
 
@@ -528,6 +528,13 @@ void AudioEffect::commandExecuted(int32_t cmdCode,
     }
 }
 
+void AudioEffect::framesProcessed(int32_t frames)
+{
+    if (mCbf != NULL) {
+        mCbf(EVENT_FRAMES_PROCESSED, mUserData, &frames);
+    }
+}
+
 // -------------------------------------------------------------------------
 
 status_t AudioEffect::queryNumberEffects(uint32_t *numEffects)
@@ -566,7 +573,7 @@ status_t AudioEffect::queryDefaultPreProcessing(audio_session_t audioSession,
 
     int32_t audioSessionAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_session_t_int32_t(audioSession));
-    media::Int countAidl;
+    media::audio::common::Int countAidl;
     countAidl.value = VALUE_OR_RETURN_STATUS(convertIntegral<int32_t>(*count));
     std::vector<media::EffectDescriptor> retAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
@@ -614,12 +621,12 @@ status_t AudioEffect::addSourceDefaultEffect(const char *typeStr,
         uuid = *EFFECT_UUID_NULL;
     }
 
-    media::AudioUuid typeAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(type));
-    media::AudioUuid uuidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(uuid));
+    AudioUuid typeAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(type));
+    AudioUuid uuidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(uuid));
     std::string opPackageNameAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_String16_string(opPackageName));
-    media::AudioSourceType sourceAidl = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_audio_source_t_AudioSourceType(source));
+    AudioSource sourceAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_source_t_AudioSource(source));
     int32_t retAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
             aps->addSourceDefaultEffect(typeAidl, opPackageNameAidl, uuidAidl, priority, sourceAidl,
@@ -657,11 +664,11 @@ status_t AudioEffect::addStreamDefaultEffect(const char *typeStr,
         uuid = *EFFECT_UUID_NULL;
     }
 
-    media::AudioUuid typeAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(type));
-    media::AudioUuid uuidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(uuid));
+    AudioUuid typeAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(type));
+    AudioUuid uuidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_uuid_t_AudioUuid(uuid));
     std::string opPackageNameAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_String16_string(opPackageName));
-    media::AudioUsage usageAidl = VALUE_OR_RETURN_STATUS(
+    media::audio::common::AudioUsage usageAidl = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_usage_t_AudioUsage(usage));
     int32_t retAidl;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(

@@ -17,20 +17,24 @@
 #ifndef ANDROID_MEDIA_TUNERSERVICE_H
 #define ANDROID_MEDIA_TUNERSERVICE_H
 
-#include <aidl/android/hardware/tv/tuner/BnFilterCallback.h>
 #include <aidl/android/hardware/tv/tuner/DemuxFilterEvent.h>
 #include <aidl/android/hardware/tv/tuner/DemuxFilterStatus.h>
 #include <aidl/android/hardware/tv/tuner/ITuner.h>
 #include <aidl/android/media/tv/tuner/BnTunerService.h>
-#include <aidl/android/media/tv/tunerresourcemanager/ITunerResourceManager.h>
+#include <aidl/android/media/tv/tunerresourcemanager/TunerFrontendInfo.h>
 
-using ::aidl::android::hardware::tv::tuner::BnFilterCallback;
+#include "TunerHelper.h"
+
 using ::aidl::android::hardware::tv::tuner::DemuxCapabilities;
 using ::aidl::android::hardware::tv::tuner::DemuxFilterEvent;
 using ::aidl::android::hardware::tv::tuner::DemuxFilterStatus;
 using ::aidl::android::hardware::tv::tuner::FrontendInfo;
 using ::aidl::android::hardware::tv::tuner::ITuner;
-using ::aidl::android::media::tv::tunerresourcemanager::ITunerResourceManager;
+using ::aidl::android::media::tv::tuner::BnTunerService;
+using ::aidl::android::media::tv::tuner::ITunerDemux;
+using ::aidl::android::media::tv::tuner::ITunerFrontend;
+using ::aidl::android::media::tv::tuner::ITunerLnb;
+using ::aidl::android::media::tv::tunerresourcemanager::TunerFrontendInfo;
 
 using namespace std;
 
@@ -39,32 +43,6 @@ namespace android {
 namespace media {
 namespace tv {
 namespace tuner {
-
-const static int TUNER_HAL_VERSION_UNKNOWN = 0;
-const static int TUNER_HAL_VERSION_1_0 = 1 << 16;
-const static int TUNER_HAL_VERSION_1_1 = (1 << 16) | 1;
-const static int TUNER_HAL_VERSION_2_0 = 2 << 16;
-// System Feature defined in PackageManager
-static const ::android::String16 FEATURE_TUNER(::android::String16("android.hardware.tv.tuner"));
-
-typedef enum {
-    FRONTEND,
-    LNB,
-    DEMUX,
-    DESCRAMBLER,
-} TunerResourceType;
-
-struct FilterCallback : public BnFilterCallback {
-    ~FilterCallback() {}
-    virtual ::ndk::ScopedAStatus onFilterEvent(
-            const vector<DemuxFilterEvent>& /* events */) override {
-        return ::ndk::ScopedAStatus::ok();
-    }
-
-    virtual ::ndk::ScopedAStatus onFilterStatus(const DemuxFilterStatus /*status*/) override {
-        return ::ndk::ScopedAStatus::ok();
-    }
-};
 
 class TunerService : public BnTunerService {
 public:
@@ -89,28 +67,13 @@ public:
                                          shared_ptr<ITunerDescrambler>* _aidl_return) override;
     ::ndk::ScopedAStatus getTunerHalVersion(int32_t* _aidl_return) override;
 
-    // TODO: create a map between resource id and handles.
-    static int getResourceIdFromHandle(int resourceHandle, int /*type*/) {
-        return (resourceHandle & 0x00ff0000) >> 16;
-    }
-
-    int getResourceHandleFromId(int id, int resourceType) {
-        // TODO: build up randomly generated id to handle mapping
-        return (resourceType & 0x000000ff) << 24
-                | (id << 16)
-                | (mResourceRequestCount++ & 0xffff);
-    }
-
 private:
     bool hasITuner();
     void updateTunerResources();
-    void updateFrontendResources();
-    void updateLnbResources();
-    vector<int32_t> getLnbHandles();
+    vector<TunerFrontendInfo> getTRMFrontendInfos();
+    vector<int32_t> getTRMLnbHandles();
 
     shared_ptr<ITuner> mTuner;
-    shared_ptr<ITunerResourceManager> mTunerResourceManager;
-    int mResourceRequestCount = 0;
     int mTunerVersion = TUNER_HAL_VERSION_UNKNOWN;
 };
 
