@@ -84,7 +84,8 @@ status_t MediaAppender::init() {
 
     AString fileMime;
     fileFormat->findString("mime", &fileMime);
-    if (!strcmp(strrchr(fileMime.c_str(), '\0') - 3, "mp4")){
+    // only compare the end of the file MIME type to allow for vendor customized mime type
+    if (fileMime.endsWith("mp4")){
         mFormat = MediaMuxer::OUTPUT_FORMAT_MPEG_4;
     } else {
         ALOGE("Unsupported file format, extractor name:%s, fileformat %s",

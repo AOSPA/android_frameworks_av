@@ -32,7 +32,7 @@ public:
         OFFLOAD,            // Thread class is OffloadThread
         MMAP_PLAYBACK,      // Thread class for MMAP playback stream
         MMAP_CAPTURE,       // Thread class for MMAP capture stream
-        VIRTUALIZER_STAGE,  //
+        SPATIALIZER,  //
         // If you add any values here, also update ThreadBase::threadTypeToString()
     };
 
@@ -408,7 +408,8 @@ public:
                                     int *enabled,
                                     status_t *status /*non-NULL*/,
                                     bool pinned,
-                                    bool probe);
+                                    bool probe,
+                                    bool notifyFramesProcessed);
 
                 // return values for hasAudioSession (bit field)
                 enum effect_state {
@@ -684,6 +685,7 @@ protected:
                 audio_utils::Statistics<double> mIoJitterMs{0.995 /* alpha */};
                 audio_utils::Statistics<double> mProcessTimeMs{0.995 /* alpha */};
                 audio_utils::Statistics<double> mLatencyMs{0.995 /* alpha */};
+                audio_utils::Statistics<double> mMonopipePipeDepthStats{0.999 /* alpha */};
 
                 // Save the last count when we delivered statistics to mediametrics.
                 int64_t                 mLastRecordedTimestampVerifierN = 0;
@@ -1051,7 +1053,7 @@ public:
                 PlaybackThread::Track* getTrackById_l(audio_port_handle_t trackId);
 
                 bool hasMixer() const {
-                    return mType == MIXER || mType == DUPLICATING || mType == VIRTUALIZER_STAGE;
+                    return mType == MIXER || mType == DUPLICATING || mType == SPATIALIZER;
                 }
 protected:
     // updated by readOutputParameters_l()
@@ -1121,6 +1123,11 @@ protected:
     // When this is set, all mixer data is routed into the effects buffer
     // for any processing (including output processing).
     bool                            mEffectBufferValid;
+
+    // Frame size aligned buffer used to convert mEffectBuffer samples to mSinkBuffer format prior
+    // to accumulate into mSinkBuffer on SPATIALIZER threads
+    void*                           mEffectToSinkBuffer = nullptr;
+
 
     // suspend count, > 0 means suspended.  While suspended, the thread continues to pull from
     // tracks and mix, but doesn't write to HAL.  A2DP and SCO HAL implementations can't handle
@@ -1666,14 +1673,14 @@ public:
     }
 };
 
-class VirtualizerStageThread : public MixerThread {
+class SpatializerThread : public MixerThread {
 public:
-    VirtualizerStageThread(const sp<AudioFlinger>& audioFlinger,
+    SpatializerThread(const sp<AudioFlinger>& audioFlinger,
                            AudioStreamOut* output,
                            audio_io_handle_t id,
                            bool systemReady,
                            audio_config_base_t *mixerConfig);
-            ~VirtualizerStageThread() override {}
+            ~SpatializerThread() override {}
 
             bool hasFastMixer() const override { return false; }
 

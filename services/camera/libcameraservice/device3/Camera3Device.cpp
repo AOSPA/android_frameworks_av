@@ -3087,10 +3087,12 @@ CameraMetadata Camera3Device::getLatestRequestLocked() {
 
 void Camera3Device::monitorMetadata(TagMonitor::eventSource source,
         int64_t frameNumber, nsecs_t timestamp, const CameraMetadata& metadata,
-        const std::unordered_map<std::string, CameraMetadata>& physicalMetadata) {
+        const std::unordered_map<std::string, CameraMetadata>& physicalMetadata,
+        const camera_stream_buffer_t *outputBuffers, uint32_t numOutputBuffers,
+        int32_t inputStreamId) {
 
     mTagMonitor.monitorMetadata(source, frameNumber, timestamp, metadata,
-            physicalMetadata);
+            physicalMetadata, outputBuffers, numOutputBuffers, inputStreamId);
 }
 
 /**
@@ -4147,6 +4149,11 @@ std::pair<bool, uint64_t> Camera3Device::HalInterface::getBufferId(
     return mBufferRecords.getBufferId(buf, streamId);
 }
 
+uint64_t Camera3Device::HalInterface::removeOneBufferCache(int streamId,
+        const native_handle_t* handle) {
+    return mBufferRecords.removeOneBufferCache(streamId, handle);
+}
+
 void Camera3Device::HalInterface::onBufferFreed(
         int streamId, const native_handle_t* handle) {
     uint32_t bufferId = mBufferRecords.removeOneBufferCache(streamId, handle);
@@ -4599,9 +4606,15 @@ void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
 
         sp<Camera3Device> parent = mParent.promote();
         if (parent != NULL) {
+            int32_t inputStreamId = -1;
+            if (halRequest.input_buffer != nullptr) {
+              inputStreamId = Camera3Stream::cast(halRequest.input_buffer->stream)->getId();
+            }
+
             parent->monitorMetadata(TagMonitor::REQUEST,
                     halRequest.frame_number,
-                    0, mLatestRequest, mLatestPhysicalRequest);
+                    0, mLatestRequest, mLatestPhysicalRequest, halRequest.output_buffers,
+                    halRequest.num_output_buffers, inputStreamId);
         }
     }
 
@@ -4799,6 +4812,26 @@ bool Camera3Device::RequestThread::threadLoop() {
     return submitRequestSuccess;
 }
 
+status_t Camera3Device::removeFwkOnlyRegionKeys(CameraMetadata *request) {
+    static const std::array<uint32_t, 4> kFwkOnlyRegionKeys = {ANDROID_CONTROL_AF_REGIONS_SET,
+        ANDROID_CONTROL_AE_REGIONS_SET, ANDROID_CONTROL_AWB_REGIONS_SET,
+        ANDROID_SCALER_CROP_REGION_SET};
+    if (request == nullptr) {
+        ALOGE("%s request metadata nullptr", __FUNCTION__);
+        return BAD_VALUE;
+    }
+    status_t res = OK;
+    for (const auto &key : kFwkOnlyRegionKeys) {
+        if (request->exists(key)) {
+            res = request->erase(key);
+            if (res != OK) {
+                return res;
+            }
+        }
+    }
+    return OK;
+}
+
 status_t Camera3Device::RequestThread::prepareHalRequests() {
     ATRACE_CALL();
 
@@ -4858,6 +4891,12 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                             it != captureRequest->mSettingsList.end(); it++) {
                         if (parent->mUHRCropAndMeteringRegionMappers.find(it->cameraId) ==
                                 parent->mUHRCropAndMeteringRegionMappers.end()) {
+                            if (removeFwkOnlyRegionKeys(&(it->metadata)) != OK) {
+                                SET_ERR("RequestThread: Unable to remove fwk-only keys from request"
+                                        "%d: %s (%d)", halRequest->frame_number, strerror(-res),
+                                        res);
+                                return INVALID_OPERATION;
+                            }
                             continue;
                         }
 
@@ -4872,6 +4911,12 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                                 return INVALID_OPERATION;
                             }
                             captureRequest->mUHRCropAndMeteringRegionsUpdated = true;
+                            if (removeFwkOnlyRegionKeys(&(it->metadata)) != OK) {
+                                SET_ERR("RequestThread: Unable to remove fwk-only keys from request"
+                                        "%d: %s (%d)", halRequest->frame_number, strerror(-res),
+                                        res);
+                                return INVALID_OPERATION;
+                            }
                         }
                     }
 

@@ -41,6 +41,9 @@ using ConversionResult = base::expected<T, status_t>;
 #define RETURN_IF_ERROR(result) \
     if (status_t _tmp = (result); _tmp != OK) return base::unexpected(_tmp);
 
+#define RETURN_STATUS_IF_ERROR(result) \
+    if (status_t _tmp = (result); _tmp != OK) return _tmp;
+
 #define VALUE_OR_RETURN_STATUS(x)           \
     ({                                      \
        auto _tmp = (x);                     \
@@ -117,6 +120,47 @@ convertContainer(const InputContainer& input, const Func& itemConversion) {
         *ins = VALUE_OR_RETURN(itemConversion(item));
     }
     return output;
+}
+
+/**
+ * A generic template that helps to "zip" two input containers of the same size
+ * into a single vector of converted types. The conversion function must
+ * thus accept two arguments.
+ */
+template<typename OutputContainer, typename InputContainer1,
+        typename InputContainer2, typename Func>
+ConversionResult<OutputContainer>
+convertContainers(const InputContainer1& input1, const InputContainer2& input2,
+        const Func& itemConversion) {
+    auto iter2 = input2.begin();
+    OutputContainer output;
+    auto ins = std::inserter(output, output.begin());
+    for (const auto& item1 : input1) {
+        RETURN_IF_ERROR(iter2 != input2.end() ? OK : BAD_VALUE);
+        *ins = VALUE_OR_RETURN(itemConversion(item1, *iter2++));
+    }
+    return output;
+}
+
+/**
+ * A generic template that helps to "unzip" a per-element conversion into
+ * a pair of elements into a pair of containers. The conversion function
+ * must emit a pair of elements.
+ */
+template<typename OutputContainer1, typename OutputContainer2,
+        typename InputContainer, typename Func>
+ConversionResult<std::pair<OutputContainer1, OutputContainer2>>
+convertContainerSplit(const InputContainer& input, const Func& itemConversion) {
+    OutputContainer1 output1;
+    OutputContainer2 output2;
+    auto ins1 = std::inserter(output1, output1.begin());
+    auto ins2 = std::inserter(output2, output2.begin());
+    for (const auto& item : input) {
+        auto out_pair = VALUE_OR_RETURN(itemConversion(item));
+        *ins1 = out_pair.first;
+        *ins2 = out_pair.second;
+    }
+    return std::make_pair(output1, output2);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

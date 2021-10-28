@@ -19,9 +19,9 @@
 
 #include <functional>
 
-#include <android/media/AudioChannelLayout.h>
-#include <android/media/AudioDeviceDescription.h>
-#include <android/media/AudioFormatDescription.h>
+#include <android/media/audio/common/AudioChannelLayout.h>
+#include <android/media/audio/common/AudioDeviceDescription.h>
+#include <android/media/audio/common/AudioFormatDescription.h>
 #include <binder/Parcelable.h>
 #include <system/audio.h>
 #include <system/audio_policy.h>
@@ -42,10 +42,11 @@ namespace std {
 // possibility of processing types belonging to different versions of the type,
 // e.g. a HAL may be using a previous version of the AIDL interface.
 
-template<> struct hash<android::media::AudioChannelLayout>
+template<> struct hash<android::media::audio::common::AudioChannelLayout>
 {
-    std::size_t operator()(const android::media::AudioChannelLayout& acl) const noexcept {
-        using Tag = android::media::AudioChannelLayout::Tag;
+    std::size_t operator()(
+            const android::media::audio::common::AudioChannelLayout& acl) const noexcept {
+        using Tag = android::media::audio::common::AudioChannelLayout::Tag;
         const size_t seed = std::hash<Tag>{}(acl.getTag());
         switch (acl.getTag()) {
             case Tag::none:
@@ -63,22 +64,24 @@ template<> struct hash<android::media::AudioChannelLayout>
     }
 };
 
-template<> struct hash<android::media::AudioDeviceDescription>
+template<> struct hash<android::media::audio::common::AudioDeviceDescription>
 {
-    std::size_t operator()(const android::media::AudioDeviceDescription& add) const noexcept {
+    std::size_t operator()(
+            const android::media::audio::common::AudioDeviceDescription& add) const noexcept {
         return hash_combine(
-                std::hash<android::media::AudioDeviceType>{}(add.type),
+                std::hash<android::media::audio::common::AudioDeviceType>{}(add.type),
                 std::hash<std::string>{}(add.connection));
     }
 };
 
-template<> struct hash<android::media::AudioFormatDescription>
+template<> struct hash<android::media::audio::common::AudioFormatDescription>
 {
-    std::size_t operator()(const android::media::AudioFormatDescription& afd) const noexcept {
+    std::size_t operator()(
+            const android::media::audio::common::AudioFormatDescription& afd) const noexcept {
         return hash_combine(
-                std::hash<android::media::AudioFormatType>{}(afd.type),
+                std::hash<android::media::audio::common::AudioFormatType>{}(afd.type),
                 hash_combine(
-                        std::hash<android::media::PcmType>{}(afd.pcm),
+                        std::hash<android::media::audio::common::PcmType>{}(afd.pcm),
                         std::hash<std::string>{}(afd.encoding)));
     }
 };

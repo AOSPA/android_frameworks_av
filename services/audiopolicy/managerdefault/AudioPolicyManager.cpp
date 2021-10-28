@@ -284,9 +284,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
                     // been opened by checkOutputsForDevice() to query dynamic parameters
                     if ((state == AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE)
                             || (((desc->mFlags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) &&
-                                (desc->mDirectOpenCount == 0))
-                            || (((desc->mFlags & AUDIO_OUTPUT_FLAG_VIRTUALIZER_STAGE) != 0) &&
-                                (desc != mVirtualizerStageOutput))) {
+                                (desc->mDirectOpenCount == 0))) {
                         clearAudioSourcesForOutput(output);
                         closeOutput(output);
                     }
@@ -1002,13 +1000,12 @@ sp<IOProfile> AudioPolicyManager::getProfileForOutput(
     return profile;
 }
 
-sp<IOProfile> AudioPolicyManager::getVirtualizerStageOutputProfile(
-        const audio_config_t *config __unused, const AudioDeviceTypeAddrVector &devices,
-        bool forOpening) const
+sp<IOProfile> AudioPolicyManager::getSpatializerOutputProfile(
+        const audio_config_t *config __unused, const AudioDeviceTypeAddrVector &devices) const
 {
     for (const auto& hwModule : mHwModules) {
         for (const auto& curProfile : hwModule->getOutputProfiles()) {
-            if (curProfile->getFlags() != AUDIO_OUTPUT_FLAG_VIRTUALIZER_STAGE) {
+            if (curProfile->getFlags() != AUDIO_OUTPUT_FLAG_SPATIALIZER) {
                 continue;
             }
             // reject profiles not corresponding to a device currently available
@@ -1021,9 +1018,6 @@ sp<IOProfile> AudioPolicyManager::getVirtualizerStageOutputProfile(
                         != devices.size()) {
                     continue;
                 }
-            }
-            if (forOpening && !curProfile->canOpenNewIo()) {
-                continue;
             }
             ALOGV("%s found profile %s", __func__, curProfile->getName().c_str());
             return curProfile;
@@ -1577,9 +1571,9 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         ALOGV("Set VoIP and Direct output flags for PCM format");
     }
 
-    if (mVirtualizerStageOutput != nullptr
-            && canBeVirtualized(attr, config, devices.toTypeAddrVector())) {
-        return mVirtualizerStageOutput->mIoHandle;
+    if (mSpatializerOutput != nullptr
+            && canBeSpatialized(attr, config, devices.toTypeAddrVector())) {
+        return mSpatializerOutput->mIoHandle;
     }
 
     audio_config_t directConfig = *config;
@@ -5132,63 +5126,81 @@ sp<SourceClientDescriptor> AudioPolicyManager::getSourceForAttributesOnOutput(
     return source;
 }
 
-bool AudioPolicyManager::canBeVirtualized(const audio_attributes_t *attr,
+/* static */
+bool AudioPolicyManager::isChannelMaskSpatialized(audio_channel_mask_t channels) {
+    switch (channels) {
+        case AUDIO_CHANNEL_OUT_5POINT1:
+        case AUDIO_CHANNEL_OUT_5POINT1POINT2:
+        case AUDIO_CHANNEL_OUT_5POINT1POINT4:
+        case AUDIO_CHANNEL_OUT_7POINT1:
+        case AUDIO_CHANNEL_OUT_7POINT1POINT2:
+        case AUDIO_CHANNEL_OUT_7POINT1POINT4:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool AudioPolicyManager::canBeSpatialized(const audio_attributes_t *attr,
                                       const audio_config_t *config,
                                       const AudioDeviceTypeAddrVector &devices)  const
 {
     // The caller can have the audio attributes criteria ignored by either passing a null ptr or
     // the AUDIO_ATTRIBUTES_INITIALIZER value.
-    // If attributes are specified, current policy is to only allow virtualization for media
+    // If attributes are specified, current policy is to only allow spatialization for media
     // and game usages.
-    if (attr != nullptr && *attr != AUDIO_ATTRIBUTES_INITIALIZER &&
-            attr->usage != AUDIO_USAGE_MEDIA && attr->usage != AUDIO_USAGE_GAME) {
-        return false;
+    if (attr != nullptr && *attr != AUDIO_ATTRIBUTES_INITIALIZER) {
+        if (attr->usage != AUDIO_USAGE_MEDIA && attr->usage != AUDIO_USAGE_GAME) {
+            return false;
+        }
+        if ((attr->flags & (AUDIO_FLAG_CONTENT_SPATIALIZED | AUDIO_FLAG_NEVER_SPATIALIZE)) != 0) {
+            return false;
+        }
     }
 
     // The caller can have the devices criteria ignored by passing and empty vector, and
-    // getVirtualizerStageOutputProfile() will ignore the devices when looking for a match.
-    // Otherwise an output profile supporting a virtualizer stage effect that can be routed
+    // getSpatializerOutputProfile() will ignore the devices when looking for a match.
+    // Otherwise an output profile supporting a spatializer effect that can be routed
     // to the specified devices must exist.
     sp<IOProfile> profile =
-            getVirtualizerStageOutputProfile(config, devices, false /*forOpening*/);
+            getSpatializerOutputProfile(config, devices);
     if (profile == nullptr) {
         return false;
     }
 
     // The caller can have the audio config criteria ignored by either passing a null ptr or
     // the AUDIO_CONFIG_INITIALIZER value.
-    // If an audio config is specified, current policy is to only allow virtualization for
-    // 5.1, 7.1and 7.1.4 audio.
-    // If the virtualizer stage output is already opened, only channel masks included in the
-    // virtualizer stage output mixer channel mask are allowed.
+    // If an audio config is specified, current policy is to only allow spatialization for
+    // some positional channel masks.
+    // If the spatializer output is already opened, only channel masks included in the
+    // spatializer output mixer channel mask are allowed.
+
     if (config != nullptr && *config != AUDIO_CONFIG_INITIALIZER) {
-        if (config->channel_mask != AUDIO_CHANNEL_OUT_5POINT1
-                && config->channel_mask != AUDIO_CHANNEL_OUT_7POINT1
-                && config->channel_mask != AUDIO_CHANNEL_OUT_7POINT1POINT4) {
+        if (!isChannelMaskSpatialized(config->channel_mask)) {
             return false;
         }
-        if (mVirtualizerStageOutput != nullptr) {
-            if ((config->channel_mask & mVirtualizerStageOutput->mMixerChannelMask)
+        if (mSpatializerOutput != nullptr && mSpatializerOutput->mProfile == profile) {
+            if ((config->channel_mask & mSpatializerOutput->mMixerChannelMask)
                     != config->channel_mask) {
                 return false;
             }
         }
     }
-
     return true;
 }
 
 void AudioPolicyManager::checkVirtualizerClientRoutes() {
     std::set<audio_stream_type_t> streamsToInvalidate;
     for (size_t i = 0; i < mOutputs.size(); i++) {
-        const sp<SwAudioOutputDescriptor>& outputDescriptor = mOutputs[i];
-        for (const sp<TrackClientDescriptor>& client : outputDescriptor->getClientIterable()) {
+        const sp<SwAudioOutputDescriptor>& desc = mOutputs[i];
+        for (const sp<TrackClientDescriptor>& client : desc->getClientIterable()) {
             audio_attributes_t attr = client->attributes();
             DeviceVector devices = mEngine->getOutputDevicesForAttributes(attr, nullptr, false);
             AudioDeviceTypeAddrVector devicesTypeAddress = devices.toTypeAddrVector();
             audio_config_base_t clientConfig = client->config();
             audio_config_t config = audio_config_initializer(&clientConfig);
-            if (canBeVirtualized(&attr, &config, devicesTypeAddress)) {
+            if (desc != mSpatializerOutput
+                    && canBeSpatialized(&attr, &config, devicesTypeAddress)) {
                 streamsToInvalidate.insert(client->stream());
             }
         }
@@ -5199,14 +5211,10 @@ void AudioPolicyManager::checkVirtualizerClientRoutes() {
     }
 }
 
-status_t AudioPolicyManager::getVirtualizerStageOutput(const audio_config_base_t *mixerConfig,
+status_t AudioPolicyManager::getSpatializerOutput(const audio_config_base_t *mixerConfig,
                                                         const audio_attributes_t *attr,
                                                         audio_io_handle_t *output) {
     *output = AUDIO_IO_HANDLE_NONE;
-
-    if (mVirtualizerStageOutput != nullptr) {
-        return INVALID_OPERATION;
-    }
 
     DeviceVector devices = mEngine->getOutputDevicesForAttributes(*attr, nullptr, false);
     AudioDeviceTypeAddrVector devicesTypeAddress = devices.toTypeAddrVector();
@@ -5216,49 +5224,104 @@ status_t AudioPolicyManager::getVirtualizerStageOutput(const audio_config_base_t
         config = audio_config_initializer(mixerConfig);
         configPtr = &config;
     }
-    if (!canBeVirtualized(attr, configPtr, devicesTypeAddress)) {
+    if (!canBeSpatialized(attr, configPtr, devicesTypeAddress)) {
+        ALOGW("%s provided attributes or mixer config cannot be spatialized", __func__);
         return BAD_VALUE;
     }
 
     sp<IOProfile> profile =
-            getVirtualizerStageOutputProfile(configPtr, devicesTypeAddress, true /*forOpening*/);
+            getSpatializerOutputProfile(configPtr, devicesTypeAddress);
     if (profile == nullptr) {
+        ALOGW("%s no suitable output profile for provided attributes or mixer config", __func__);
         return BAD_VALUE;
     }
 
-    mVirtualizerStageOutput = new SwAudioOutputDescriptor(profile, mpClientInterface);
-    status_t status = mVirtualizerStageOutput->open(nullptr, mixerConfig, devices,
-                                                    mEngine->getStreamTypeForAttributes(*attr),
-                                                    AUDIO_OUTPUT_FLAG_VIRTUALIZER_STAGE, output);
-    if (status != NO_ERROR) {
-        ALOGV("%s failed opening output: status %d, output %d", __func__, status, *output);
-        if (*output != AUDIO_IO_HANDLE_NONE) {
-            mVirtualizerStageOutput->close();
+    if (mSpatializerOutput != nullptr && mSpatializerOutput->mProfile == profile
+            && configPtr != nullptr
+            && configPtr->channel_mask == mSpatializerOutput->mMixerChannelMask) {
+        *output = mSpatializerOutput->mIoHandle;
+        ALOGV("%s returns current spatializer output %d", __func__, *output);
+        return NO_ERROR;
+    }
+    mSpatializerOutput.clear();
+    for (size_t i = 0; i < mOutputs.size(); i++) {
+        sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+        if (!desc->isDuplicated() && desc->mProfile == profile) {
+            mSpatializerOutput = desc;
+            break;
         }
-        mVirtualizerStageOutput.clear();
-        *output = AUDIO_IO_HANDLE_NONE;
-        return status;
+    }
+    if (mSpatializerOutput == nullptr) {
+        ALOGW("%s no opened spatializer output for profile %s",
+                __func__, profile->getName().c_str());
+        return BAD_VALUE;
+    }
+
+    if (configPtr != nullptr
+            && configPtr->channel_mask != mSpatializerOutput->mMixerChannelMask) {
+        audio_config_base_t savedMixerConfig = {
+            .sample_rate = mSpatializerOutput->getSamplingRate(),
+            .format = mSpatializerOutput->getFormat(),
+            .channel_mask = mSpatializerOutput->mMixerChannelMask,
+        };
+        DeviceVector savedDevices = mSpatializerOutput->devices();
+
+        closeOutput(mSpatializerOutput->mIoHandle);
+        mSpatializerOutput.clear();
+
+        const sp<SwAudioOutputDescriptor> desc =
+                new SwAudioOutputDescriptor(profile, mpClientInterface);
+        status_t status = desc->open(nullptr, mixerConfig, devices,
+                                                    mEngine->getStreamTypeForAttributes(*attr),
+                                                    AUDIO_OUTPUT_FLAG_SPATIALIZER, output);
+        if (status != NO_ERROR) {
+            ALOGW("%s failed opening output: status %d, output %d", __func__, status, *output);
+            if (*output != AUDIO_IO_HANDLE_NONE) {
+                desc->close();
+            }
+            // re open the spatializer output with previous channel mask
+            status_t newStatus = desc->open(nullptr, &savedMixerConfig, savedDevices,
+                                mEngine->getStreamTypeForAttributes(*attr),
+                                AUDIO_OUTPUT_FLAG_SPATIALIZER, output);
+            if (newStatus != NO_ERROR) {
+                if (*output != AUDIO_IO_HANDLE_NONE) {
+                    desc->close();
+                }
+                ALOGE("%s failed to re-open mSpatializerOutput, status %d", __func__, newStatus);
+            } else {
+                mSpatializerOutput = desc;
+                addOutput(*output, desc);
+            }
+            mPreviousOutputs = mOutputs;
+            mpClientInterface->onAudioPortListUpdate();
+            *output = AUDIO_IO_HANDLE_NONE;
+            return status;
+        }
+        mSpatializerOutput = desc;
+        addOutput(*output, desc);
+        mPreviousOutputs = mOutputs;
+        mpClientInterface->onAudioPortListUpdate();
     }
 
     checkVirtualizerClientRoutes();
 
-    addOutput(*output, mVirtualizerStageOutput);
-    mPreviousOutputs = mOutputs;
-    mpClientInterface->onAudioPortListUpdate();
-
-    ALOGV("%s returns new virtualizer stage output %d", __func__, *output);
+    *output = mSpatializerOutput->mIoHandle;
+    ALOGV("%s returns new spatializer output %d", __func__, *output);
     return NO_ERROR;
 }
 
-status_t AudioPolicyManager::releaseVirtualizerStageOutput(audio_io_handle_t output) {
-    if (mVirtualizerStageOutput == nullptr) {
+status_t AudioPolicyManager::releaseSpatializerOutput(audio_io_handle_t output) {
+    if (mSpatializerOutput == nullptr) {
         return INVALID_OPERATION;
     }
-    if (mVirtualizerStageOutput->mIoHandle != output) {
+    if (mSpatializerOutput->mIoHandle != output) {
         return BAD_VALUE;
     }
-    closeOutput(output);
-    mVirtualizerStageOutput.clear();
+
+    mSpatializerOutput.clear();
+
+    checkVirtualizerClientRoutes();
+
     return NO_ERROR;
 }
 
@@ -5311,8 +5374,8 @@ void AudioPolicyManager::loadConfig() {
         ALOGE("could not load audio policy configuration file, setting defaults");
         getConfig().setDefault();
     }
-    //TODO: b/193496180 use virtualizer stage flag at audio HAL when available
-    getConfig().convertVirtualizerStageFlag();
+    //TODO: b/193496180 use spatializer flag at audio HAL when available
+    getConfig().convertSpatializerFlag();
 }
 
 status_t AudioPolicyManager::initialize() {
@@ -5475,8 +5538,7 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
                     outProfile->getFlags() & AUDIO_OUTPUT_FLAG_PRIMARY) {
                 mPrimaryOutput = outputDesc;
             }
-            if ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT) != 0
-                || (outProfile->getFlags() & AUDIO_OUTPUT_FLAG_VIRTUALIZER_STAGE) != 0 ) {
+            if ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
                 outputDesc->close();
             } else {
                 addOutput(output, outputDesc);
@@ -6610,13 +6672,19 @@ uint32_t AudioPolicyManager::checkDeviceMuteStrategies(const sp<AudioOutputDescr
     // different per device volumes
     if (outputDesc->isActive() && (devices != prevDevices)) {
         uint32_t tempMuteWaitMs = outputDesc->latency() * muteLatencyFactor;
-        // temporary mute duration can be configured by altering audio.sys.mute.latency.factor
-        // and audio.sys.routing.latency
-        uint32_t tempMuteDurationMs =
-                (outputDesc->latency() * muteLatencyFactor) + routingLatency;
+
         if (muteWaitMs < tempMuteWaitMs) {
             muteWaitMs = tempMuteWaitMs;
         }
+
+        // If recommended duration is defined, replace temporary mute duration to avoid
+        // truncated notifications at beginning, which depends on duration of changing path in HAL.
+        // Otherwise, temporary mute duration is conservatively set to 4 times the reported latency.
+        uint32_t tempRecommendedMuteDuration = outputDesc->getRecommendedMuteDurationMs();
+        uint32_t tempMuteDurationMs = tempRecommendedMuteDuration > 0 ?
+                tempRecommendedMuteDuration : (outputDesc->latency() * muteLatencyFactor)
+                + routingLatency;
+
         for (const auto &activeVs : outputDesc->getActiveVolumeSources()) {
             // make sure that we do not start the temporary mute period too early in case of
             // delayed device change
@@ -7079,7 +7147,7 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
     outputDesc->setVolume(
             volumeDb, volumeSource, curves.getStreamTypes(), deviceTypes, delayMs, force);
 
-    if (isVoiceVolSrc || isBtScoVolSrc) {
+    if (outputDesc == mPrimaryOutput && (isVoiceVolSrc || isBtScoVolSrc)) {
         float voiceVolume;
         // Force voice volume to max or mute for Bluetooth SCO as other attenuations are managed by the headset
         if (isVoiceVolSrc) {

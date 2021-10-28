@@ -1336,7 +1336,7 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
                 auto clientSp = current->getValue();
                 if (clientSp.get() != nullptr) { // should never be needed
                     if (!clientSp->canCastToApiClient(effectiveApiLevel)) {
-                        ALOGW("CameraService connect called from same client, but with a different"
+                        ALOGW("CameraService connect called with a different"
                                 " API level, evicting prior client...");
                     } else if (clientSp->getRemote() == remoteCallback) {
                         ALOGI("CameraService::connect X (PID %d) (second call from same"
@@ -2077,6 +2077,11 @@ Status CameraService::setTorchMode(const String16& cameraId, bool enabled,
                     id.string());
                 errorCode = ERROR_ILLEGAL_ARGUMENT;
                 break;
+            case -EBUSY:
+                msg = String8::format("Camera \"%s\" is in use",
+                    id.string());
+                errorCode = ERROR_CAMERA_IN_USE;
+                break;
             default:
                 msg = String8::format(
                     "Setting torch mode of camera \"%s\" to %d failed: %s (%d)",
@@ -2201,7 +2206,6 @@ Status CameraService::notifyDeviceStateChange(int64_t newState) {
     newDeviceState |= vendorBits;
 
     ALOGV("%s: New device state 0x%" PRIx64, __FUNCTION__, newDeviceState);
-    Mutex::Autolock l(mServiceLock);
     mCameraProviderManager->notifyDeviceStateChange(newDeviceState);
 
     return Status::ok();
@@ -2396,7 +2400,8 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
         Mutex::Autolock lock(mCameraStatesLock);
         for (auto& i : mCameraStates) {
             cameraStatuses->emplace_back(i.first,
-                    mapToInterface(i.second->getStatus()), i.second->getUnavailablePhysicalIds());
+                    mapToInterface(i.second->getStatus()), i.second->getUnavailablePhysicalIds(),
+                    openCloseCallbackAllowed ? i.second->getClientPackage() : String8::empty());
         }
     }
     // Remove the camera statuses that should be hidden from the client, we do
@@ -3767,6 +3772,16 @@ bool CameraService::CameraState::removeUnavailablePhysicalId(const String8& phys
     return count > 0;
 }
 
+void CameraService::CameraState::setClientPackage(const String8& clientPackage) {
+    Mutex::Autolock lock(mStatusLock);
+    mClientPackage = clientPackage;
+}
+
+String8 CameraService::CameraState::getClientPackage() const {
+    Mutex::Autolock lock(mStatusLock);
+    return mClientPackage;
+}
+
 // ----------------------------------------------------------------------------
 //                  ClientEventListener
 // ----------------------------------------------------------------------------
@@ -4330,6 +4345,18 @@ void CameraService::updateStatus(StatusInternal status, const String8& cameraId,
 
 void CameraService::updateOpenCloseStatus(const String8& cameraId, bool open,
         const String16& clientPackageName) {
+    auto state = getCameraState(cameraId);
+    if (state == nullptr) {
+        ALOGW("%s: Could not update the status for %s, no such device exists", __FUNCTION__,
+                cameraId.string());
+        return;
+    }
+    if (open) {
+        state->setClientPackage(String8(clientPackageName));
+    } else {
+        state->setClientPackage(String8::empty());
+    }
+
     Mutex::Autolock lock(mStatusListenerLock);
 
     for (const auto& it : mListenerList) {

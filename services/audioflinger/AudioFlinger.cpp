@@ -57,6 +57,7 @@
 
 #include "AudioFlinger.h"
 #include "NBAIO_Tee.h"
+#include "PropertyUtils.h"
 
 #include <media/AudioResamplerPublic.h>
 
@@ -64,6 +65,7 @@
 #include <system/audio_effects/effect_ns.h>
 #include <system/audio_effects/effect_aec.h>
 #include <system/audio_effects/effect_hapticgenerator.h>
+#include <system/audio_effects/effect_spatializer.h>
 
 #include <audio_utils/primitives.h>
 
@@ -102,7 +104,11 @@
 
 namespace android {
 
+#define MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION 7.0
+
 using media::IEffectClient;
+using media::audio::common::AudioMMapPolicyInfo;
+using media::audio::common::AudioMMapPolicyType;
 using android::content::AttributionSourceState;
 
 static const char kDeadlockedString[] = "AudioFlinger may be deadlocked\n";
@@ -300,6 +306,11 @@ void AudioFlinger::onFirstRef()
 
     mDevicesFactoryHalCallback = new DevicesFactoryHalCallbackImpl;
     mDevicesFactoryHal->setCallbackOnce(mDevicesFactoryHalCallback);
+
+    if (mDevicesFactoryHal->getHalVersion() <= MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION) {
+        mAAudioBurstsPerBuffer = getAAudioMixerBurstCountFromSystemProperty();
+        mAAudioHwBurstMinMicros = getAAudioHardwareBurstMinUsecFromSystemProperty();
+    }
 }
 
 status_t AudioFlinger::setAudioHalPids(const std::vector<pid_t>& pids) {
@@ -333,6 +344,44 @@ status_t AudioFlinger::updateSecondaryOutputs(
                  "%s cannot find track with id %u", __func__, trackId);
     }
     return NO_ERROR;
+}
+
+status_t AudioFlinger::getMmapPolicyInfos(
+            AudioMMapPolicyType policyType, std::vector<AudioMMapPolicyInfo> *policyInfos) {
+    Mutex::Autolock _l(mLock);
+    if (const auto it = mPolicyInfos.find(policyType); it != mPolicyInfos.end()) {
+        *policyInfos = it->second;
+        return NO_ERROR;
+    }
+    if (mDevicesFactoryHal->getHalVersion() > MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION) {
+        AutoMutex lock(mHardwareLock);
+        for (size_t i = 0; i < mAudioHwDevs.size(); ++i) {
+            AudioHwDevice *dev = mAudioHwDevs.valueAt(i);
+            std::vector<AudioMMapPolicyInfo> infos;
+            status_t status = dev->getMmapPolicyInfos(policyType, &infos);
+            if (status != NO_ERROR) {
+                ALOGE("Failed to query mmap policy info of %d, error %d",
+                      mAudioHwDevs.keyAt(i), status);
+                continue;
+            }
+            policyInfos->insert(policyInfos->end(), infos.begin(), infos.end());
+        }
+        mPolicyInfos[policyType] = *policyInfos;
+    } else {
+        getMmapPolicyInfosFromSystemProperty(policyType, policyInfos);
+        mPolicyInfos[policyType] = *policyInfos;
+    }
+    return NO_ERROR;
+}
+
+int32_t AudioFlinger::getAAudioMixerBurstCount() {
+    Mutex::Autolock _l(mLock);
+    return mAAudioBurstsPerBuffer;
+}
+
+int32_t AudioFlinger::getAAudioHardwareBurstMinUsec() {
+    Mutex::Autolock _l(mLock);
+    return mAAudioHwBurstMinMicros;
 }
 
 // getDefaultVibratorInfo_l must be called with AudioFlinger lock held.
@@ -566,10 +615,12 @@ void AudioFlinger::dumpClients(int fd, const Vector<String16>& args __unused)
     String8 result;
 
     result.append("Clients:\n");
+    result.append("   pid    heap_size\n");
     for (size_t i = 0; i < mClients.size(); ++i) {
         sp<Client> client = mClients.valueAt(i).promote();
         if (client != 0) {
-            result.appendFormat("  pid: %d\n", client->pid());
+            result.appendFormat("%6d %12zu\n", client->pid(),
+                    client->heap()->getMemoryHeap()->getSize());
         }
     }
 
@@ -2143,6 +2194,20 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
             goto Exit;
         }
 
+        if (recordTrack->isFastTrack()) {
+            output.serverConfig = {
+                    thread->sampleRate(),
+                    thread->channelMask(),
+                    thread->format()
+            };
+        } else {
+            output.serverConfig = {
+                    recordTrack->sampleRate(),
+                    recordTrack->channelMask(),
+                    recordTrack->format()
+            };
+        }
+
         // Check if one effect chain was awaiting for an AudioRecord to be created on this
         // session and move it to this thread.
         sp<EffectChain> chain = getOrphanEffectChain_l(sessionId);
@@ -2271,6 +2336,17 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
         mHardwareStatus = AUDIO_HW_SET_MODE;
         mPrimaryHardwareDev->hwDevice()->setMode(mMode);
         mHardwareStatus = AUDIO_HW_IDLE;
+    }
+
+    if (mDevicesFactoryHal->getHalVersion() > MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION) {
+        if (int32_t mixerBursts = dev->getAAudioMixerBurstCount();
+            mixerBursts > mAAudioBurstsPerBuffer) {
+            mAAudioBurstsPerBuffer = mixerBursts;
+        }
+        if (int32_t hwBurstMinMicros = dev->getAAudioHardwareBurstMinUsec();
+            hwBurstMinMicros < mAAudioHwBurstMinMicros || mAAudioHwBurstMinMicros == 0) {
+            mAAudioHwBurstMinMicros = hwBurstMinMicros;
+        }
     }
 
     mAudioHwDevs.add(handle, audioDevice);
@@ -2571,10 +2647,10 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
             return thread;
         } else {
             sp<PlaybackThread> thread;
-            //TODO: b/193496180 use virtualizer stage flag at audio HAL when available
+            //TODO: b/193496180 use spatializer flag at audio HAL when available
             if (flags == (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_FAST
                                                     | AUDIO_OUTPUT_FLAG_DEEP_BUFFER)) {
-                thread = new VirtualizerStageThread(this, outputStream, *output,
+                thread = new SpatializerThread(this, outputStream, *output,
                                                     mSystemReady, mixerConfig);
                 ALOGD("openOutput_l() created virtualizer output: ID %d thread %p",
                       *output, thread.get());
@@ -2844,7 +2920,7 @@ status_t AudioFlinger::openInput(const media::OpenInputRequest& request,
             &config,
             device.mType,
             device.address().c_str(),
-            VALUE_OR_RETURN_STATUS(aidl2legacy_AudioSourceType_audio_source_t(request.source)),
+            VALUE_OR_RETURN_STATUS(aidl2legacy_AudioSource_audio_source_t(request.source)),
             VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_audio_input_flags_t_mask(request.flags)),
             AUDIO_DEVICE_NONE,
             String8{});
@@ -3744,6 +3820,15 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
             goto Exit;
         }
 
+        // Only audio policy service can create a spatializer effect
+        if ((memcmp(&descOut.type, FX_IID_SPATIALIZER, sizeof(effect_uuid_t)) == 0) &&
+            (callingUid != AID_AUDIOSERVER || currentPid != getpid())) {
+            ALOGW("%s: attempt to create a spatializer effect from uid/pid %d/%d",
+                    __func__, callingUid, currentPid);
+            lStatus = PERMISSION_DENIED;
+            goto Exit;
+        }
+
         if (io == AUDIO_IO_HANDLE_NONE && sessionId == AUDIO_SESSION_OUTPUT_MIX) {
             // if the output returned by getOutputForEffect() is removed before we lock the
             // mutex below, the call to checkPlaybackThread_l(io) below will detect it
@@ -3759,7 +3844,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
             ALOGV("%s device type %#x address %s", __func__, device.mType, device.getAddress());
             handle = mDeviceEffectManager.createEffect_l(
                     &descOut, device, client, effectClient, mPatchPanel.patches_l(),
-                    &enabledOut, &lStatus, probe);
+                    &enabledOut, &lStatus, probe, request.notifyFramesProcessed);
             if (lStatus != NO_ERROR && lStatus != ALREADY_EXISTS) {
                 // remove local strong reference to Client with mClientLock held
                 Mutex::Autolock _cl(mClientLock);
@@ -3879,7 +3964,8 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
             }
         }
         handle = thread->createEffect_l(client, effectClient, priority, sessionId,
-                                        &descOut, &enabledOut, &lStatus, pinned, probe);
+                                        &descOut, &enabledOut, &lStatus, pinned, probe,
+                                        request.notifyFramesProcessed);
         if (lStatus != NO_ERROR && lStatus != ALREADY_EXISTS) {
             // remove local strong reference to Client with mClientLock held
             Mutex::Autolock _cl(mClientLock);

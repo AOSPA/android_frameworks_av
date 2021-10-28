@@ -29,7 +29,7 @@
 
 using namespace aaudio;
 
-using android::media::AudioFormatDescription;
+using android::media::audio::common::AudioFormatDescription;
 
 AAudioStreamConfiguration::AAudioStreamConfiguration(const StreamParameters& parcelable) {
     setChannelMask(parcelable.channelMask);
@@ -46,6 +46,13 @@ AAudioStreamConfiguration::AAudioStreamConfiguration(const StreamParameters& par
     setUsage(parcelable.usage);
     static_assert(sizeof(aaudio_content_type_t) == sizeof(parcelable.contentType));
     setContentType(parcelable.contentType);
+
+    static_assert(sizeof(aaudio_spatialization_behavior_t) ==
+            sizeof(parcelable.spatializationBehavior));
+    setSpatializationBehavior(parcelable.spatializationBehavior);
+    setIsContentSpatialized(parcelable.isContentSpatialized);
+
+
     static_assert(sizeof(aaudio_input_preset_t) == sizeof(parcelable.inputPreset));
     setInputPreset(parcelable.inputPreset);
     setBufferCapacity(parcelable.bufferCapacity);
@@ -76,7 +83,8 @@ StreamParameters AAudioStreamConfiguration::parcelable() const {
         result.audioFormat = convAudioFormat.value();
     } else {
         result.audioFormat = AudioFormatDescription{};
-        result.audioFormat.type = android::media::AudioFormatType::SYS_RESERVED_INVALID;
+        result.audioFormat.type =
+                android::media::audio::common::AudioFormatType::SYS_RESERVED_INVALID;
     }
     static_assert(sizeof(aaudio_direction_t) == sizeof(result.direction));
     result.direction = getDirection();
