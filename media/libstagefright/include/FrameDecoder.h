@@ -22,6 +22,7 @@
 
 #include <media/stagefright/foundation/AString.h>
 #include <media/stagefright/foundation/ABase.h>
+#include <media/stagefright/foundation/Mutexed.h>
 #include <media/stagefright/MediaSource.h>
 #include <media/openmax/OMX_Video.h>
 #include <ui/GraphicTypes.h>
@@ -199,11 +200,34 @@ private:
     int32_t mTilesDecoded;
     int32_t mTargetTiles;
 
-    struct ImageInputThread;
-    sp<ImageInputThread> mThread;
+    struct ImageOutputThread;
+    sp<ImageOutputThread> mThread;
     bool mUseMultiThread;
 
-    bool inputLoop();
+    enum OutputThrSignalType {
+        NONE,
+        EXECUTE,
+        EXIT
+    };
+
+    struct OutputInfo {
+        OutputInfo()
+            : mRetriesLeft(0),
+              mErrorCode(OK),
+              mDone(false),
+              mThrStarted(false),
+              mSignalType(NONE) {
+        }
+        size_t mRetriesLeft;
+        status_t mErrorCode;
+        bool mDone;
+        bool mThrStarted;
+        OutputThrSignalType mSignalType;
+        Condition mCond;
+    };
+    Mutexed<OutputInfo> mOutInfo;
+
+    bool outputLoop();
 };
 
 }  // namespace android
