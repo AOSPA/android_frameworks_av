@@ -93,5 +93,4 @@ cc_binary {
               ],
     srcs: ["mediaserverwrapper.cpp"],
     init_rc: ["mediaserverwrapper.rc"],
-    compile_multilib: "64",
 }
