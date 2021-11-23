@@ -33,14 +33,13 @@ cc_library_static {
         "WebmWriter.cpp",
     ],
 
+    export_include_dirs: [
+        ".",
+    ],
+
     include_dirs: [
-        "frameworks/av/include",
-        "frameworks/av/media/libmediaextractor",
         "frameworks/av/media/libstagefright/mpeg2ts",
         "frameworks/av/media/libavextensions",
-        "frameworks/native/include/media/hardware",
-        "frameworks/native/include/media/openmax",
-        "frameworks/av/media/libstagefright/include",
     ],
 
     shared_libs: [
@@ -62,6 +61,7 @@ cc_library_static {
     ],
 
     header_libs: [
+        "av-headers",
         "libmedia_headers",
         "media_ndk_headers",
     ],

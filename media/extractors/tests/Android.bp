@@ -80,11 +80,6 @@ cc_test {
         "libstagefright_omx_utils",
     ],
 
-    include_dirs: [
-        "frameworks/av/media/extractors/",
-        "frameworks/av/media/libstagefright/",
-    ],
-
     compile_multilib: "first",
 
     cflags: [
