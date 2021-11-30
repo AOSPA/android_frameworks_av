@@ -51,6 +51,35 @@ cc_library_shared {
 
 }
 
+cc_library {
+    name: "libstagefright_xmlparser_ext",
+    vendor: true,
+    vndk: {
+        enabled: true,
+        extends: "libstagefright_xmlparser"
+    },
+    srcs: [
+        "MediaCodecsXmlParser.cpp",
+    ],
+
+    export_include_dirs: [
+        "include",
+    ],
+    shared_libs: [
+        "libbase",
+        "libexpat",
+        "liblog",
+        "libstagefright_omx_utils",
+        "libcutils"
+    ],
+    cflags: [
+        "-Wno-multichar",
+        "-Werror",
+        "-Wall",
+        "-D__ANDROID_VNDK__"
+    ],
+}
+
 xsd_config {
     name: "media_codecs",
     srcs: ["media_codecs.xsd"],
