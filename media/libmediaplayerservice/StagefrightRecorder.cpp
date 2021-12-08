@@ -66,6 +66,7 @@
 #include <sys/types.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <future>
 
 #include <system/audio.h>
 
@@ -1598,11 +1599,12 @@ status_t StagefrightRecorder::setupMPEG2TSRecording() {
             return ERROR_UNSUPPORTED;
         }
 
-        status_t err = setupAudioEncoder(writer);
+        status_t err = setupAudioEncoder();
 
         if (err != OK) {
             return err;
         }
+        writer->addSource(mAudioEncoderSource);
     }
 
     if (mVideoSource < VIDEO_SOURCE_LIST_END) {
@@ -2162,7 +2164,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
     return OK;
 }
 
-status_t StagefrightRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
+status_t StagefrightRecorder::setupAudioEncoder() {
     ATRACE_CALL();
     status_t status = BAD_VALUE;
     if (OK != (status = checkAudioEncoderCapabilities())) {
@@ -2189,8 +2191,6 @@ status_t StagefrightRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
     if (audioEncoder == NULL) {
         return UNKNOWN_ERROR;
     }
-
-    writer->addSource(audioEncoder);
     mAudioEncoderSource = audioEncoder;
     return OK;
 }
@@ -2198,8 +2198,11 @@ status_t StagefrightRecorder::setupAudioEncoder(const sp<MediaWriter>& writer) {
 status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     mWriter.clear();
     mTotalBitRate = 0;
+    sp<MediaCodecSource> videoSource;
+    std::future<status_t> futureVal;
 
     status_t err = OK;
+    status_t errVideo = OK;
     sp<MediaWriter> writer;
     sp<MPEG4Writer> mp4writer;
     if (mOutputFormat == OUTPUT_FORMAT_WEBM) {
@@ -2217,15 +2220,8 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
             return err;
         }
 
-        sp<MediaCodecSource> encoder;
-        err = setupVideoEncoder(mediaSource, &encoder);
-        if (err != OK) {
-            return err;
-        }
-
-        writer->addSource(encoder);
-        mVideoEncoderSource = encoder;
-        mTotalBitRate += mVideoBitRate;
+        futureVal = std::async(std::launch::async, &StagefrightRecorder::setupVideoEncoder,
+                this, mediaSource, &videoSource);
     }
 
     // Audio source is added at the end if it exists.
@@ -2234,8 +2230,18 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     // disable audio for time lapse recording
     const bool disableAudio = mCaptureFpsEnable && mCaptureFps < mFrameRate;
     if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT) {
-        err = setupAudioEncoder(writer);
+        err = setupAudioEncoder();
+    }
+    if (mVideoSource < VIDEO_SOURCE_LIST_END) {
+        errVideo = futureVal.get();
+        if (errVideo != OK) return errVideo;
+        writer->addSource(videoSource);
+        mVideoEncoderSource = videoSource;
+        mTotalBitRate += mVideoBitRate;
+    }
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT) {
         if (err != OK) return err;
+        writer->addSource(mAudioEncoderSource);
         mTotalBitRate += mAudioBitRate;
     }
 

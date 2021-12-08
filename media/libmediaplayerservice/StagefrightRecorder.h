@@ -210,7 +210,7 @@ protected:
     // depending on the videosource type
     status_t setupMediaSource(sp<MediaSource> *mediaSource);
     status_t setupCameraSource(sp<CameraSource> *cameraSource);
-    status_t setupAudioEncoder(const sp<MediaWriter>& writer);
+    status_t setupAudioEncoder();
     status_t setupVideoEncoder(const sp<MediaSource>& cameraSource, sp<MediaCodecSource> *source);
     virtual void setupCustomVideoEncoderParams(sp<MediaSource> /*cameraSource*/,
             sp<AMessage> &/*format*/) {}
