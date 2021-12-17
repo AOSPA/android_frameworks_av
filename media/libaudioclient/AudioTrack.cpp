@@ -273,7 +273,6 @@ AudioTrack::AudioTrack(
       mPreviousPriority(ANDROID_PRIORITY_NORMAL),
       mPreviousSchedulingGroup(SP_DEFAULT),
       mPausedPosition(0),
-      mPauseTimeRealUs(0),
       mAudioTrackCallback(new AudioTrackCallback())
 {
     mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
@@ -2785,7 +2784,7 @@ nsecs_t AudioTrack::processAudioBuffer()
             // written in the next write() call, since it's not passed through the callback
             audioBuffer.size += nonContig;
         }
-        size_t writtenSize = (mTransfer == TRANSFER_CALLBACK)
+        const size_t writtenSize = (mTransfer == TRANSFER_CALLBACK)
                                       ? callback->onMoreData(audioBuffer)
                                       : callback->onCanWriteMoreData(audioBuffer);
         // Validate on returned size
@@ -2846,6 +2845,9 @@ nsecs_t AudioTrack::processAudioBuffer()
             }
             return ns;
         }
+
+        // releaseBuffer reads from audioBuffer.size
+        audioBuffer.size = writtenSize;
 
         size_t releasedFrames = writtenSize / mFrameSize;
         audioBuffer.frameCount = releasedFrames;
