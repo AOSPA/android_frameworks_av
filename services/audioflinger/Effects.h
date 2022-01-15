@@ -33,6 +33,7 @@ public:
     virtual bool isOffload() const = 0;
     virtual bool isOffloadOrDirect() const = 0;
     virtual bool isOffloadOrMmap() const = 0;
+    virtual bool isSpatializer() const = 0;
     virtual uint32_t sampleRate() const = 0;
     virtual audio_channel_mask_t inChannelMask(int id) const = 0;
     virtual uint32_t inChannelCount(int id) const = 0;
@@ -254,6 +255,13 @@ public:
         return mOutBuffer != 0 ? reinterpret_cast<int16_t*>(mOutBuffer->ptr()) : NULL;
     }
 
+    // Updates the access mode if it is out of date.  May issue a new effect configure.
+    void        updateAccessMode() {
+                    if (requiredEffectBufferAccessMode() != mConfig.outputCfg.accessMode) {
+                        configure();
+                    }
+                }
+
     status_t         setDevices(const AudioDeviceTypeAddrVector &devices);
     status_t         setInputDevice(const AudioDeviceTypeAddr &device);
     status_t         setVolume(uint32_t *left, uint32_t *right, bool controller);
@@ -289,6 +297,11 @@ private:
     status_t stop_l();
     status_t removeEffectFromHal_l();
     status_t sendSetAudioDevicesCommand(const AudioDeviceTypeAddrVector &devices, uint32_t cmdCode);
+    effect_buffer_access_e requiredEffectBufferAccessMode() const {
+        return mConfig.inputCfg.buffer.raw == mConfig.outputCfg.buffer.raw
+                ? EFFECT_BUFFER_ACCESS_WRITE : EFFECT_BUFFER_ACCESS_ACCUMULATE;
+    }
+
 
     effect_config_t     mConfig;    // input and output audio configuration
     sp<EffectHalInterface> mEffectInterface; // Effect module HAL
@@ -552,6 +565,12 @@ private:
             : mChain(owner)
             , mThread(thread)
             , mAudioFlinger(*gAudioFlinger) {
+            sp<ThreadBase> base = thread.promote();
+            if (base != nullptr) {
+                mThreadType = base->type();
+            } else {
+                mThreadType = ThreadBase::MIXER;  // assure a consistent value.
+            }
         }
 
         status_t createEffectHal(const effect_uuid_t *pEffectUuid,
@@ -564,6 +583,7 @@ private:
         bool isOffload() const override;
         bool isOffloadOrDirect() const override;
         bool isOffloadOrMmap() const override;
+        bool isSpatializer() const override;
 
         uint32_t sampleRate() const override;
         audio_channel_mask_t inChannelMask(int id) const override;
@@ -596,14 +616,16 @@ private:
 
         wp<ThreadBase> thread() const { return mThread.load(); }
 
-        void setThread(const wp<ThreadBase>& thread) {
+        void setThread(const sp<ThreadBase>& thread) {
             mThread = thread;
+            mThreadType = thread->type();
         }
 
     private:
         const wp<EffectChain> mChain;
         mediautils::atomic_wp<ThreadBase> mThread;
         AudioFlinger &mAudioFlinger;  // implementation detail: outer instance always exists.
+        ThreadBase::type_t mThreadType;
     };
 
     friend class AudioFlinger;  // for mThread, mEffects
@@ -639,6 +661,8 @@ private:
     bool hasVolumeControlEnabled_l() const;
 
     void setVolumeForOutput_l(uint32_t left, uint32_t right);
+
+    ssize_t getInsertIndex(const effect_descriptor_t& desc);
 
     mutable  Mutex mLock;        // mutex protecting effect list
              Vector< sp<EffectModule> > mEffects; // list of effect modules
@@ -720,6 +744,7 @@ private:
         bool isOffload() const override { return false; }
         bool isOffloadOrDirect() const override { return false; }
         bool isOffloadOrMmap() const override { return false; }
+        bool isSpatializer() const override { return false; }
 
         uint32_t sampleRate() const override;
         audio_channel_mask_t inChannelMask(int id) const override;
