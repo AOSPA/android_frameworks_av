@@ -491,6 +491,10 @@ status_t CameraSource::initBufferQueue(uint32_t width, uint32_t height,
     bufferCount += kConsumerBufferCount;
 
     mVideoBufferConsumer = new BufferItemConsumer(consumer, usage, bufferCount);
+    if (mVideoBufferConsumer == nullptr) {
+        return -1;
+    }
+
     mVideoBufferConsumer->setName(String8::format("StageFright-CameraSource"));
     mVideoBufferProducer = producer;
 
