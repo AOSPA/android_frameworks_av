@@ -16,7 +16,7 @@ cc_library {
     ],
 
     srcs: ["C2SoftHevcDec.cpp"],
-
+    lto: { never:true,},
     static_libs: ["libhevcdec"],
 
 }
@@ -28,7 +28,7 @@ cc_library {
         "libcodec2_soft_sanitize_signed-defaults",
         "libcodec2_soft_sanitize_cfi-defaults",
     ],
-
+    lto: {never:true,},
     srcs: ["C2SoftHevcEnc.cpp"],
 
     static_libs: ["libhevcenc"],

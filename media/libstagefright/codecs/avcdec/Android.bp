@@ -19,7 +19,7 @@ cc_library_shared {
     ],
 
     version_script: "exports.lds",
-
+    lto: { never: true, },
     sanitize: {
         misc_undefined: [
             "signed-integer-overflow",

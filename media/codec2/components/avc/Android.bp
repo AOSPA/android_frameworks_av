@@ -18,7 +18,7 @@ cc_library {
     static_libs: ["libavcdec"],
 
     srcs: ["C2SoftAvcDec.cpp"],
-
+    lto: { never:true,},
     include_dirs: [
         "external/libavc/decoder",
         "external/libavc/common",
@@ -32,7 +32,7 @@ cc_library {
         "libcodec2_soft_sanitize_signed-defaults",
         "libcodec2_soft_sanitize_cfi-defaults",
     ],
-
+    lto: { never:true,},
     static_libs: ["libavcenc"],
 
     srcs: ["C2SoftAvcEnc.cpp"],
