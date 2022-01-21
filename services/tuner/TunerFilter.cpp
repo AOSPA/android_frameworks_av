@@ -346,7 +346,7 @@ TunerFilter::~TunerFilter() {
     return res;
 }
 
-::ndk::ScopedAStatus TunerFilter::createSharedFilter(string* _aidl_return) {
+::ndk::ScopedAStatus TunerFilter::acquireSharedFilterToken(string* _aidl_return) {
     Mutex::Autolock _l(mLock);
     if (mFilter == nullptr) {
         ALOGE("IFilter is not initialized");
@@ -369,7 +369,7 @@ TunerFilter::~TunerFilter() {
     return ::ndk::ScopedAStatus::ok();
 }
 
-::ndk::ScopedAStatus TunerFilter::releaseSharedFilter(const string& /* in_filterToken */) {
+::ndk::ScopedAStatus TunerFilter::freeSharedFilterToken(const string& /* in_filterToken */) {
     Mutex::Autolock _l(mLock);
     if (mFilter == nullptr) {
         ALOGE("IFilter is not initialized");
@@ -403,6 +403,17 @@ TunerFilter::~TunerFilter() {
 
     *_aidl_return = mType;
     return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus TunerFilter::setDelayHint(const FilterDelayHint& in_hint) {
+    Mutex::Autolock _l(mLock);
+    if (mFilter == nullptr) {
+        ALOGE("IFilter is not initialized");
+        return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::UNAVAILABLE));
+    }
+
+    return mFilter->setDelayHint(in_hint);
 }
 
 bool TunerFilter::isSharedFilterAllowed(int callingPid) {
@@ -453,8 +464,10 @@ void TunerFilter::FilterCallback::attachSharedFilterCallback(
 
 void TunerFilter::FilterCallback::detachSharedFilterCallback() {
     Mutex::Autolock _l(mCallbackLock);
-    mTunerFilterCallback = mOriginalCallback;
-    mOriginalCallback = nullptr;
+    if (mTunerFilterCallback != nullptr && mOriginalCallback != nullptr) {
+        mTunerFilterCallback = mOriginalCallback;
+        mOriginalCallback = nullptr;
+    }
 }
 
 }  // namespace tuner

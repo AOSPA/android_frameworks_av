@@ -424,8 +424,8 @@ public:
 
     static status_t getMicrophones(std::vector<media::MicrophoneInfo> *microphones);
 
-    static status_t getHwOffloadEncodingFormatsSupportedForA2DP(
-                                    std::vector<audio_format_t> *formats);
+    static status_t getHwOffloadFormatsSupportedForBluetoothMedia(
+                                    audio_devices_t device, std::vector<audio_format_t> *formats);
 
     // numSurroundFormats holds the maximum number of formats and bool value allowed in the array.
     // When numSurroundFormats is 0, surroundFormats and surroundFormatsEnabled will not be
@@ -538,7 +538,7 @@ public:
 
 
     // A listener for capture state changes.
-    class CaptureStateListener : public RefBase {
+    class CaptureStateListener : public virtual RefBase {
     public:
         // Called whenever capture state changes.
         virtual void onStateChanged(bool active) = 0;
@@ -563,7 +563,7 @@ public:
 
     // ----------------------------------------------------------------------------
 
-    class AudioVolumeGroupCallback : public RefBase
+    class AudioVolumeGroupCallback : public virtual RefBase
     {
     public:
 
@@ -578,7 +578,7 @@ public:
     static status_t addAudioVolumeGroupCallback(const sp<AudioVolumeGroupCallback>& callback);
     static status_t removeAudioVolumeGroupCallback(const sp<AudioVolumeGroupCallback>& callback);
 
-    class AudioPortCallback : public RefBase
+    class AudioPortCallback : public virtual RefBase
     {
     public:
 
@@ -594,7 +594,7 @@ public:
     static status_t addAudioPortCallback(const sp<AudioPortCallback>& callback);
     static status_t removeAudioPortCallback(const sp<AudioPortCallback>& callback);
 
-    class AudioDeviceCallback : public RefBase
+    class AudioDeviceCallback : public virtual RefBase
     {
     public:
 

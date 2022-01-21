@@ -583,10 +583,10 @@ exit:
     return status;
 }
 
-status_t AudioPolicyManager::getHwOffloadEncodingFormatsSupportedForA2DP(
-                                    std::vector<audio_format_t> *formats)
+status_t AudioPolicyManager::getHwOffloadFormatsSupportedForBluetoothMedia(
+                                    audio_devices_t device, std::vector<audio_format_t> *formats)
 {
-    ALOGV("getHwOffloadEncodingFormatsSupportedForA2DP()");
+    ALOGV("getHwOffloadFormatsSupportedForBluetoothMedia()");
     status_t status = NO_ERROR;
     std::unordered_set<audio_format_t> formatSet;
     sp<HwModule> primaryModule =
@@ -595,8 +595,23 @@ status_t AudioPolicyManager::getHwOffloadEncodingFormatsSupportedForA2DP(
         ALOGE("%s() unable to get primary module", __func__);
         return NO_INIT;
     }
+
+    DeviceTypeSet audioDeviceSet;
+
+    switch(device) {
+    case AUDIO_DEVICE_OUT_BLUETOOTH_A2DP:
+        audioDeviceSet = getAudioDeviceOutAllA2dpSet();
+        break;
+    case AUDIO_DEVICE_OUT_BLE_HEADSET:
+        audioDeviceSet = getAudioDeviceOutAllBleSet();
+        break;
+    default:
+        ALOGE("%s() device type 0x%08x not supported", __func__, device);
+        return BAD_VALUE;
+    }
+
     DeviceVector declaredDevices = primaryModule->getDeclaredDevices().getDevicesFromTypes(
-            getAudioDeviceOutAllA2dpSet());
+            audioDeviceSet);
     for (const auto& device : declaredDevices) {
         formatSet.insert(device->encodedFormats().begin(), device->encodedFormats().end());
     }
@@ -3790,7 +3805,7 @@ status_t AudioPolicyManager::removeUserIdDeviceAffinities(int userId) {
 void AudioPolicyManager::dump(String8 *dst) const
 {
     dst->appendFormat("\nAudioPolicyManager Dump: %p\n", this);
-    dst->appendFormat(" Primary Output: %d\n",
+    dst->appendFormat(" Primary Output I/O handle: %d\n",
              hasPrimaryOutput() ? mPrimaryOutput->mIoHandle : AUDIO_IO_HANDLE_NONE);
     std::string stateLiteral;
     AudioModeConverter::toString(mEngine->getPhoneState(), stateLiteral);
@@ -3815,12 +3830,14 @@ void AudioPolicyManager::dump(String8 *dst) const
     dst->appendFormat(" Communnication Strategy: %d\n", mCommunnicationStrategy);
     dst->appendFormat(" Config source: %s\n", mConfig.getSource().c_str()); // getConfig not const
 
-    mAvailableOutputDevices.dump(dst, String8("Available output"));
-    mAvailableInputDevices.dump(dst, String8("Available input"));
+    dst->append("\n");
+    mAvailableOutputDevices.dump(dst, String8("Available output"), 1);
+    dst->append("\n");
+    mAvailableInputDevices.dump(dst, String8("Available input"), 1);
     mHwModulesAll.dump(dst);
     mOutputs.dump(dst);
     mInputs.dump(dst);
-    mEffects.dump(dst);
+    mEffects.dump(dst, 1);
     mAudioPatches.dump(dst);
     mPolicyMixes.dump(dst);
     mAudioSources.dump(dst);
@@ -4387,7 +4404,7 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
                     }
                     if (outputDesc != nullptr) {
                         audio_port_config srcMixPortConfig = {};
-                        outputDesc->toAudioPortConfig(&srcMixPortConfig, &patch->sources[0]);
+                        outputDesc->toAudioPortConfig(&srcMixPortConfig, nullptr);
                         // for volume control, we may need a valid stream
                         srcMixPortConfig.ext.mix.usecase.stream = sourceDesc != nullptr ?
                                     sourceDesc->stream() : AUDIO_STREAM_PATCH;
@@ -6266,14 +6283,20 @@ void AudioPolicyManager::checkSecondaryOutputs() {
                     client->getSecondaryOutputs().begin(),
                     client->getSecondaryOutputs().end(),
                     secondaryDescs.begin(), secondaryDescs.end())) {
-                std::vector<wp<SwAudioOutputDescriptor>> weakSecondaryDescs;
-                std::vector<audio_io_handle_t> secondaryOutputIds;
-                for (const auto& secondaryDesc : secondaryDescs) {
-                    secondaryOutputIds.push_back(secondaryDesc->mIoHandle);
-                    weakSecondaryDescs.push_back(secondaryDesc);
+                if (!audio_is_linear_pcm(client->config().format)) {
+                    // If the format is not PCM, the tracks should be invalidated to get correct
+                    // behavior when the secondary output is changed.
+                    streamsToInvalidate.insert(client->stream());
+                } else {
+                    std::vector<wp<SwAudioOutputDescriptor>> weakSecondaryDescs;
+                    std::vector<audio_io_handle_t> secondaryOutputIds;
+                    for (const auto &secondaryDesc: secondaryDescs) {
+                        secondaryOutputIds.push_back(secondaryDesc->mIoHandle);
+                        weakSecondaryDescs.push_back(secondaryDesc);
+                    }
+                    trackSecondaryOutputs.emplace(client->portId(), secondaryOutputIds);
+                    client->setSecondaryOutputs(std::move(weakSecondaryDescs));
                 }
-                trackSecondaryOutputs.emplace(client->portId(), secondaryOutputIds);
-                client->setSecondaryOutputs(std::move(weakSecondaryDescs));
             }
         }
     }
@@ -6444,11 +6467,11 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
     uid_t uid;
     sp<RecordClientDescriptor> topClient = inputDesc->getHighestPriorityClient();
     if (topClient != nullptr) {
-      attributes = topClient->attributes();
-      uid = topClient->uid();
+        attributes = topClient->attributes();
+        uid = topClient->uid();
     } else {
-      attributes = { .source = AUDIO_SOURCE_DEFAULT };
-      uid = 0;
+        attributes = { .source = AUDIO_SOURCE_DEFAULT };
+        uid = 0;
     }
 
     // Check for source AUDIO_SOURCE_VOICE_UPLINK when in call.
@@ -7291,8 +7314,8 @@ bool AudioPolicyManager::isCallAudioAccessible()
 {
     audio_mode_t mode = mEngine->getPhoneState();
     return (mode == AUDIO_MODE_IN_CALL)
-            || (mode == AUDIO_MODE_IN_COMMUNICATION)
-            || (mode == AUDIO_MODE_CALL_SCREEN);
+            || (mode == AUDIO_MODE_CALL_SCREEN)
+            || (mode == AUDIO_MODE_CALL_REDIRECT);
 }
 
 void AudioPolicyManager::cleanUpForDevice(const sp<DeviceDescriptor>& deviceDesc)
