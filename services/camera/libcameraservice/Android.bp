@@ -84,6 +84,7 @@ cc_library_shared {
         "device3/Camera3OutputUtils.cpp",
         "device3/Camera3DeviceInjectionMethods.cpp",
         "device3/UHRCropAndMeteringRegionMapper.cpp",
+        "device3/PreviewFrameScheduler.cpp",
         "gui/RingBufferConsumer.cpp",
         "hidl/AidlCameraDeviceCallbacks.cpp",
         "hidl/AidlCameraServiceListener.cpp",
@@ -107,6 +108,7 @@ cc_library_shared {
     ],
 
     shared_libs: [
+        "libandroid",
         "libbase",
         "libdl",
         "libexif",
@@ -154,6 +156,7 @@ cc_library_shared {
         "android.hardware.camera.device@3.5",
         "android.hardware.camera.device@3.6",
         "android.hardware.camera.device@3.7",
+        "android.hardware.camera.device@3.8",
         "media_permission-aidl-cpp",
     ],
 

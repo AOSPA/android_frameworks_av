@@ -220,7 +220,15 @@ Status AudioPolicyService::setPhoneState(AudioMode stateAidl, int32_t uidAidl)
     // can be interleaved).
     Mutex::Autolock _l(mLock);
     // TODO: check if it is more appropriate to do it in platform specific policy manager
-    AudioSystem::setMode(state);
+
+    // Audio HAL mode conversion for call redirect modes
+    audio_mode_t halMode = state;
+    if (state == AUDIO_MODE_CALL_REDIRECT) {
+        halMode = AUDIO_MODE_CALL_SCREEN;
+    } else if (state == AUDIO_MODE_COMMUNICATION_REDIRECT) {
+        halMode = AUDIO_MODE_NORMAL;
+    }
+    AudioSystem::setMode(halMode);
 
     AutoCallerClear acc;
     mAudioPolicyManager->setPhoneState(state);
@@ -1943,7 +1951,8 @@ Status AudioPolicyService::getReportedSurroundFormats(
     return Status::ok();
 }
 
-Status AudioPolicyService::getHwOffloadEncodingFormatsSupportedForA2DP(
+Status AudioPolicyService::getHwOffloadFormatsSupportedForBluetoothMedia(
+        const AudioDeviceDescription& deviceAidl,
         std::vector<AudioFormatDescription>* _aidl_return) {
     std::vector<audio_format_t> formats;
 
@@ -1952,8 +1961,10 @@ Status AudioPolicyService::getHwOffloadEncodingFormatsSupportedForA2DP(
     }
     Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
+    audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
-            mAudioPolicyManager->getHwOffloadEncodingFormatsSupportedForA2DP(&formats)));
+            mAudioPolicyManager->getHwOffloadFormatsSupportedForBluetoothMedia(device, &formats)));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
             convertContainer<std::vector<AudioFormatDescription>>(
                     formats,

@@ -110,32 +110,23 @@ status_t DeviceDescriptorBase::setEncapsulationMetadataTypes(uint32_t encapsulat
     return NO_ERROR;
 }
 
-void DeviceDescriptorBase::dump(std::string *dst, int spaces, int index,
+void DeviceDescriptorBase::dump(std::string *dst, int spaces,
                                 const char* extraInfo, bool verbose) const
 {
-    dst->append(base::StringPrintf("%*sDevice %d:\n", spaces, "", index + 1));
     if (mId != 0) {
-        dst->append(base::StringPrintf("%*s- id: %2d\n", spaces, "", mId));
+        dst->append(base::StringPrintf("Port ID: %d; ", mId));
     }
-
     if (extraInfo != nullptr) {
-        dst->append(extraInfo);
+        dst->append(base::StringPrintf("%s; ", extraInfo));
     }
-
-    dst->append(base::StringPrintf("%*s- type: %-48s\n",
-            spaces, "", ::android::toString(mDeviceTypeAddr.mType).c_str()));
+    dst->append(base::StringPrintf("{%s}\n",
+                    mDeviceTypeAddr.toString(true /*includeSensitiveInfo*/).c_str()));
 
     dst->append(base::StringPrintf(
-            "%*s- supported encapsulation modes: %u\n", spaces, "", mEncapsulationModes));
-    dst->append(base::StringPrintf(
-            "%*s- supported encapsulation metadata types: %u\n",
-            spaces, "", mEncapsulationMetadataTypes));
+                    "%*sEncapsulation modes: %u, metadata types: %u\n", spaces, "",
+                    mEncapsulationModes, mEncapsulationMetadataTypes));
 
-    if (mDeviceTypeAddr.address().size() != 0) {
-        dst->append(base::StringPrintf(
-                "%*s- address: %-32s\n", spaces, "", mDeviceTypeAddr.getAddress()));
-    }
-    AudioPort::dump(dst, spaces, verbose);
+    AudioPort::dump(dst, spaces, nullptr, verbose);
 }
 
 std::string DeviceDescriptorBase::toString(bool includeSensitiveInfo) const
