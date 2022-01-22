@@ -99,7 +99,7 @@ public:
                              bool checkExactFormatMatch = false,
                              bool checkExactchannelMask = false) const;
 
-    void dump(String8 *dst) const;
+    void dump(String8 *dst, int spaces) const;
     void log();
 
     bool hasSupportedDevices() const { return !mSupportedDevices.isEmpty(); }

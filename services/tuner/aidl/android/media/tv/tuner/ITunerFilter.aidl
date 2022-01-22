@@ -23,6 +23,7 @@ import android.hardware.tv.tuner.DemuxFilterSettings;
 import android.hardware.tv.tuner.DemuxFilterType;
 import android.hardware.tv.tuner.AvStreamType;
 import android.hardware.tv.tuner.DemuxFilterMonitorEventType;
+import android.hardware.tv.tuner.FilterDelayHint;
 
 /**
  * Tuner Filter interface handles tuner related operations.
@@ -101,19 +102,19 @@ interface ITunerFilter {
     void close();
 
     /**
-     * Create a new SharedFilter instance.
+     * Acquire a new SharedFilter token.
      *
      * @return a token of the newly created SharedFilter instance.
      */
-    String createSharedFilter();
+    String acquireSharedFilterToken();
 
     /**
-     * Release a SharedFilter instance.
+     * Free a SharedFilter token.
      *
-     * @param filterToken the SharedFilter will be released.
+     * @param filterToken the SharedFilter token will be released.
      * @return a token of the newly created SharedFilter instance.
      */
-    void releaseSharedFilter(in String filterToken);
+    void freeSharedFilterToken(in String filterToken);
 
     /**
      * Get filter type.
@@ -121,4 +122,6 @@ interface ITunerFilter {
      * @return filter type.
      */
     DemuxFilterType getFilterType();
+
+    void setDelayHint(in FilterDelayHint hint);
 }

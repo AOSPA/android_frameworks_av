@@ -17,6 +17,8 @@
 #define LOG_TAG "APM::AudioOutputDescriptor"
 //#define LOG_NDEBUG 0
 
+#include <android-base/stringprintf.h>
+
 #include <AudioPolicyInterface.h>
 #include "AudioOutputDescriptor.h"
 #include "AudioPolicyMix.h"
@@ -243,32 +245,45 @@ bool AudioOutputDescriptor::isAnyActive(VolumeSource volumeSourceToIgnore) const
         return client->volumeSource() != volumeSourceToIgnore; }) != end(mActiveClients);
 }
 
-void AudioOutputDescriptor::dump(String8 *dst) const
+void AudioOutputDescriptor::dump(String8 *dst, int spaces, const char* extraInfo) const
 {
-    dst->appendFormat(" ID: %d\n", mId);
-    dst->appendFormat(" Sampling rate: %d\n", mSamplingRate);
-    dst->appendFormat(" Format: %08x\n", mFormat);
-    dst->appendFormat(" Channels: %08x\n", mChannelMask);
-    dst->appendFormat(" Devices: %s\n", devices().toString(true /*includeSensitiveInfo*/).c_str());
-    dst->appendFormat(" Global active count: %u\n", mGlobalActiveCount);
-    for (const auto &iter : mRoutingActivities) {
-        dst->appendFormat(" Product Strategy id: %d", iter.first);
-        iter.second.dump(dst, 4);
+    dst->appendFormat("Port ID: %d%s%s\n",
+            mId, extraInfo != nullptr ? "; " : "", extraInfo != nullptr ? extraInfo : "");
+    dst->appendFormat("%*s%s; %d; Channel mask: 0x%x\n", spaces, "",
+            audio_format_to_string(mFormat), mSamplingRate, mChannelMask);
+    dst->appendFormat("%*sDevices: %s\n", spaces, "",
+            devices().toString(true /*includeSensitiveInfo*/).c_str());
+    dst->appendFormat("%*sGlobal active count: %u\n", spaces, "", mGlobalActiveCount);
+    if (!mRoutingActivities.empty()) {
+        dst->appendFormat("%*s- Product Strategies (%zu):\n", spaces - 2, "",
+                mRoutingActivities.size());
+        for (const auto &iter : mRoutingActivities) {
+            dst->appendFormat("%*sid %d: ", spaces + 1, "", iter.first);
+            iter.second.dump(dst, 0);
+        }
     }
-    for (const auto &iter : mVolumeActivities) {
-        dst->appendFormat(" Volume Activities id: %d", iter.first);
-        iter.second.dump(dst, 4);
+    if (!mVolumeActivities.empty()) {
+        dst->appendFormat("%*s- Volume Activities (%zu):\n", spaces - 2, "",
+                mVolumeActivities.size());
+        for (const auto &iter : mVolumeActivities) {
+            dst->appendFormat("%*sid %d: ", spaces + 1, "", iter.first);
+            iter.second.dump(dst, 0);
+        }
     }
-    dst->append(" AudioTrack Clients:\n");
-    ClientMapHandler<TrackClientDescriptor>::dump(dst);
-    dst->append("\n");
+    if (getClientCount() != 0) {
+        dst->appendFormat("%*s- AudioTrack clients (%zu):\n", spaces - 2, "", getClientCount());
+        ClientMapHandler<TrackClientDescriptor>::dump(dst, spaces);
+    }
     if (!mActiveClients.empty()) {
-        dst->append(" AudioTrack active (stream) clients:\n");
+        dst->appendFormat("%*s- AudioTrack active (stream) clients (%zu):\n", spaces - 2, "",
+                mActiveClients.size());
         size_t index = 0;
         for (const auto& client : mActiveClients) {
-            client->dump(dst, 2, index++);
+            const std::string prefix = base::StringPrintf(
+                    "%*sid %zu: ", spaces + 1, "", index + 1);
+            dst->appendFormat("%s", prefix.c_str());
+            client->dump(dst, prefix.size());
         }
-        dst->append(" \n");
     }
 }
 
@@ -292,11 +307,18 @@ SwAudioOutputDescriptor::SwAudioOutputDescriptor(const sp<IOProfile>& profile,
     }
 }
 
-void SwAudioOutputDescriptor::dump(String8 *dst) const
+void SwAudioOutputDescriptor::dump(String8 *dst, int spaces, const char* extraInfo) const
 {
-    dst->appendFormat(" Latency: %d\n", mLatency);
-    dst->appendFormat(" Flags %08x\n", mFlags);
-    AudioOutputDescriptor::dump(dst);
+    String8 allExtraInfo;
+    if (extraInfo != nullptr) {
+        allExtraInfo.appendFormat("%s; ", extraInfo);
+    }
+    std::string flagsLiteral = toString(mFlags);
+    allExtraInfo.appendFormat("Latency: %d; 0x%04x", mLatency, mFlags);
+    if (!flagsLiteral.empty()) {
+        allExtraInfo.appendFormat(" (%s)", flagsLiteral.c_str());
+    }
+    AudioOutputDescriptor::dump(dst, spaces, allExtraInfo.c_str());
 }
 
 DeviceVector SwAudioOutputDescriptor::devices() const
@@ -685,11 +707,11 @@ HwAudioOutputDescriptor::HwAudioOutputDescriptor(const sp<SourceClientDescriptor
 {
 }
 
-void HwAudioOutputDescriptor::dump(String8 *dst) const
+void HwAudioOutputDescriptor::dump(String8 *dst, int spaces, const char* extraInfo) const
 {
-    AudioOutputDescriptor::dump(dst);
-    dst->append("Source:\n");
-    mSource->dump(dst, 0, 0);
+    AudioOutputDescriptor::dump(dst, spaces, extraInfo);
+    dst->appendFormat("%*sSource:\n", spaces, "");
+    mSource->dump(dst, spaces);
 }
 
 void HwAudioOutputDescriptor::toAudioPortConfig(
@@ -879,10 +901,12 @@ void SwAudioOutputCollection::clearSessionRoutesForDevice(
 
 void SwAudioOutputCollection::dump(String8 *dst) const
 {
-    dst->append("\nOutputs dump:\n");
+    dst->appendFormat("\n Outputs (%zu):\n", size());
     for (size_t i = 0; i < size(); i++) {
-        dst->appendFormat("- Output %d dump:\n", keyAt(i));
-        valueAt(i)->dump(dst);
+        const std::string prefix = base::StringPrintf("  %zu. ", i + 1);
+        const std::string extraInfo = base::StringPrintf("I/O handle: %d", keyAt(i));
+        dst->appendFormat("%s", prefix.c_str());
+        valueAt(i)->dump(dst, prefix.size(), extraInfo.c_str());
     }
 }
 
@@ -901,10 +925,12 @@ bool HwAudioOutputCollection::isActive(VolumeSource volumeSource, uint32_t inPas
 
 void HwAudioOutputCollection::dump(String8 *dst) const
 {
-    dst->append("\nOutputs dump:\n");
+    dst->appendFormat("\n Outputs (%zu):\n", size());
     for (size_t i = 0; i < size(); i++) {
-        dst->appendFormat("- Output %d dump:\n", keyAt(i));
-        valueAt(i)->dump(dst);
+        const std::string prefix = base::StringPrintf("  %zu. ", i + 1);
+        const std::string extraInfo = base::StringPrintf("I/O handle: %d", keyAt(i));
+        dst->appendFormat("%s", prefix.c_str());
+        valueAt(i)->dump(dst, prefix.size(), extraInfo.c_str());
     }
 }
 

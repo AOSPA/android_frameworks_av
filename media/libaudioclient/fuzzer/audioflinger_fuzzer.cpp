@@ -58,7 +58,8 @@ constexpr audio_unique_id_use_t kUniqueIds[] = {
 
 constexpr audio_mode_t kModes[] = {
     AUDIO_MODE_INVALID, AUDIO_MODE_CURRENT,          AUDIO_MODE_NORMAL,     AUDIO_MODE_RINGTONE,
-    AUDIO_MODE_IN_CALL, AUDIO_MODE_IN_COMMUNICATION, AUDIO_MODE_CALL_SCREEN};
+    AUDIO_MODE_IN_CALL, AUDIO_MODE_IN_COMMUNICATION, AUDIO_MODE_CALL_SCREEN,
+    AUDIO_MODE_CALL_REDIRECT, AUDIO_MODE_COMMUNICATION_REDIRECT};
 
 constexpr audio_session_t kSessionId[] = {AUDIO_SESSION_NONE, AUDIO_SESSION_OUTPUT_STAGE,
                                           AUDIO_SESSION_DEVICE};
@@ -231,7 +232,7 @@ void AudioFlingerFuzzer::invokeAudioTrack() {
     attributionSource.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(getpid()));
     attributionSource.token = sp<BBinder>::make();
     track->set(AUDIO_STREAM_DEFAULT, sampleRate, format, channelMask, frameCount, flags, nullptr,
-               nullptr, notificationFrames, sharedBuffer, false, sessionId,
+               notificationFrames, sharedBuffer, false, sessionId,
                ((fast && sharedBuffer == 0) || offload) ? AudioTrack::TRANSFER_CALLBACK
                                                         : AudioTrack::TRANSFER_DEFAULT,
                offload ? &offloadInfo : nullptr, attributionSource, &attributes, false, 1.0f,
