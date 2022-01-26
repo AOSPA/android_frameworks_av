@@ -24,6 +24,22 @@
 
 namespace android {
 
+void AudioPort::setFlags(uint32_t flags)
+{
+    // force direct flag if offload flag is set: offloading implies a direct output stream
+    // and all common behaviors are driven by checking only the direct flag
+    // this should normally be set appropriately in the policy configuration file
+    if (mRole == AUDIO_PORT_ROLE_SOURCE &&
+            (flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) != 0) {
+        flags |= AUDIO_OUTPUT_FLAG_DIRECT;
+    }
+    if (useInputChannelMask()) {
+        mFlags.input = static_cast<audio_input_flags_t>(flags);
+    } else {
+        mFlags.output = static_cast<audio_output_flags_t>(flags);
+    }
+}
+
 void AudioPort::importAudioPort(const sp<AudioPort>& port, bool force __unused)
 {
     for (const auto& profileToImport : port->mProfiles) {
@@ -195,14 +211,8 @@ bool AudioPort::equals(const sp<AudioPort> &other) const
            mType == other->getType() &&
            mRole == other->getRole() &&
            mProfiles.equals(other->getAudioProfiles()) &&
+           getFlags() == other->getFlags() &&
            mExtraAudioDescriptors == other->getExtraAudioDescriptors();
-}
-
-status_t AudioPort::writeToParcel(Parcel *parcel) const
-{
-    media::AudioPort parcelable;
-    return writeToParcelable(&parcelable)
-        ?: parcelable.writeToParcel(parcel);
 }
 
 status_t AudioPort::writeToParcelable(media::AudioPort* parcelable) const {
@@ -215,17 +225,21 @@ status_t AudioPort::writeToParcelable(media::AudioPort* parcelable) const {
             legacy2aidl_AudioProfileVector(mProfiles, useInputChannelMask()));
     parcelable->hal.profiles = aidlProfiles.first;
     parcelable->sys.profiles = aidlProfiles.second;
+    parcelable->hal.flags = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_io_flags_AudioIoFlags(mFlags, useInputChannelMask()));
     parcelable->hal.extraAudioDescriptors = mExtraAudioDescriptors;
     auto aidlGains = VALUE_OR_RETURN_STATUS(legacy2aidl_AudioGains(mGains));
     parcelable->hal.gains = aidlGains.first;
     parcelable->sys.gains = aidlGains.second;
+    if (mType == AUDIO_PORT_TYPE_MIX) {
+        media::audio::common::AudioPortMixExt mixExt{};
+        mixExt.maxOpenStreamCount = maxOpenCount;
+        mixExt.maxActiveStreamCount = maxActiveCount;
+        mixExt.recommendedMuteDurationMs = recommendedMuteDurationMs;
+        parcelable->hal.ext = media::audio::common::AudioPortExt::make<
+                media::audio::common::AudioPortExt::mix>(mixExt);
+    }
     return OK;
-}
-
-status_t AudioPort::readFromParcel(const Parcel *parcel) {
-    media::AudioPort parcelable;
-    return parcelable.readFromParcel(parcel)
-        ?: readFromParcelable(parcelable);
 }
 
 status_t AudioPort::readFromParcelable(const media::AudioPort& parcelable) {
@@ -238,9 +252,18 @@ status_t AudioPort::readFromParcelable(const media::AudioPort& parcelable) {
             aidl2legacy_AudioProfileVector(
                     std::make_pair(parcelable.hal.profiles, parcelable.sys.profiles),
                     useInputChannelMask()));
+    mFlags = VALUE_OR_RETURN_STATUS(
+            aidl2legacy_AudioIoFlags_audio_io_flags(parcelable.hal.flags, useInputChannelMask()));
     mExtraAudioDescriptors = parcelable.hal.extraAudioDescriptors;
     mGains = VALUE_OR_RETURN_STATUS(
             aidl2legacy_AudioGains(std::make_pair(parcelable.hal.gains, parcelable.sys.gains)));
+    if (mType == AUDIO_PORT_TYPE_MIX) {
+        const media::audio::common::AudioPortMixExt& mixExt =
+                parcelable.hal.ext.get<media::audio::common::AudioPortExt::mix>();
+        maxOpenCount = mixExt.maxOpenStreamCount;
+        maxActiveCount = mixExt.maxActiveStreamCount;
+        recommendedMuteDurationMs = mixExt.recommendedMuteDurationMs;
+    }
     return OK;
 }
 
@@ -261,6 +284,9 @@ status_t AudioPortConfig::applyAudioPortConfig(
     }
     if (config->config_mask & AUDIO_PORT_CONFIG_GAIN) {
         mGain = config->gain;
+    }
+    if (config->config_mask & AUDIO_PORT_CONFIG_FLAGS) {
+        mFlags = config->flags;
     }
 
     return NO_ERROR;
@@ -315,6 +341,9 @@ void AudioPortConfig::toAudioPortConfig(
     } else {
         dstConfig->config_mask &= ~AUDIO_PORT_CONFIG_GAIN;
     }
+
+    updateField(mFlags, &audio_port_config::flags,
+            dstConfig, srcConfig, AUDIO_PORT_CONFIG_FLAGS, { AUDIO_INPUT_FLAG_NONE });
 }
 
 bool AudioPortConfig::hasGainController(bool canUseForVolume) const
@@ -327,12 +356,14 @@ bool AudioPortConfig::hasGainController(bool canUseForVolume) const
                            : audioport->getGains().size() > 0;
 }
 
-bool AudioPortConfig::equals(const sp<AudioPortConfig> &other) const
+bool AudioPortConfig::equals(const sp<AudioPortConfig> &other, bool isInput) const
 {
     return other != nullptr &&
            mSamplingRate == other->getSamplingRate() &&
            mFormat == other->getFormat() &&
            mChannelMask == other->getChannelMask() &&
+           (isInput ? mFlags.input == other->getFlags().input :
+                   mFlags.output == other->getFlags().output )&&
            // Compare audio gain config
            mGain.index == other->mGain.index &&
            mGain.mode == other->mGain.mode &&
@@ -355,6 +386,8 @@ status_t AudioPortConfig::writeToParcelable(
     media::audio::common::AudioGainConfig aidl_gain = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_gain_config_AudioGainConfig(mGain, isInput));
     parcelable->gain = aidl_gain;
+    parcelable->flags = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_io_flags_AudioIoFlags(mFlags, isInput));
     return OK;
 }
 
@@ -377,6 +410,10 @@ status_t AudioPortConfig::readFromParcelable(
     if (parcelable.gain.has_value()) {
         mGain = VALUE_OR_RETURN_STATUS(
                 aidl2legacy_AudioGainConfig_audio_gain_config(parcelable.gain.value(), isInput));
+    }
+    if (parcelable.flags.has_value()) {
+        mFlags = VALUE_OR_RETURN_STATUS(
+                aidl2legacy_AudioIoFlags_audio_io_flags(parcelable.flags.value(), isInput));
     }
     return OK;
 }

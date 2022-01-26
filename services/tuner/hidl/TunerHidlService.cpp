@@ -19,8 +19,11 @@
 
 #include "TunerHidlService.h"
 
+#include <aidl/android/hardware/tv/tuner/FrontendIsdbtTimeInterleaveMode.h>
 #include <aidl/android/hardware/tv/tuner/Result.h>
 #include <android/binder_manager.h>
+#include <binder/IPCThreadState.h>
+#include <binder/PermissionCache.h>
 #include <utils/Log.h>
 
 #include "TunerHelper.h"
@@ -40,9 +43,12 @@ using ::aidl::android::hardware::tv::tuner::FrontendDvbtCapabilities;
 using ::aidl::android::hardware::tv::tuner::FrontendIsdbs3Capabilities;
 using ::aidl::android::hardware::tv::tuner::FrontendIsdbsCapabilities;
 using ::aidl::android::hardware::tv::tuner::FrontendIsdbtCapabilities;
+using ::aidl::android::hardware::tv::tuner::FrontendIsdbtTimeInterleaveMode;
 using ::aidl::android::hardware::tv::tuner::FrontendType;
 using ::aidl::android::hardware::tv::tuner::Result;
 using ::aidl::android::media::tv::tunerresourcemanager::TunerFrontendInfo;
+using ::android::IPCThreadState;
+using ::android::PermissionCache;
 using ::android::hardware::hidl_vec;
 
 using HidlFrontendId = ::android::hardware::tv::tuner::V1_0::FrontendId;
@@ -56,6 +62,8 @@ namespace android {
 namespace media {
 namespace tv {
 namespace tuner {
+
+shared_ptr<TunerHidlService> TunerHidlService::sTunerService = nullptr;
 
 TunerHidlService::TunerHidlService() {
     if (!TunerHelper::checkTunerFeature()) {
@@ -74,8 +82,12 @@ binder_status_t TunerHidlService::instantiate() {
         return STATUS_NAME_NOT_FOUND;
     }
 
-    shared_ptr<TunerHidlService> service = ::ndk::SharedRefBase::make<TunerHidlService>();
-    return AServiceManager_addService(service->asBinder().get(), getServiceName());
+    sTunerService = ::ndk::SharedRefBase::make<TunerHidlService>();
+    return AServiceManager_addService(sTunerService->asBinder().get(), getServiceName());
+}
+
+shared_ptr<TunerHidlService> TunerHidlService::getTunerService() {
+    return sTunerService;
 }
 
 bool TunerHidlService::hasITuner() {
@@ -302,6 +314,62 @@ bool TunerHidlService::hasITuner_1_1() {
     hasITuner();
     *_aidl_return = mTunerVersion;
     return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus TunerHidlService::openSharedFilter(
+        const string& in_filterToken, const shared_ptr<ITunerFilterCallback>& in_cb,
+        shared_ptr<ITunerFilter>* _aidl_return) {
+    if (!hasITuner()) {
+        ALOGE("get ITuner failed");
+        return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::UNAVAILABLE));
+    }
+
+    if (!PermissionCache::checkCallingPermission(sSharedFilterPermission)) {
+        ALOGE("Request requires android.permission.ACCESS_TV_SHARED_FILTER");
+        return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::UNAVAILABLE));
+    }
+
+    Mutex::Autolock _l(mSharedFiltersLock);
+    if (mSharedFilters.find(in_filterToken) == mSharedFilters.end()) {
+        *_aidl_return = nullptr;
+        ALOGD("fail to find %s", in_filterToken.c_str());
+        return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::INVALID_STATE));
+    }
+
+    shared_ptr<TunerHidlFilter> filter = mSharedFilters.at(in_filterToken);
+    IPCThreadState* ipc = IPCThreadState::self();
+    const int pid = ipc->getCallingPid();
+    if (!filter->isSharedFilterAllowed(pid)) {
+        *_aidl_return = nullptr;
+        ALOGD("shared filter %s is opened in the same process", in_filterToken.c_str());
+        return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::INVALID_STATE));
+    }
+
+    filter->attachSharedFilterCallback(in_cb);
+
+    *_aidl_return = filter;
+    return ::ndk::ScopedAStatus::ok();
+}
+
+string TunerHidlService::addFilterToShared(const shared_ptr<TunerHidlFilter>& sharedFilter) {
+    Mutex::Autolock _l(mSharedFiltersLock);
+
+    // Use sharedFilter address as token.
+    string token = to_string(reinterpret_cast<std::uintptr_t>(sharedFilter.get()));
+    mSharedFilters[token] = sharedFilter;
+
+    return token;
+}
+
+void TunerHidlService::removeSharedFilter(const shared_ptr<TunerHidlFilter>& sharedFilter) {
+    Mutex::Autolock _l(mSharedFiltersLock);
+
+    // Use sharedFilter address as token.
+    mSharedFilters.erase(to_string(reinterpret_cast<std::uintptr_t>(sharedFilter.get())));
 }
 
 void TunerHidlService::updateTunerResources() {
@@ -552,6 +620,10 @@ FrontendInfo TunerHidlService::getAidlFrontendInfo(
                             static_cast<int32_t>(halInfo.frontendCaps.isdbtCaps().coderateCap),
                     .guardIntervalCap =
                             static_cast<int32_t>(halInfo.frontendCaps.isdbtCaps().guardIntervalCap),
+                    .timeInterleaveCap =
+                            static_cast<int32_t>(FrontendIsdbtTimeInterleaveMode::UNDEFINED),
+                    .isSegmentAuto = false,
+                    .isFullSegment = false,
             };
             caps.set<FrontendCapabilities::isdbtCaps>(isdbtCaps);
         }

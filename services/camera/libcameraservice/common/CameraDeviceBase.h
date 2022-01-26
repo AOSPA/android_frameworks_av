@@ -97,6 +97,9 @@ class CameraDeviceBase : public virtual FrameProducer {
     virtual status_t disconnect() = 0;
 
     virtual status_t dump(int fd, const Vector<String16> &args) = 0;
+    virtual status_t startWatchingTags(const String8 &tags) = 0;
+    virtual status_t stopWatchingTags() = 0;
+    virtual status_t dumpWatchedEventsToVector(std::vector<std::string> &out) = 0;
 
     /**
      * The physical camera device's static characteristics metadata buffer
@@ -106,6 +109,16 @@ class CameraDeviceBase : public virtual FrameProducer {
     struct PhysicalCameraSettings {
         std::string cameraId;
         CameraMetadata metadata;
+
+        // Whether the physical camera supports testPatternMode/testPatternData
+        bool mHasTestPatternModeTag = true;
+        bool mHasTestPatternDataTag = true;
+
+        // Original value of TEST_PATTERN_MODE and DATA so that they can be
+        // restored when sensor muting is turned off
+        int32_t mOriginalTestPatternMode = 0;
+        int32_t mOriginalTestPatternData[4] = {};
+
     };
     typedef List<PhysicalCameraSettings> PhysicalCameraSettingsList;
 

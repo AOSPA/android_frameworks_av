@@ -55,13 +55,14 @@ Camera2ClientBase<TClientBase>::Camera2ClientBase(
         int clientPid,
         uid_t clientUid,
         int servicePid,
-        bool overrideForPerfClass):
+        bool overrideForPerfClass,
+        bool legacyClient):
         TClientBase(cameraService, remoteCallback, clientPackageName, clientFeatureId,
                 cameraId, api1CameraId, cameraFacing, sensorOrientation, clientPid, clientUid,
                 servicePid),
         mSharedCameraCallbacks(remoteCallback),
         mDeviceVersion(cameraService->getDeviceVersion(TClientBase::mCameraIdStr)),
-        mDevice(new Camera3Device(cameraId, overrideForPerfClass)),
+        mDevice(new Camera3Device(cameraId, overrideForPerfClass, legacyClient)),
         mDeviceActive(false), mApi1CameraId(api1CameraId)
 {
     ALOGI("Camera %s: Opened. Client: %s (PID %d, UID %d)", cameraId.string(),
@@ -152,6 +153,38 @@ status_t Camera2ClientBase<TClientBase>::dumpClient(int fd,
     // TODO: print dynamic/request section from most recent requests
 
     return dumpDevice(fd, args);
+}
+
+template <typename TClientBase>
+status_t Camera2ClientBase<TClientBase>::startWatchingTags(const String8 &tags, int out) {
+  sp<CameraDeviceBase> device = mDevice;
+  if (!device) {
+    dprintf(out, "  Device is detached");
+    return OK;
+  }
+
+  return device->startWatchingTags(tags);
+}
+
+template <typename TClientBase>
+status_t Camera2ClientBase<TClientBase>::stopWatchingTags(int out) {
+  sp<CameraDeviceBase> device = mDevice;
+  if (!device) {
+    dprintf(out, "  Device is detached");
+    return OK;
+  }
+
+  return device->stopWatchingTags();
+}
+
+template <typename TClientBase>
+status_t Camera2ClientBase<TClientBase>::dumpWatchedEventsToVector(std::vector<std::string> &out) {
+    sp<CameraDeviceBase> device = mDevice;
+    if (!device) {
+        // Nothing to dump if the device is detached
+        return OK;
+    }
+    return device->dumpWatchedEventsToVector(out);
 }
 
 template <typename TClientBase>

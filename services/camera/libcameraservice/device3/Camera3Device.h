@@ -90,7 +90,7 @@ class Camera3Device :
             public camera3::FlushBufferInterface {
   public:
 
-    explicit Camera3Device(const String8& id, bool overrideForPerfClass);
+    explicit Camera3Device(const String8& id, bool overrideForPerfClass, bool legacyClient = false);
 
     virtual ~Camera3Device();
 
@@ -106,6 +106,9 @@ class Camera3Device :
     status_t initialize(sp<CameraProviderManager> manager, const String8& monitorTags) override;
     status_t disconnect() override;
     status_t dump(int fd, const Vector<String16> &args) override;
+    status_t startWatchingTags(const String8 &tags) override;
+    status_t stopWatchingTags() override;
+    status_t dumpWatchedEventsToVector(std::vector<std::string> &out) override;
     const CameraMetadata& info() const override;
     const CameraMetadata& infoPhysical(const String8& physicalId) const override;
 
@@ -332,6 +335,9 @@ class Camera3Device :
 
     // Camera device ID
     const String8              mId;
+
+    // Legacy camera client flag
+    bool                       mLegacyClient;
 
     // Current stream configuration mode;
     int                        mOperatingMode;
@@ -573,17 +579,12 @@ class Camera3Device :
         // overriding of ROTATE_AND_CROP value and adjustment of coordinates
         // in several other controls in both the request and the result
         bool                                mRotateAndCropAuto;
-        // Original value of TEST_PATTERN_MODE and DATA so that they can be
-        // restored when sensor muting is turned off
-        int32_t                             mOriginalTestPatternMode;
-        int32_t                             mOriginalTestPatternData[4];
 
         // Whether this capture request has its zoom ratio set to 1.0x before
         // the framework overrides it for camera HAL consumption.
         bool                                mZoomRatioIs1x;
         // The systemTime timestamp when the request is created.
         nsecs_t                             mRequestTimeNs;
-
 
         // Whether this capture request's distortion correction update has
         // been done.
@@ -919,6 +920,7 @@ class Camera3Device :
 
         status_t setRotateAndCropAutoBehavior(
                 camera_metadata_enum_android_scaler_rotate_and_crop_t rotateAndCropValue);
+        status_t setComposerSurface(bool composerSurfacePresent);
 
         status_t setCameraMute(int32_t muteMode);
 
@@ -1071,6 +1073,7 @@ class Camera3Device :
         uint32_t           mCurrentAfTriggerId;
         uint32_t           mCurrentPreCaptureTriggerId;
         camera_metadata_enum_android_scaler_rotate_and_crop_t mRotateAndCropOverride;
+        bool               mComposerOutput;
         int32_t            mCameraMute; // 0 = no mute, otherwise the TEST_PATTERN_MODE to use
         bool               mCameraMuteChanged;
 

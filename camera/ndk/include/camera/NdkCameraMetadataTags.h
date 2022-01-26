@@ -1090,6 +1090,15 @@ typedef enum acamera_metadata_tag {
      * (ACAMERA_LENS_OPTICAL_STABILIZATION_MODE), turning both modes on may
      * produce undesirable interaction, so it is recommended not to enable
      * both at the same time.</p>
+     * <p>If video stabilization is set to "PREVIEW_STABILIZATION",
+     * ACAMERA_LENS_OPTICAL_STABILIZATION_MODE is overridden. The camera sub-system may choose
+     * to turn on hardware based image stabilization in addition to software based stabilization
+     * if it deems that appropriate.
+     * This key may be a part of the available session keys, which camera clients may
+     * query via
+     * {@link ACameraManager_getCameraCharacteristics }.
+     * If this is the case, changing this key over the life-time of a capture session may
+     * cause delays / glitches.</p>
      *
      * @see ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE
      * @see ACAMERA_LENS_OPTICAL_STABILIZATION_MODE
@@ -2144,6 +2153,51 @@ typedef enum acamera_metadata_tag {
      */
     ACAMERA_FLASH_INFO_AVAILABLE =                              // byte (acamera_metadata_enum_android_flash_info_available_t)
             ACAMERA_FLASH_INFO_START,
+    /**
+     * <p>Maximum flashlight brightness level.</p>
+     *
+     * <p>Type: int32</p>
+     *
+     * <p>This tag may appear in:
+     * <ul>
+     *   <li>ACameraMetadata from ACameraManager_getCameraCharacteristics</li>
+     * </ul></p>
+     *
+     * <p>If this value is greater than 1, then the device supports controlling the
+     * flashlight brightness level via
+     * {android.hardware.camera2.CameraManager#setTorchStrengthLevel}.
+     * If this value is equal to 1, flashlight brightness control is not supported.
+     * The value for this key will be null for devices with no flash unit.</p>
+     */
+    ACAMERA_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL =                 // int32
+            ACAMERA_FLASH_INFO_START + 2,
+    /**
+     * <p>Default flashlight brightness level to be set via
+     * {android.hardware.camera2.CameraManager#setTorchStrengthLevel}.</p>
+     *
+     * <p>Type: int32</p>
+     *
+     * <p>This tag may appear in:
+     * <ul>
+     *   <li>ACameraMetadata from ACameraManager_getCameraCharacteristics</li>
+     * </ul></p>
+     *
+     * <p>If flash unit is available this will be greater than or equal to 1 and less
+     * or equal to <code>ACAMERA_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL</code>.</p>
+     * <p>Setting flashlight brightness above the default level
+     * (i.e.<code>ACAMERA_FLASH_INFO_STRENGTH_DEFAULT_LEVEL</code>) may make the device more
+     * likely to reach thermal throttling conditions and slow down, or drain the
+     * battery quicker than normal. To minimize such issues, it is recommended to
+     * start the flashlight at this default brightness until a user explicitly requests
+     * a brighter level.
+     * Note that the value for this key will be null for devices with no flash unit.
+     * The default level should always be &gt; 0.</p>
+     *
+     * @see ACAMERA_FLASH_INFO_STRENGTH_DEFAULT_LEVEL
+     * @see ACAMERA_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL
+     */
+    ACAMERA_FLASH_INFO_STRENGTH_DEFAULT_LEVEL =                 // int32
+            ACAMERA_FLASH_INFO_START + 3,
     ACAMERA_FLASH_INFO_END,
 
     /**
@@ -2526,12 +2580,18 @@ typedef enum acamera_metadata_tag {
      * <p>If a camera device supports both OIS and digital image stabilization
      * (ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE), turning both modes on may produce undesirable
      * interaction, so it is recommended not to enable both at the same time.</p>
+     * <p>If ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE is set to "PREVIEW_STABILIZATION",
+     * ACAMERA_LENS_OPTICAL_STABILIZATION_MODE is overridden. The camera sub-system may choose
+     * to turn on hardware based image stabilization in addition to software based stabilization
+     * if it deems that appropriate. This key's value in the capture result will reflect which
+     * OIS mode was chosen.</p>
      * <p>Not all devices will support OIS; see
      * ACAMERA_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION for
      * available controls.</p>
      *
      * @see ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE
      * @see ACAMERA_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION
+     * @see ACAMERA_LENS_OPTICAL_STABILIZATION_MODE
      */
     ACAMERA_LENS_OPTICAL_STABILIZATION_MODE =                   // byte (acamera_metadata_enum_android_lens_optical_stabilization_mode_t)
             ACAMERA_LENS_START + 4,
@@ -4578,6 +4638,25 @@ typedef enum acamera_metadata_tag {
      *
      * <p>Also defines the direction of rolling shutter readout, which is from top to bottom in
      * the sensor's coordinate system.</p>
+     * <p>Starting with Android API level 32, camera clients that query the orientation via
+     * <a href="https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics.html#get">CameraCharacteristics#get</a> on foldable devices which
+     * include logical cameras can receive a value that can dynamically change depending on the
+     * device/fold state.
+     * Clients are advised to not cache or store the orientation value of such logical sensors.
+     * In case repeated queries to CameraCharacteristics are not preferred, then clients can
+     * also access the entire mapping from device state to sensor orientation in
+     * <a href="https://developer.android.com/reference/android/hardware/camera2/params/DeviceStateSensorOrientationMap.html">DeviceStateSensorOrientationMap</a>.
+     * Do note that a dynamically changing sensor orientation value in camera characteristics
+     * will not be the best way to establish the orientation per frame. Clients that want to
+     * know the sensor orientation of a particular captured frame should query the
+     * ACAMERA_LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID from the corresponding capture result and
+     * check the respective physical camera orientation.</p>
+     * <p>Native camera clients must query ACAMERA_INFO_DEVICE_STATE_ORIENTATIONS for the mapping
+     * between device state and camera sensor orientation. Dynamic updates to the sensor
+     * orientation are not supported in this code path.</p>
+     *
+     * @see ACAMERA_INFO_DEVICE_STATE_ORIENTATIONS
+     * @see ACAMERA_LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID
      */
     ACAMERA_SENSOR_ORIENTATION =                                // int32
             ACAMERA_SENSOR_START + 14,
@@ -6284,6 +6363,21 @@ typedef enum acamera_metadata_tag {
      */
     ACAMERA_INFO_VERSION =                                      // byte
             ACAMERA_INFO_START + 1,
+    /**
+     *
+     * <p>Type: int64[2*n]</p>
+     *
+     * <p>This tag may appear in:
+     * <ul>
+     *   <li>ACameraMetadata from ACameraManager_getCameraCharacteristics</li>
+     * </ul></p>
+     *
+     * <p>HAL must populate the array with
+     * (hardware::camera::provider::V2_5::DeviceState, sensorOrientation) pairs for each
+     * supported device state bitwise combination.</p>
+     */
+    ACAMERA_INFO_DEVICE_STATE_ORIENTATIONS =                    // int64[2*n]
+            ACAMERA_INFO_START + 3,
     ACAMERA_INFO_END,
 
     /**
@@ -7934,6 +8028,17 @@ typedef enum acamera_metadata_enum_acamera_control_video_stabilization_mode {
      * <p>Video stabilization is enabled.</p>
      */
     ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_ON                      = 1,
+
+    /**
+     * <p>Preview stabilization, where the preview in addition to all other non-RAW streams are
+     * stabilized with the same quality of stabilization, is enabled. This mode aims to give
+     * clients a 'what you see is what you get' effect. In this mode, the FoV reduction will
+     * be a maximum of 20 % both horizontally and vertically
+     * (10% from left, right, top, bottom) for the given zoom ratio / crop region.
+     * The resultant FoV will also be the same across all processed streams
+     * (that have the same aspect ratio).</p>
+     */
+    ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION   = 2,
 
 } acamera_metadata_enum_android_control_video_stabilization_mode_t;
 

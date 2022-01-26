@@ -16,10 +16,12 @@
 
 #define LOG_TAG "TimeCheck"
 
-#include <utils/Log.h>
-#include <mediautils/TimeCheck.h>
+#include <optional>
+
 #include <mediautils/EventLog.h>
 #include <cutils/properties.h>
+#include <utils/Log.h>
+#include <mediautils/TimeCheck.h>
 #include "debuggerd/handler.h"
 
 namespace android {
@@ -59,9 +61,8 @@ std::vector<pid_t> TimeCheck::getAudioHalPids() {
 }
 
 /* static */
-sp<TimeCheck::TimeCheckThread> TimeCheck::getTimeCheckThread()
-{
-    static sp<TimeCheck::TimeCheckThread> sTimeCheckThread = new TimeCheck::TimeCheckThread();
+TimerThread* TimeCheck::getTimeCheckThread() {
+    static TimerThread* sTimeCheckThread = new TimerThread();
     return sTimeCheckThread;
 }
 
@@ -72,78 +73,31 @@ void TimeCheck::setSystemReadyTimeoutMs(uint32_t timeout_ms)
     timeOutMs = timeout_ms;
 }
 
-TimeCheck::TimeCheck(const char *tag)
-{
-    mEndTimeNs = getTimeCheckThread()->startMonitoring(tag, timeOutMs);
-}
+// BUG(b/214424164)
+TimeCheck::TimeCheck(const char* tag)
+    : mTimerHandle(getTimeCheckThread()->scheduleTask([tag] { crash(tag); },
+                                                      std::chrono::milliseconds(timeOutMs))) {}
 
 TimeCheck::~TimeCheck() {
-    getTimeCheckThread()->stopMonitoring(mEndTimeNs);
+    getTimeCheckThread()->cancelTask(mTimerHandle);
 }
 
-TimeCheck::TimeCheckThread::~TimeCheckThread()
-{
-    AutoMutex _l(mMutex);
-    requestExit();
-    mMonitorRequests.clear();
-    mCond.signal();
-}
-
-nsecs_t TimeCheck::TimeCheckThread::startMonitoring(const char *tag, uint32_t timeoutMs) {
-    Mutex::Autolock _l(mMutex);
-    nsecs_t endTimeNs = systemTime() + milliseconds(timeoutMs);
-    for (; mMonitorRequests.indexOfKey(endTimeNs) >= 0; ++endTimeNs);
-    mMonitorRequests.add(endTimeNs, tag);
-    mCond.signal();
-    return endTimeNs;
-}
-
-void TimeCheck::TimeCheckThread::stopMonitoring(nsecs_t endTimeNs) {
-    Mutex::Autolock _l(mMutex);
-    mMonitorRequests.removeItem(endTimeNs);
-    mCond.signal();
-}
-
-bool TimeCheck::TimeCheckThread::threadLoop()
-{
-    status_t status = TIMED_OUT;
-    {
-        AutoMutex _l(mMutex);
-
-        if (exitPending()) {
-            return false;
+/* static */
+void TimeCheck::crash(const char* tag) {
+    // Generate audio HAL processes tombstones and allow time to complete
+    // before forcing restart
+    std::vector<pid_t> pids = getAudioHalPids();
+    if (pids.size() != 0) {
+        for (const auto& pid : pids) {
+            ALOGI("requesting tombstone for pid: %d", pid);
+            sigqueue(pid, DEBUGGER_SIGNAL, {.sival_int = 0});
         }
-
-        nsecs_t endTimeNs = INT64_MAX;
-        const char *tag = "<unspecified>";
-        // KeyedVector mMonitorRequests is ordered so take first entry as next timeout
-        if (mMonitorRequests.size() != 0) {
-            endTimeNs = mMonitorRequests.keyAt(0);
-            tag = mMonitorRequests.valueAt(0);
-        }
-
-        const nsecs_t waitTimeNs = endTimeNs - systemTime();
-        if (waitTimeNs > 0) {
-            status = mCond.waitRelative(mMutex, waitTimeNs);
-        }
-        if (status != NO_ERROR) {
-            // Generate audio HAL processes tombstones and allow time to complete
-            // before forcing restart
-            std::vector<pid_t> pids = getAudioHalPids();
-            if (pids.size() != 0) {
-                for (const auto& pid : pids) {
-                    ALOGI("requesting tombstone for pid: %d", pid);
-                    sigqueue(pid, DEBUGGER_SIGNAL, {.sival_int = 0});
-                }
-                sleep(1);
-            } else {
-                ALOGI("No HAL process pid available, skipping tombstones");
-            }
-            LOG_EVENT_STRING(LOGTAG_AUDIO_BINDER_TIMEOUT, tag);
-            LOG_ALWAYS_FATAL("TimeCheck timeout for %s", tag);
-        }
+        sleep(1);
+    } else {
+        ALOGI("No HAL process pid available, skipping tombstones");
     }
-    return true;
+    LOG_EVENT_STRING(LOGTAG_AUDIO_BINDER_TIMEOUT, tag);
+    LOG_ALWAYS_FATAL("TimeCheck timeout for %s", tag);
 }
 
-}; // namespace android
+};  // namespace android

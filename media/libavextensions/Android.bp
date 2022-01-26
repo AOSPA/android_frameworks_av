@@ -108,6 +108,7 @@ cc_library_static {
         "libstagefright_headers",
         "libmediadrm_headers",
         "libmediametrics_headers",
+	"libmediautils_headers",
     ],
     include_dirs: [
         "frameworks/av/media/libstagefright/rtsp",

@@ -54,19 +54,10 @@ DeviceDescriptor::DeviceDescriptor(audio_devices_t type,
 DeviceDescriptor::DeviceDescriptor(const AudioDeviceTypeAddr &deviceTypeAddr,
                                    const std::string &tagName,
                                    const FormatVector &encodedFormats) :
-        DeviceDescriptorBase(deviceTypeAddr), mTagName(tagName), mEncodedFormats(encodedFormats),
+        DeviceDescriptorBase(deviceTypeAddr, encodedFormats), mTagName(tagName),
         mDeclaredAddress(DeviceDescriptorBase::address())
 {
     mCurrentEncodedFormat = AUDIO_FORMAT_DEFAULT;
-    /* If framework runs against a pre 5.0 Audio HAL, encoded formats are absent from the config.
-     * FIXME: APM should know the version of the HAL and don't add the formats for V5.0.
-     * For now, the workaround to remove AC3 and IEC61937 support on HDMI is to declare
-     * something like 'encodedFormats="AUDIO_FORMAT_PCM_16_BIT"' on the HDMI devicePort.
-     */
-    if (mDeviceTypeAddr.mType == AUDIO_DEVICE_OUT_HDMI && mEncodedFormats.empty()) {
-        mEncodedFormats.push_back(AUDIO_FORMAT_AC3);
-        mEncodedFormats.push_back(AUDIO_FORMAT_IEC61937);
-    }
 }
 
 void DeviceDescriptor::attach(const sp<HwModule>& module)
@@ -118,20 +109,6 @@ bool DeviceDescriptor::hasCurrentEncodedFormat() const
     return (mCurrentEncodedFormat != AUDIO_FORMAT_DEFAULT);
 }
 
-bool DeviceDescriptor::supportsFormat(audio_format_t format)
-{
-    if (mEncodedFormats.empty()) {
-        return true;
-    }
-
-    for (const auto& devFormat : mEncodedFormats) {
-        if (devFormat == format) {
-            return true;
-        }
-    }
-    return false;
-}
-
 status_t DeviceDescriptor::applyAudioPortConfig(const struct audio_port_config *config,
                                                 audio_port_config *backupConfig)
 {
@@ -141,7 +118,6 @@ status_t DeviceDescriptor::applyAudioPortConfig(const struct audio_port_config *
     toAudioPortConfig(&localBackupConfig);
     if ((status = validationBeforeApplyConfig(config)) == NO_ERROR) {
         AudioPortConfig::applyAudioPortConfig(config, backupConfig);
-        applyPolicyAudioPortConfig(config);
     }
 
     if (backupConfig != NULL) {
@@ -154,8 +130,6 @@ void DeviceDescriptor::toAudioPortConfig(struct audio_port_config *dstConfig,
                                          const struct audio_port_config *srcConfig) const
 {
     DeviceDescriptorBase::toAudioPortConfig(dstConfig, srcConfig);
-    toPolicyAudioPortConfig(dstConfig, srcConfig);
-
     dstConfig->ext.device.hw_module = getModuleHandle();
 }
 

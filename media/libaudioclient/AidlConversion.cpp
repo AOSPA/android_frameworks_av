@@ -50,8 +50,12 @@ using media::audio::common::AudioFormatType;
 using media::audio::common::AudioGain;
 using media::audio::common::AudioGainConfig;
 using media::audio::common::AudioGainMode;
+using media::audio::common::AudioInputFlags;
+using media::audio::common::AudioIoFlags;
 using media::audio::common::AudioMode;
 using media::audio::common::AudioOffloadInfo;
+using media::audio::common::AudioOutputFlags;
+using media::audio::common::AudioPortDeviceExt;
 using media::audio::common::AudioPortExt;
 using media::audio::common::AudioPortMixExt;
 using media::audio::common::AudioPortMixExtUseCase;
@@ -364,12 +368,36 @@ ConversionResult<media::AudioPortType> legacy2aidl_audio_port_type_t_AudioPortTy
 namespace {
 
 namespace detail {
+using AudioChannelBitPair = std::pair<audio_channel_mask_t, int>;
+using AudioChannelBitPairs = std::vector<AudioChannelBitPair>;
 using AudioChannelPair = std::pair<audio_channel_mask_t, AudioChannelLayout>;
 using AudioChannelPairs = std::vector<AudioChannelPair>;
 using AudioDevicePair = std::pair<audio_devices_t, AudioDeviceDescription>;
 using AudioDevicePairs = std::vector<AudioDevicePair>;
 using AudioFormatPair = std::pair<audio_format_t, AudioFormatDescription>;
 using AudioFormatPairs = std::vector<AudioFormatPair>;
+}
+
+const detail::AudioChannelBitPairs& getInAudioChannelBits() {
+    static const detail::AudioChannelBitPairs pairs = {
+        { AUDIO_CHANNEL_IN_LEFT, AudioChannelLayout::CHANNEL_FRONT_LEFT },
+        { AUDIO_CHANNEL_IN_RIGHT, AudioChannelLayout::CHANNEL_FRONT_RIGHT },
+        // AUDIO_CHANNEL_IN_FRONT is at the end
+        { AUDIO_CHANNEL_IN_BACK, AudioChannelLayout::CHANNEL_BACK_CENTER },
+        // AUDIO_CHANNEL_IN_*_PROCESSED not supported
+        // AUDIO_CHANNEL_IN_PRESSURE not supported
+        // AUDIO_CHANNEL_IN_*_AXIS not supported
+        // AUDIO_CHANNEL_IN_VOICE_* not supported
+        { AUDIO_CHANNEL_IN_BACK_LEFT, AudioChannelLayout::CHANNEL_BACK_LEFT },
+        { AUDIO_CHANNEL_IN_BACK_RIGHT, AudioChannelLayout::CHANNEL_BACK_RIGHT },
+        { AUDIO_CHANNEL_IN_CENTER, AudioChannelLayout::CHANNEL_FRONT_CENTER },
+        { AUDIO_CHANNEL_IN_LOW_FREQUENCY, AudioChannelLayout::CHANNEL_LOW_FREQUENCY },
+        { AUDIO_CHANNEL_IN_TOP_LEFT, AudioChannelLayout::CHANNEL_TOP_SIDE_LEFT },
+        { AUDIO_CHANNEL_IN_TOP_RIGHT, AudioChannelLayout::CHANNEL_TOP_SIDE_RIGHT },
+        // When going from aidl to legacy, IN_CENTER is used
+        { AUDIO_CHANNEL_IN_FRONT, AudioChannelLayout::CHANNEL_FRONT_CENTER }
+    };
+    return pairs;
 }
 
 const detail::AudioChannelPairs& getInAudioChannelPairs() {
@@ -391,6 +419,44 @@ const detail::AudioChannelPairs& getInAudioChannelPairs() {
         DEFINE_INPUT_LAYOUT(3POINT1POINT2),
         DEFINE_INPUT_LAYOUT(5POINT1)
 #undef DEFINE_INPUT_LAYOUT
+    };
+    return pairs;
+}
+
+const detail::AudioChannelBitPairs& getOutAudioChannelBits() {
+    static const detail::AudioChannelBitPairs pairs = {
+#define DEFINE_OUTPUT_BITS(n)                                                  \
+            { AUDIO_CHANNEL_OUT_##n, AudioChannelLayout::CHANNEL_##n }
+
+        DEFINE_OUTPUT_BITS(FRONT_LEFT),
+        DEFINE_OUTPUT_BITS(FRONT_RIGHT),
+        DEFINE_OUTPUT_BITS(FRONT_CENTER),
+        DEFINE_OUTPUT_BITS(LOW_FREQUENCY),
+        DEFINE_OUTPUT_BITS(BACK_LEFT),
+        DEFINE_OUTPUT_BITS(BACK_RIGHT),
+        DEFINE_OUTPUT_BITS(FRONT_LEFT_OF_CENTER),
+        DEFINE_OUTPUT_BITS(FRONT_RIGHT_OF_CENTER),
+        DEFINE_OUTPUT_BITS(BACK_CENTER),
+        DEFINE_OUTPUT_BITS(SIDE_LEFT),
+        DEFINE_OUTPUT_BITS(SIDE_RIGHT),
+        DEFINE_OUTPUT_BITS(TOP_CENTER),
+        DEFINE_OUTPUT_BITS(TOP_FRONT_LEFT),
+        DEFINE_OUTPUT_BITS(TOP_FRONT_CENTER),
+        DEFINE_OUTPUT_BITS(TOP_FRONT_RIGHT),
+        DEFINE_OUTPUT_BITS(TOP_BACK_LEFT),
+        DEFINE_OUTPUT_BITS(TOP_BACK_CENTER),
+        DEFINE_OUTPUT_BITS(TOP_BACK_RIGHT),
+        DEFINE_OUTPUT_BITS(TOP_SIDE_LEFT),
+        DEFINE_OUTPUT_BITS(TOP_SIDE_RIGHT),
+        DEFINE_OUTPUT_BITS(BOTTOM_FRONT_LEFT),
+        DEFINE_OUTPUT_BITS(BOTTOM_FRONT_CENTER),
+        DEFINE_OUTPUT_BITS(BOTTOM_FRONT_RIGHT),
+        DEFINE_OUTPUT_BITS(LOW_FREQUENCY_2),
+        DEFINE_OUTPUT_BITS(FRONT_WIDE_LEFT),
+        DEFINE_OUTPUT_BITS(FRONT_WIDE_RIGHT),
+#undef DEFINE_OUTPUT_BITS
+        { AUDIO_CHANNEL_OUT_HAPTIC_A, AudioChannelLayout::CHANNEL_HAPTIC_A },
+        { AUDIO_CHANNEL_OUT_HAPTIC_B, AudioChannelLayout::CHANNEL_HAPTIC_B }
     };
     return pairs;
 }
@@ -1003,6 +1069,25 @@ std::unordered_map<T, S> make_ReverseMap(const std::vector<std::pair<S, T>>& v) 
 
 }  // namespace
 
+audio_channel_mask_t aidl2legacy_AudioChannelLayout_layout_audio_channel_mask_t_bits(
+        int aidlLayout, bool isInput) {
+    auto& bitMapping = isInput ? getInAudioChannelBits() : getOutAudioChannelBits();
+    const int aidlLayoutInitial = aidlLayout; // for error message
+    audio_channel_mask_t legacy = AUDIO_CHANNEL_NONE;
+    for (const auto& bitPair : bitMapping) {
+        if ((aidlLayout & bitPair.second) == bitPair.second) {
+            legacy = static_cast<audio_channel_mask_t>(legacy | bitPair.first);
+            aidlLayout &= ~bitPair.second;
+            if (aidlLayout == 0) {
+                return legacy;
+            }
+        }
+    }
+    ALOGE("%s: aidl layout 0x%x contains bits 0x%x that have no match to legacy %s bits",
+            __func__, aidlLayoutInitial, aidlLayout, isInput ? "input" : "output");
+    return AUDIO_CHANNEL_NONE;
+}
+
 ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_channel_mask_t(
         const AudioChannelLayout& aidl, bool isInput) {
     using ReverseMap = std::unordered_map<AudioChannelLayout, audio_channel_mask_t>;
@@ -1016,7 +1101,7 @@ ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_chan
         if (auto it = m.find(aidl); it != m.end()) {
             return it->second;
         } else {
-            ALOGE("%s: no legacy %s audio_channel_mask_t found for %s", func, type,
+            ALOGW("%s: no legacy %s audio_channel_mask_t found for %s", func, type,
                     aidl.toString().c_str());
             return unexpected(BAD_VALUE);
         }
@@ -1027,10 +1112,10 @@ ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_chan
             return AUDIO_CHANNEL_NONE;
         case Tag::invalid:
             return AUDIO_CHANNEL_INVALID;
-        case Tag::indexMask: {
+        case Tag::indexMask:
             // Index masks do not have pre-defined values.
-            const int bits = aidl.get<Tag::indexMask>();
-            if (__builtin_popcount(bits) != 0 &&
+            if (const int bits = aidl.get<Tag::indexMask>();
+                    __builtin_popcount(bits) != 0 &&
                     __builtin_popcount(bits) <= AUDIO_CHANNEL_COUNT_MAX) {
                 return audio_channel_mask_from_representation_and_bits(
                         AUDIO_CHANNEL_REPRESENTATION_INDEX, bits);
@@ -1039,14 +1124,45 @@ ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_chan
                         __func__, bits, aidl.toString().c_str());
                 return unexpected(BAD_VALUE);
             }
-        }
         case Tag::layoutMask:
-            return convert(aidl, isInput ? mIn : mOut, __func__, isInput ? "input" : "output");
+            // The fast path is to find a direct match for some known layout mask.
+            if (const auto layoutMatch = convert(aidl, isInput ? mIn : mOut, __func__,
+                    isInput ? "input" : "output");
+                    layoutMatch.ok()) {
+                return layoutMatch;
+            }
+            // If a match for a predefined layout wasn't found, make a custom one from bits.
+            if (audio_channel_mask_t bitMask =
+                    aidl2legacy_AudioChannelLayout_layout_audio_channel_mask_t_bits(
+                            aidl.get<Tag::layoutMask>(), isInput);
+                    bitMask != AUDIO_CHANNEL_NONE) {
+                return bitMask;
+            }
+            return unexpected(BAD_VALUE);
         case Tag::voiceMask:
             return convert(aidl, mVoice, __func__, "voice");
     }
     ALOGE("%s: unexpected tag value %d", __func__, aidl.getTag());
     return unexpected(BAD_VALUE);
+}
+
+int legacy2aidl_audio_channel_mask_t_bits_AudioChannelLayout_layout(
+        audio_channel_mask_t legacy, bool isInput) {
+    auto& bitMapping = isInput ? getInAudioChannelBits() : getOutAudioChannelBits();
+    const int legacyInitial = legacy; // for error message
+    int aidlLayout = 0;
+    for (const auto& bitPair : bitMapping) {
+        if ((legacy & bitPair.first) == bitPair.first) {
+            aidlLayout |= bitPair.second;
+            legacy = static_cast<audio_channel_mask_t>(legacy & ~bitPair.first);
+            if (legacy == 0) {
+                return aidlLayout;
+            }
+        }
+    }
+    ALOGE("%s: legacy %s audio_channel_mask_t 0x%x contains unrecognized bits 0x%x",
+            __func__, isInput ? "input" : "output", legacyInitial, legacy);
+    return 0;
 }
 
 ConversionResult<AudioChannelLayout> legacy2aidl_audio_channel_mask_t_AudioChannelLayout(
@@ -1062,7 +1178,7 @@ ConversionResult<AudioChannelLayout> legacy2aidl_audio_channel_mask_t_AudioChann
         if (auto it = m.find(legacy); it != m.end()) {
             return it->second;
         } else {
-            ALOGE("%s: no AudioChannelLayout found for legacy %s audio_channel_mask_t value 0x%x",
+            ALOGW("%s: no AudioChannelLayout found for legacy %s audio_channel_mask_t value 0x%x",
                     func, type, legacy);
             return unexpected(BAD_VALUE);
         }
@@ -1085,8 +1201,27 @@ ConversionResult<AudioChannelLayout> legacy2aidl_audio_channel_mask_t_AudioChann
             return unexpected(BAD_VALUE);
         }
     } else if (repr == AUDIO_CHANNEL_REPRESENTATION_POSITION) {
-        return convert(legacy, isInput ? mInAndVoice : mOut, __func__,
+        // The fast path is to find a direct match for some known layout mask.
+        if (const auto layoutMatch = convert(legacy, isInput ? mInAndVoice : mOut, __func__,
                 isInput ? "input / voice" : "output");
+                layoutMatch.ok()) {
+            return layoutMatch;
+        }
+        // If a match for a predefined layout wasn't found, make a custom one from bits,
+        // rejecting those with voice channel bits.
+        if (!isInput ||
+                (legacy & (AUDIO_CHANNEL_IN_VOICE_UPLINK | AUDIO_CHANNEL_IN_VOICE_DNLINK)) == 0) {
+            if (int bitMaskLayout =
+                    legacy2aidl_audio_channel_mask_t_bits_AudioChannelLayout_layout(
+                            legacy, isInput);
+                    bitMaskLayout != 0) {
+                return AudioChannelLayout::make<Tag::layoutMask>(bitMaskLayout);
+            }
+        } else {
+            ALOGE("%s: legacy audio_channel_mask_t value 0x%x contains voice bits",
+                    __func__, legacy);
+        }
+        return unexpected(BAD_VALUE);
     }
 
     ALOGE("%s: unknown representation %d in audio_channel_mask_t value 0x%x",
@@ -1281,129 +1416,129 @@ ConversionResult<AudioGainConfig> legacy2aidl_audio_gain_config_AudioGainConfig(
 }
 
 ConversionResult<audio_input_flags_t> aidl2legacy_AudioInputFlags_audio_input_flags_t(
-        media::AudioInputFlags aidl) {
+        AudioInputFlags aidl) {
     switch (aidl) {
-        case media::AudioInputFlags::FAST:
+        case AudioInputFlags::FAST:
             return AUDIO_INPUT_FLAG_FAST;
-        case media::AudioInputFlags::HW_HOTWORD:
+        case AudioInputFlags::HW_HOTWORD:
             return AUDIO_INPUT_FLAG_HW_HOTWORD;
-        case media::AudioInputFlags::RAW:
+        case AudioInputFlags::RAW:
             return AUDIO_INPUT_FLAG_RAW;
-        case media::AudioInputFlags::SYNC:
+        case AudioInputFlags::SYNC:
             return AUDIO_INPUT_FLAG_SYNC;
-        case media::AudioInputFlags::MMAP_NOIRQ:
+        case AudioInputFlags::MMAP_NOIRQ:
             return AUDIO_INPUT_FLAG_MMAP_NOIRQ;
-        case media::AudioInputFlags::VOIP_TX:
+        case AudioInputFlags::VOIP_TX:
             return AUDIO_INPUT_FLAG_VOIP_TX;
-        case media::AudioInputFlags::HW_AV_SYNC:
+        case AudioInputFlags::HW_AV_SYNC:
             return AUDIO_INPUT_FLAG_HW_AV_SYNC;
-        case media::AudioInputFlags::DIRECT:
+        case AudioInputFlags::DIRECT:
             return AUDIO_INPUT_FLAG_DIRECT;
     }
     return unexpected(BAD_VALUE);
 }
 
-ConversionResult<media::AudioInputFlags> legacy2aidl_audio_input_flags_t_AudioInputFlags(
+ConversionResult<AudioInputFlags> legacy2aidl_audio_input_flags_t_AudioInputFlags(
         audio_input_flags_t legacy) {
     switch (legacy) {
         case AUDIO_INPUT_FLAG_NONE:
             break; // shouldn't get here. must be listed  -Werror,-Wswitch
         case AUDIO_INPUT_FLAG_FAST:
-            return media::AudioInputFlags::FAST;
+            return AudioInputFlags::FAST;
         case AUDIO_INPUT_FLAG_HW_HOTWORD:
-            return media::AudioInputFlags::HW_HOTWORD;
+            return AudioInputFlags::HW_HOTWORD;
         case AUDIO_INPUT_FLAG_RAW:
-            return media::AudioInputFlags::RAW;
+            return AudioInputFlags::RAW;
         case AUDIO_INPUT_FLAG_SYNC:
-            return media::AudioInputFlags::SYNC;
+            return AudioInputFlags::SYNC;
         case AUDIO_INPUT_FLAG_MMAP_NOIRQ:
-            return media::AudioInputFlags::MMAP_NOIRQ;
+            return AudioInputFlags::MMAP_NOIRQ;
         case AUDIO_INPUT_FLAG_VOIP_TX:
-            return media::AudioInputFlags::VOIP_TX;
+            return AudioInputFlags::VOIP_TX;
         case AUDIO_INPUT_FLAG_HW_AV_SYNC:
-            return media::AudioInputFlags::HW_AV_SYNC;
+            return AudioInputFlags::HW_AV_SYNC;
         case AUDIO_INPUT_FLAG_DIRECT:
-            return media::AudioInputFlags::DIRECT;
+            return AudioInputFlags::DIRECT;
     }
     return unexpected(BAD_VALUE);
 }
 
 ConversionResult<audio_output_flags_t> aidl2legacy_AudioOutputFlags_audio_output_flags_t(
-        media::AudioOutputFlags aidl) {
+        AudioOutputFlags aidl) {
     switch (aidl) {
-        case media::AudioOutputFlags::DIRECT:
+        case AudioOutputFlags::DIRECT:
             return AUDIO_OUTPUT_FLAG_DIRECT;
-        case media::AudioOutputFlags::PRIMARY:
+        case AudioOutputFlags::PRIMARY:
             return AUDIO_OUTPUT_FLAG_PRIMARY;
-        case media::AudioOutputFlags::FAST:
+        case AudioOutputFlags::FAST:
             return AUDIO_OUTPUT_FLAG_FAST;
-        case media::AudioOutputFlags::DEEP_BUFFER:
+        case AudioOutputFlags::DEEP_BUFFER:
             return AUDIO_OUTPUT_FLAG_DEEP_BUFFER;
-        case media::AudioOutputFlags::COMPRESS_OFFLOAD:
+        case AudioOutputFlags::COMPRESS_OFFLOAD:
             return AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD;
-        case media::AudioOutputFlags::NON_BLOCKING:
+        case AudioOutputFlags::NON_BLOCKING:
             return AUDIO_OUTPUT_FLAG_NON_BLOCKING;
-        case media::AudioOutputFlags::HW_AV_SYNC:
+        case AudioOutputFlags::HW_AV_SYNC:
             return AUDIO_OUTPUT_FLAG_HW_AV_SYNC;
-        case media::AudioOutputFlags::TTS:
+        case AudioOutputFlags::TTS:
             return AUDIO_OUTPUT_FLAG_TTS;
-        case media::AudioOutputFlags::RAW:
+        case AudioOutputFlags::RAW:
             return AUDIO_OUTPUT_FLAG_RAW;
-        case media::AudioOutputFlags::SYNC:
+        case AudioOutputFlags::SYNC:
             return AUDIO_OUTPUT_FLAG_SYNC;
-        case media::AudioOutputFlags::IEC958_NONAUDIO:
+        case AudioOutputFlags::IEC958_NONAUDIO:
             return AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO;
-        case media::AudioOutputFlags::DIRECT_PCM:
+        case AudioOutputFlags::DIRECT_PCM:
             return AUDIO_OUTPUT_FLAG_DIRECT_PCM;
-        case media::AudioOutputFlags::MMAP_NOIRQ:
+        case AudioOutputFlags::MMAP_NOIRQ:
             return AUDIO_OUTPUT_FLAG_MMAP_NOIRQ;
-        case media::AudioOutputFlags::VOIP_RX:
+        case AudioOutputFlags::VOIP_RX:
             return AUDIO_OUTPUT_FLAG_VOIP_RX;
-        case media::AudioOutputFlags::INCALL_MUSIC:
+        case AudioOutputFlags::INCALL_MUSIC:
             return AUDIO_OUTPUT_FLAG_INCALL_MUSIC;
-        case media::AudioOutputFlags::GAPLESS_OFFLOAD:
+        case AudioOutputFlags::GAPLESS_OFFLOAD:
             return AUDIO_OUTPUT_FLAG_GAPLESS_OFFLOAD;
     }
     return unexpected(BAD_VALUE);
 }
 
-ConversionResult<media::AudioOutputFlags> legacy2aidl_audio_output_flags_t_AudioOutputFlags(
+ConversionResult<AudioOutputFlags> legacy2aidl_audio_output_flags_t_AudioOutputFlags(
         audio_output_flags_t legacy) {
     switch (legacy) {
         case AUDIO_OUTPUT_FLAG_NONE:
             break; // shouldn't get here. must be listed  -Werror,-Wswitch
         case AUDIO_OUTPUT_FLAG_DIRECT:
-            return media::AudioOutputFlags::DIRECT;
+            return AudioOutputFlags::DIRECT;
         case AUDIO_OUTPUT_FLAG_PRIMARY:
-            return media::AudioOutputFlags::PRIMARY;
+            return AudioOutputFlags::PRIMARY;
         case AUDIO_OUTPUT_FLAG_FAST:
-            return media::AudioOutputFlags::FAST;
+            return AudioOutputFlags::FAST;
         case AUDIO_OUTPUT_FLAG_DEEP_BUFFER:
-            return media::AudioOutputFlags::DEEP_BUFFER;
+            return AudioOutputFlags::DEEP_BUFFER;
         case AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD:
-            return media::AudioOutputFlags::COMPRESS_OFFLOAD;
+            return AudioOutputFlags::COMPRESS_OFFLOAD;
         case AUDIO_OUTPUT_FLAG_NON_BLOCKING:
-            return media::AudioOutputFlags::NON_BLOCKING;
+            return AudioOutputFlags::NON_BLOCKING;
         case AUDIO_OUTPUT_FLAG_HW_AV_SYNC:
-            return media::AudioOutputFlags::HW_AV_SYNC;
+            return AudioOutputFlags::HW_AV_SYNC;
         case AUDIO_OUTPUT_FLAG_TTS:
-            return media::AudioOutputFlags::TTS;
+            return AudioOutputFlags::TTS;
         case AUDIO_OUTPUT_FLAG_RAW:
-            return media::AudioOutputFlags::RAW;
+            return AudioOutputFlags::RAW;
         case AUDIO_OUTPUT_FLAG_SYNC:
-            return media::AudioOutputFlags::SYNC;
+            return AudioOutputFlags::SYNC;
         case AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO:
-            return media::AudioOutputFlags::IEC958_NONAUDIO;
+            return AudioOutputFlags::IEC958_NONAUDIO;
         case AUDIO_OUTPUT_FLAG_DIRECT_PCM:
-            return media::AudioOutputFlags::DIRECT_PCM;
+            return AudioOutputFlags::DIRECT_PCM;
         case AUDIO_OUTPUT_FLAG_MMAP_NOIRQ:
-            return media::AudioOutputFlags::MMAP_NOIRQ;
+            return AudioOutputFlags::MMAP_NOIRQ;
         case AUDIO_OUTPUT_FLAG_VOIP_RX:
-            return media::AudioOutputFlags::VOIP_RX;
+            return AudioOutputFlags::VOIP_RX;
         case AUDIO_OUTPUT_FLAG_INCALL_MUSIC:
-            return media::AudioOutputFlags::INCALL_MUSIC;
+            return AudioOutputFlags::INCALL_MUSIC;
         case AUDIO_OUTPUT_FLAG_GAPLESS_OFFLOAD:
-            return media::AudioOutputFlags::GAPLESS_OFFLOAD;
+            return AudioOutputFlags::GAPLESS_OFFLOAD;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1413,9 +1548,9 @@ ConversionResult<audio_input_flags_t> aidl2legacy_int32_t_audio_input_flags_t_ma
     using LegacyMask = std::underlying_type_t<audio_input_flags_t>;
 
     LegacyMask converted = VALUE_OR_RETURN(
-            (convertBitmask<LegacyMask, int32_t, audio_input_flags_t, media::AudioInputFlags>(
+            (convertBitmask<LegacyMask, int32_t, audio_input_flags_t, AudioInputFlags>(
                     aidl, aidl2legacy_AudioInputFlags_audio_input_flags_t,
-                    indexToEnum_index<media::AudioInputFlags>,
+                    indexToEnum_index<AudioInputFlags>,
                     enumToMask_bitmask<LegacyMask, audio_input_flags_t>)));
     return static_cast<audio_input_flags_t>(converted);
 }
@@ -1425,10 +1560,10 @@ ConversionResult<int32_t> legacy2aidl_audio_input_flags_t_int32_t_mask(
     using LegacyMask = std::underlying_type_t<audio_input_flags_t>;
 
     LegacyMask legacyMask = static_cast<LegacyMask>(legacy);
-    return convertBitmask<int32_t, LegacyMask, media::AudioInputFlags, audio_input_flags_t>(
+    return convertBitmask<int32_t, LegacyMask, AudioInputFlags, audio_input_flags_t>(
             legacyMask, legacy2aidl_audio_input_flags_t_AudioInputFlags,
             indexToEnum_bitmask<audio_input_flags_t>,
-            enumToMask_index<int32_t, media::AudioInputFlags>);
+            enumToMask_index<int32_t, AudioInputFlags>);
 }
 
 ConversionResult<audio_output_flags_t> aidl2legacy_int32_t_audio_output_flags_t_mask(
@@ -1436,9 +1571,9 @@ ConversionResult<audio_output_flags_t> aidl2legacy_int32_t_audio_output_flags_t_
     return convertBitmask<audio_output_flags_t,
             int32_t,
             audio_output_flags_t,
-            media::AudioOutputFlags>(
+            AudioOutputFlags>(
             aidl, aidl2legacy_AudioOutputFlags_audio_output_flags_t,
-            indexToEnum_index<media::AudioOutputFlags>,
+            indexToEnum_index<AudioOutputFlags>,
             enumToMask_bitmask<audio_output_flags_t, audio_output_flags_t>);
 }
 
@@ -1447,71 +1582,57 @@ ConversionResult<int32_t> legacy2aidl_audio_output_flags_t_int32_t_mask(
     using LegacyMask = std::underlying_type_t<audio_output_flags_t>;
 
     LegacyMask legacyMask = static_cast<LegacyMask>(legacy);
-    return convertBitmask<int32_t, LegacyMask, media::AudioOutputFlags, audio_output_flags_t>(
+    return convertBitmask<int32_t, LegacyMask, AudioOutputFlags, audio_output_flags_t>(
             legacyMask, legacy2aidl_audio_output_flags_t_AudioOutputFlags,
             indexToEnum_bitmask<audio_output_flags_t>,
-            enumToMask_index<int32_t, media::AudioOutputFlags>);
+            enumToMask_index<int32_t, AudioOutputFlags>);
 }
 
 ConversionResult<audio_io_flags> aidl2legacy_AudioIoFlags_audio_io_flags(
-        const media::AudioIoFlags& aidl, media::AudioPortRole role, media::AudioPortType type) {
+        const AudioIoFlags& aidl, bool isInput) {
     audio_io_flags legacy;
-    Direction dir = VALUE_OR_RETURN(direction(role, type));
-    switch (dir) {
-        case Direction::INPUT: {
-            legacy.input = VALUE_OR_RETURN(
-                    aidl2legacy_int32_t_audio_input_flags_t_mask(
-                            VALUE_OR_RETURN(UNION_GET(aidl, input))));
-        }
-            break;
-
-        case Direction::OUTPUT: {
-            legacy.output = VALUE_OR_RETURN(
-                    aidl2legacy_int32_t_audio_output_flags_t_mask(
-                            VALUE_OR_RETURN(UNION_GET(aidl, output))));
-        }
-            break;
+    if (isInput) {
+        legacy.input = VALUE_OR_RETURN(
+                aidl2legacy_int32_t_audio_input_flags_t_mask(
+                        VALUE_OR_RETURN(UNION_GET(aidl, input))));
+    } else {
+        legacy.output = VALUE_OR_RETURN(
+                aidl2legacy_int32_t_audio_output_flags_t_mask(
+                        VALUE_OR_RETURN(UNION_GET(aidl, output))));
     }
-
     return legacy;
 }
 
-ConversionResult<media::AudioIoFlags> legacy2aidl_audio_io_flags_AudioIoFlags(
-        const audio_io_flags& legacy, audio_port_role_t role, audio_port_type_t type) {
-    media::AudioIoFlags aidl;
-
-    Direction dir = VALUE_OR_RETURN(direction(role, type));
-    switch (dir) {
-        case Direction::INPUT:
-            UNION_SET(aidl, input,
-                      VALUE_OR_RETURN(legacy2aidl_audio_input_flags_t_int32_t_mask(
-                              legacy.input)));
-            break;
-        case Direction::OUTPUT:
-            UNION_SET(aidl, output,
-                      VALUE_OR_RETURN(legacy2aidl_audio_output_flags_t_int32_t_mask(
-                              legacy.output)));
-            break;
+ConversionResult<AudioIoFlags> legacy2aidl_audio_io_flags_AudioIoFlags(
+        const audio_io_flags& legacy, bool isInput) {
+    AudioIoFlags aidl;
+    if (isInput) {
+        UNION_SET(aidl, input,
+                VALUE_OR_RETURN(legacy2aidl_audio_input_flags_t_int32_t_mask(legacy.input)));
+    } else {
+        UNION_SET(aidl, output,
+                VALUE_OR_RETURN(legacy2aidl_audio_output_flags_t_int32_t_mask(legacy.output)));
     }
     return aidl;
 }
 
 ConversionResult<audio_port_config_device_ext>
-aidl2legacy_AudioDevice_audio_port_config_device_ext(
-        const AudioDevice& aidl, const media::AudioPortDeviceExtSys& aidlDeviceExt) {
+aidl2legacy_AudioPortDeviceExt_audio_port_config_device_ext(
+        const AudioPortDeviceExt& aidl, const media::AudioPortDeviceExtSys& aidlDeviceExt) {
     audio_port_config_device_ext legacy;
     legacy.hw_module = VALUE_OR_RETURN(
             aidl2legacy_int32_t_audio_module_handle_t(aidlDeviceExt.hwModule));
-    RETURN_IF_ERROR(aidl2legacy_AudioDevice_audio_device(aidl, &legacy.type, legacy.address));
+    RETURN_IF_ERROR(aidl2legacy_AudioDevice_audio_device(
+                    aidl.device, &legacy.type, legacy.address));
     return legacy;
 }
 
-status_t legacy2aidl_audio_port_config_device_ext_AudioDevice(
+status_t legacy2aidl_audio_port_config_device_ext_AudioPortDeviceExt(
         const audio_port_config_device_ext& legacy,
-        AudioDevice* aidl, media::AudioPortDeviceExtSys* aidlDeviceExt) {
+        AudioPortDeviceExt* aidl, media::AudioPortDeviceExtSys* aidlDeviceExt) {
     aidlDeviceExt->hwModule = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_module_handle_t_int32_t(legacy.hw_module));
-    *aidl = VALUE_OR_RETURN_STATUS(
+    aidl->device = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_device_AudioDevice(legacy.type, legacy.address));
     return OK;
 }
@@ -1777,7 +1898,7 @@ ConversionResult<audio_port_config_ext> aidl2legacy_AudioPortExt_audio_port_conf
             return legacy;
         case media::AudioPortType::DEVICE:
             legacy.device = VALUE_OR_RETURN(
-                    aidl2legacy_AudioDevice_audio_port_config_device_ext(
+                    aidl2legacy_AudioPortDeviceExt_audio_port_config_device_ext(
                             VALUE_OR_RETURN(UNION_GET(aidl, device)),
                             VALUE_OR_RETURN(UNION_GET(aidlSys, device))));
             return legacy;
@@ -1806,10 +1927,10 @@ status_t legacy2aidl_AudioPortExt(
             UNION_SET(*aidlSys, unspecified, false);
             return OK;
         case AUDIO_PORT_TYPE_DEVICE: {
-            AudioDevice device;
+            AudioPortDeviceExt device;
             media::AudioPortDeviceExtSys deviceSys;
             RETURN_STATUS_IF_ERROR(
-                    legacy2aidl_audio_port_config_device_ext_AudioDevice(
+                    legacy2aidl_audio_port_config_device_ext_AudioPortDeviceExt(
                             legacy.device, &device, &deviceSys));
             UNION_SET(*aidl, device, device);
             UNION_SET(*aidlSys, device, deviceSys);
@@ -1862,10 +1983,9 @@ ConversionResult<audio_port_config> aidl2legacy_AudioPortConfig_audio_port_confi
                         aidl.hal.gain.value(), isInput));
         legacy.config_mask |= AUDIO_PORT_CONFIG_GAIN;
     }
-    if (aidl.sys.flags.has_value()) {
+    if (aidl.hal.flags.has_value()) {
         legacy.flags = VALUE_OR_RETURN(
-                aidl2legacy_AudioIoFlags_audio_io_flags(
-                        aidl.sys.flags.value(), aidl.sys.role, aidl.sys.type));
+                aidl2legacy_AudioIoFlags_audio_io_flags(aidl.hal.flags.value(), isInput));
         legacy.config_mask |= AUDIO_PORT_CONFIG_FLAGS;
     }
     legacy.ext = VALUE_OR_RETURN(
@@ -1900,8 +2020,8 @@ ConversionResult<media::AudioPortConfig> legacy2aidl_audio_port_config_AudioPort
                 legacy2aidl_audio_gain_config_AudioGainConfig(legacy.gain, isInput));
     }
     if (legacy.config_mask & AUDIO_PORT_CONFIG_FLAGS) {
-        aidl.sys.flags = VALUE_OR_RETURN(
-                legacy2aidl_audio_io_flags_AudioIoFlags(legacy.flags, legacy.role, legacy.type));
+        aidl.hal.flags = VALUE_OR_RETURN(
+                legacy2aidl_audio_io_flags_AudioIoFlags(legacy.flags, isInput));
     }
     RETURN_IF_ERROR(legacy2aidl_AudioPortExt(legacy.ext, legacy.type, legacy.role,
                     &aidl.hal.ext, &aidl.sys.ext));
@@ -2581,12 +2701,13 @@ legacy2aidl_AudioEncapsulationMetadataType_mask(uint32_t legacy) {
 }
 
 ConversionResult<audio_port_device_ext>
-aidl2legacy_AudioDevice_audio_port_device_ext(
-        const AudioDevice& aidl, const media::AudioPortDeviceExtSys& aidlSys) {
+aidl2legacy_AudioPortDeviceExt_audio_port_device_ext(
+        const AudioPortDeviceExt& aidl, const media::AudioPortDeviceExtSys& aidlSys) {
     audio_port_device_ext legacy;
     legacy.hw_module = VALUE_OR_RETURN(
             aidl2legacy_int32_t_audio_module_handle_t(aidlSys.hwModule));
-    RETURN_IF_ERROR(aidl2legacy_AudioDevice_audio_device(aidl, &legacy.type, legacy.address));
+    RETURN_IF_ERROR(aidl2legacy_AudioDevice_audio_device(
+                    aidl.device, &legacy.type, legacy.address));
     legacy.encapsulation_modes = VALUE_OR_RETURN(
             aidl2legacy_AudioEncapsulationMode_mask(aidlSys.encapsulationModes));
     legacy.encapsulation_metadata_types = VALUE_OR_RETURN(
@@ -2595,12 +2716,12 @@ aidl2legacy_AudioDevice_audio_port_device_ext(
     return legacy;
 }
 
-status_t legacy2aidl_audio_port_device_ext_AudioDevice(
+status_t legacy2aidl_audio_port_device_ext_AudioPortDeviceExt(
         const audio_port_device_ext& legacy,
-        AudioDevice* aidl, media::AudioPortDeviceExtSys* aidlDeviceExt) {
+        AudioPortDeviceExt* aidl, media::AudioPortDeviceExtSys* aidlDeviceExt) {
     aidlDeviceExt->hwModule = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_module_handle_t_int32_t(legacy.hw_module));
-    *aidl = VALUE_OR_RETURN_STATUS(
+    aidl->device = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_device_AudioDevice(legacy.type, legacy.address));
     aidlDeviceExt->encapsulationModes = VALUE_OR_RETURN_STATUS(
             legacy2aidl_AudioEncapsulationMode_mask(legacy.encapsulation_modes));
@@ -2653,7 +2774,7 @@ ConversionResult<audio_port_v7_ext> aidl2legacy_AudioPortExt_audio_port_v7_ext(
             return legacy;
         case media::AudioPortType::DEVICE:
             legacy.device = VALUE_OR_RETURN(
-                    aidl2legacy_AudioDevice_audio_port_device_ext(
+                    aidl2legacy_AudioPortDeviceExt_audio_port_device_ext(
                             VALUE_OR_RETURN(UNION_GET(aidl, device)),
                             VALUE_OR_RETURN(UNION_GET(aidlSys, device))));
             return legacy;
@@ -2682,10 +2803,10 @@ status_t legacy2aidl_AudioPortExt(
             UNION_SET(*aidlSys, unspecified, false);
             return OK;
         case AUDIO_PORT_TYPE_DEVICE: {
-            AudioDevice device;
+            AudioPortDeviceExt device;
             media::AudioPortDeviceExtSys deviceSys;
             RETURN_STATUS_IF_ERROR(
-                    legacy2aidl_audio_port_device_ext_AudioDevice(
+                    legacy2aidl_audio_port_device_ext_AudioPortDeviceExt(
                             legacy.device, &device, &deviceSys));
             UNION_SET(*aidl, device, device);
             UNION_SET(*aidlSys, device, deviceSys);
