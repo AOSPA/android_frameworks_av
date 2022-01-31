@@ -29,6 +29,7 @@
 #include "TunerHidlService.h"
 
 using ::aidl::android::hardware::tv::tuner::AudioExtraMetaData;
+using ::aidl::android::hardware::tv::tuner::AudioStreamType;
 using ::aidl::android::hardware::tv::tuner::Constant;
 using ::aidl::android::hardware::tv::tuner::DemuxAlpFilterSettings;
 using ::aidl::android::hardware::tv::tuner::DemuxAlpFilterSettingsFilterSettings;
@@ -604,7 +605,11 @@ sp<HidlIFilter> TunerHidlFilter::getHalFilter() {
 
 bool TunerHidlFilter::getHidlAvStreamType(const AvStreamType avStreamType, HidlAvStreamType& type) {
     if (isAudioFilter()) {
-        type.audio(static_cast<HidlAudioStreamType>(avStreamType.get<AvStreamType::audio>()));
+        AudioStreamType audio = avStreamType.get<AvStreamType::audio>();
+        if (static_cast<int32_t>(audio) > static_cast<int32_t>(HidlAudioStreamType::DRA)) {
+            return false;
+        }
+        type.audio(static_cast<HidlAudioStreamType>(audio));
         return true;
     }
 
@@ -1036,12 +1041,16 @@ void TunerHidlFilter::FilterCallback::getMediaEvent(
         media.streamId = static_cast<int32_t>(mediaEvent.streamId);
         media.isPtsPresent = mediaEvent.isPtsPresent;
         media.pts = static_cast<int64_t>(mediaEvent.pts);
+        media.isDtsPresent = false;
+        media.dts = static_cast<int64_t>(-1);
         media.dataLength = static_cast<int64_t>(mediaEvent.dataLength);
         media.offset = static_cast<int64_t>(mediaEvent.offset);
         media.isSecureMemory = mediaEvent.isSecureMemory;
         media.avDataId = static_cast<int64_t>(mediaEvent.avDataId);
         media.mpuSequenceNumber = static_cast<int32_t>(mediaEvent.mpuSequenceNumber);
         media.isPesPrivateData = mediaEvent.isPesPrivateData;
+        media.scIndexMask.set<DemuxFilterScIndexMask::scIndex>(
+                static_cast<int32_t>(DemuxScIndex::UNDEFINED));
 
         if (mediaEvent.extraMetaData.getDiscriminator() ==
             HidlDemuxFilterMediaEvent::ExtraMetaData::hidl_discriminator::audio) {
@@ -1078,7 +1087,7 @@ void TunerHidlFilter::FilterCallback::getSectionEvent(
         section.tableId = static_cast<int32_t>(sectionEvent.tableId);
         section.version = static_cast<int32_t>(sectionEvent.version);
         section.sectionNum = static_cast<int32_t>(sectionEvent.sectionNum);
-        section.dataLength = static_cast<int32_t>(sectionEvent.dataLength);
+        section.dataLength = static_cast<int64_t>(sectionEvent.dataLength);
 
         DemuxFilterEvent filterEvent;
         filterEvent.set<DemuxFilterEvent::section>(move(section));
@@ -1186,6 +1195,7 @@ void TunerHidlFilter::FilterCallback::getDownloadEvent(
         DemuxFilterDownloadEvent download;
 
         download.itemId = static_cast<int32_t>(downloadEvent.itemId);
+        download.downloadId = -1;
         download.itemFragmentIndex = static_cast<int32_t>(downloadEvent.itemFragmentIndex);
         download.mpuSequenceNumber = static_cast<int32_t>(downloadEvent.mpuSequenceNumber);
         download.lastItemFragmentIndex = static_cast<int32_t>(downloadEvent.lastItemFragmentIndex);

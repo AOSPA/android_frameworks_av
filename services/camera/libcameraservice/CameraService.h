@@ -172,6 +172,12 @@ public:
     virtual binder::Status    setTorchMode(const String16& cameraId, bool enabled,
             const sp<IBinder>& clientBinder);
 
+    virtual binder::Status    turnOnTorchWithStrengthLevel(const String16& cameraId,
+            int32_t torchStrength, const sp<IBinder>& clientBinder);
+
+    virtual binder::Status    getTorchStrengthLevel(const String16& cameraId,
+            int32_t* torchStrength);
+
     virtual binder::Status    notifySystemEvent(int32_t eventId,
             const std::vector<int32_t>& args);
 
@@ -583,7 +589,7 @@ private:
          * returned in the HAL's camera_info struct for each device.
          */
         CameraState(const String8& id, int cost, const std::set<String8>& conflicting,
-                SystemCameraKind deviceKind);
+                SystemCameraKind deviceKind, const std::vector<std::string>& physicalCameras);
         virtual ~CameraState();
 
         /**
@@ -641,6 +647,12 @@ private:
         SystemCameraKind getSystemCameraKind() const;
 
         /**
+         * Return whether this camera is a logical multi-camera and has a
+         * particular physical sub-camera.
+         */
+        bool containsPhysicalCamera(const std::string& physicalCameraId) const;
+
+        /**
          * Add/Remove the unavailable physical camera ID.
          */
         bool addUnavailablePhysicalId(const String8& physicalId);
@@ -668,6 +680,7 @@ private:
         mutable Mutex mStatusLock;
         CameraParameters mShimParams;
         const SystemCameraKind mSystemCameraKind;
+        const std::vector<std::string> mPhysicalCameras; // Empty if not a logical multi-camera
     }; // class CameraState
 
     // Observer for UID lifecycle enforcing that UIDs in idle
@@ -1232,6 +1245,8 @@ private:
             hardware::camera::common::V1_0::TorchModeStatus status,
             SystemCameraKind systemCameraKind);
 
+    void broadcastTorchStrengthLevel(const String8& cameraId, int32_t newTorchStrengthLevel);
+
     void disconnectClient(const String8& id, sp<BasicClient> clientToDisconnect);
 
     // Regular online and offline devices must not be in conflict at camera service layer.
@@ -1310,6 +1325,8 @@ private:
     bool mInjectionInitPending = false;
     // Guard mInjectionInternalCamId and mInjectionInitPending.
     Mutex mInjectionParametersLock;
+
+    void updateTorchUidMapLocked(const String16& cameraId, int uid);
 };
 
 } // namespace android

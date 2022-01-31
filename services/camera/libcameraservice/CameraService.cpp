@@ -86,7 +86,7 @@ namespace android {
 
 using base::StringPrintf;
 using binder::Status;
-using camera3::SessionConfigurationUtils;
+using namespace camera3;
 using frameworks::cameraservice::service::V2_0::implementation::HidlCameraService;
 using hardware::ICamera;
 using hardware::ICameraClient;
@@ -365,16 +365,18 @@ void CameraService::addStates(const String8 id) {
     std::string cameraId(id.c_str());
     hardware::camera::common::V1_0::CameraResourceCost cost;
     status_t res = mCameraProviderManager->getResourceCost(cameraId, &cost);
-    SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
     if (res != OK) {
         ALOGE("Failed to query device resource cost: %s (%d)", strerror(-res), res);
         return;
     }
+    SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
     res = mCameraProviderManager->getSystemCameraKind(cameraId, &deviceKind);
     if (res != OK) {
         ALOGE("Failed to query device kind: %s (%d)", strerror(-res), res);
         return;
     }
+    std::vector<std::string> physicalCameraIds;
+    mCameraProviderManager->isLogicalCamera(cameraId, &physicalCameraIds);
     std::set<String8> conflicting;
     for (size_t i = 0; i < cost.conflictingDevices.size(); i++) {
         conflicting.emplace(String8(cost.conflictingDevices[i].c_str()));
@@ -383,7 +385,7 @@ void CameraService::addStates(const String8 id) {
     {
         Mutex::Autolock lock(mCameraStatesLock);
         mCameraStates.emplace(id, std::make_shared<CameraState>(id, cost.resourceCost,
-                                                                conflicting, deviceKind));
+                conflicting, deviceKind, physicalCameraIds));
     }
 
     if (mFlashlight->hasFlashUnit(id)) {
@@ -567,6 +569,15 @@ void CameraService::onTorchStatusChanged(const String8& cameraId,
         TorchModeStatus newStatus, SystemCameraKind systemCameraKind) {
     Mutex::Autolock al(mTorchStatusMutex);
     onTorchStatusChangedLocked(cameraId, newStatus, systemCameraKind);
+}
+
+void CameraService::broadcastTorchStrengthLevel(const String8& cameraId,
+        int32_t newStrengthLevel) {
+    Mutex::Autolock lock(mStatusListenerLock);
+    for (auto& i : mListenerList) {
+        i->getListener()->onTorchStrengthLevelChanged(String16{cameraId},
+                newStrengthLevel);
+    }
 }
 
 void CameraService::onTorchStatusChangedLocked(const String8& cameraId,
@@ -802,6 +813,31 @@ Status CameraService::getCameraCharacteristics(const String16& cameraId,
     }
 
     return ret;
+}
+
+Status CameraService::getTorchStrengthLevel(const String16& cameraId,
+        int32_t* torchStrength) {
+    ATRACE_CALL();
+    Mutex::Autolock l(mServiceLock);
+    if (!mInitialized) {
+        ALOGE("%s: Camera HAL couldn't be initialized.", __FUNCTION__);
+        return STATUS_ERROR(ERROR_DISCONNECTED, "Camera HAL couldn't be initialized.");
+    }
+
+    if(torchStrength == NULL) {
+        ALOGE("%s: strength level must not be null.", __FUNCTION__);
+        return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT, "Strength level should not be null.");
+    }
+
+    status_t res = mCameraProviderManager->getTorchStrengthLevel(String8(cameraId).string(),
+        torchStrength);
+    if (res != OK) {
+        return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION, "Unable to retrieve torch "
+            "strength level for device %s: %s (%d)", String8(cameraId).string(),
+            strerror(-res), res);
+    }
+    ALOGI("%s: Torch strength level is: %d", __FUNCTION__, *torchStrength);
+    return Status::ok();
 }
 
 String8 CameraService::getFormattedCurrentTime() {
@@ -2006,6 +2042,132 @@ status_t CameraService::addOfflineClient(String8 cameraId, sp<BasicClient> offli
     return OK;
 }
 
+Status CameraService::turnOnTorchWithStrengthLevel(const String16& cameraId, int32_t torchStrength,
+        const sp<IBinder>& clientBinder) {
+    Mutex::Autolock lock(mServiceLock);
+
+    ATRACE_CALL();
+    if (clientBinder == nullptr) {
+        ALOGE("%s: torch client binder is NULL", __FUNCTION__);
+        return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT,
+                "Torch client binder in null.");
+    }
+
+    String8 id = String8(cameraId.string());
+    int uid = CameraThreadState::getCallingUid();
+
+    if (shouldRejectSystemCameraConnection(id)) {
+        return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT, "Unable to change the strength level"
+                "for system only device %s: ", id.string());
+    }
+
+    // verify id is valid
+    auto state = getCameraState(id);
+    if (state == nullptr) {
+        ALOGE("%s: camera id is invalid %s", __FUNCTION__, id.string());
+        return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT,
+            "Camera ID \"%s\" is a not valid camera ID", id.string());
+    }
+
+    StatusInternal cameraStatus = state->getStatus();
+    if (cameraStatus != StatusInternal::NOT_AVAILABLE &&
+            cameraStatus != StatusInternal::PRESENT) {
+        ALOGE("%s: camera id is invalid %s, status %d", __FUNCTION__, id.string(),
+            (int)cameraStatus);
+        return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT,
+                "Camera ID \"%s\" is a not valid camera ID", id.string());
+    }
+
+    {
+        Mutex::Autolock al(mTorchStatusMutex);
+        TorchModeStatus status;
+        status_t err = getTorchStatusLocked(id, &status);
+        if (err != OK) {
+            if (err == NAME_NOT_FOUND) {
+             return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT,
+                    "Camera \"%s\" does not have a flash unit", id.string());
+            }
+            ALOGE("%s: getting current torch status failed for camera %s",
+                    __FUNCTION__, id.string());
+            return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION,
+                    "Error changing torch strength level for camera \"%s\": %s (%d)",
+                    id.string(), strerror(-err), err);
+        }
+
+        if (status == TorchModeStatus::NOT_AVAILABLE) {
+            if (cameraStatus == StatusInternal::NOT_AVAILABLE) {
+                ALOGE("%s: torch mode of camera %s is not available because "
+                        "camera is in use.", __FUNCTION__, id.string());
+                return STATUS_ERROR_FMT(ERROR_CAMERA_IN_USE,
+                        "Torch for camera \"%s\" is not available due to an existing camera user",
+                        id.string());
+            } else {
+                ALOGE("%s: torch mode of camera %s is not available due to "
+                       "insufficient resources", __FUNCTION__, id.string());
+                return STATUS_ERROR_FMT(ERROR_MAX_CAMERAS_IN_USE,
+                        "Torch for camera \"%s\" is not available due to insufficient resources",
+                        id.string());
+            }
+        }
+    }
+
+    {
+        Mutex::Autolock al(mTorchUidMapMutex);
+        updateTorchUidMapLocked(cameraId, uid);
+    }
+    // Check if the current torch strength level is same as the new one.
+    bool shouldSkipTorchStrengthUpdates = mCameraProviderManager->shouldSkipTorchStrengthUpdate(
+            id.string(), torchStrength);
+
+    status_t err = mFlashlight->turnOnTorchWithStrengthLevel(id, torchStrength);
+
+    if (err != OK) {
+        int32_t errorCode;
+        String8 msg;
+        switch (err) {
+            case -ENOSYS:
+                msg = String8::format("Camera \"%s\" has no flashlight.",
+                    id.string());
+                errorCode = ERROR_ILLEGAL_ARGUMENT;
+                break;
+            case -EBUSY:
+                msg = String8::format("Camera \"%s\" is in use",
+                    id.string());
+                errorCode = ERROR_CAMERA_IN_USE;
+                break;
+            default:
+                msg = String8::format("Changing torch strength level failed.");
+                errorCode = ERROR_INVALID_OPERATION;
+
+        }
+        ALOGE("%s: %s", __FUNCTION__, msg.string());
+        return STATUS_ERROR(errorCode, msg.string());
+    }
+
+    {
+        // update the link to client's death
+        // Store the last client that turns on each camera's torch mode.
+        Mutex::Autolock al(mTorchClientMapMutex);
+        ssize_t index = mTorchClientMap.indexOfKey(id);
+        if (index == NAME_NOT_FOUND) {
+            mTorchClientMap.add(id, clientBinder);
+        } else {
+            mTorchClientMap.valueAt(index)->unlinkToDeath(this);
+            mTorchClientMap.replaceValueAt(index, clientBinder);
+        }
+        clientBinder->linkToDeath(this);
+    }
+
+    int clientPid = CameraThreadState::getCallingPid();
+    const char *id_cstr = id.c_str();
+    ALOGI("%s: Torch strength for camera id %s changed to %d for client PID %d",
+            __FUNCTION__, id_cstr, torchStrength, clientPid);
+    if (!shouldSkipTorchStrengthUpdates) {
+        broadcastTorchStrengthLevel(id, torchStrength);
+    }
+    return Status::ok();
+}
+
 Status CameraService::setTorchMode(const String16& cameraId, bool enabled,
         const sp<IBinder>& clientBinder) {
     Mutex::Autolock lock(mServiceLock);
@@ -2077,13 +2239,7 @@ Status CameraService::setTorchMode(const String16& cameraId, bool enabled,
         // Update UID map - this is used in the torch status changed callbacks, so must be done
         // before setTorchMode
         Mutex::Autolock al(mTorchUidMapMutex);
-        if (mTorchUidMap.find(id) == mTorchUidMap.end()) {
-            mTorchUidMap[id].first = uid;
-            mTorchUidMap[id].second = uid;
-        } else {
-            // Set the pending UID
-            mTorchUidMap[id].first = uid;
-        }
+        updateTorchUidMapLocked(cameraId, uid);
     }
 
     status_t err = mFlashlight->setTorchMode(id, enabled);
@@ -2136,6 +2292,17 @@ Status CameraService::setTorchMode(const String16& cameraId, bool enabled,
     ALOGI("Torch for camera id %s turned %s for client PID %d", id_cstr, torchState, clientPid);
     logTorchEvent(id_cstr, torchState , clientPid);
     return Status::ok();
+}
+
+void CameraService::updateTorchUidMapLocked(const String16& cameraId, int uid) {
+    String8 id = String8(cameraId.string());
+    if (mTorchUidMap.find(id) == mTorchUidMap.end()) {
+        mTorchUidMap[id].first = uid;
+        mTorchUidMap[id].second = uid;
+    } else {
+        // Set the pending UID
+        mTorchUidMap[id].first = uid;
+    }
 }
 
 Status CameraService::notifySystemEvent(int32_t eventId,
@@ -3764,9 +3931,10 @@ bool CameraService::SensorPrivacyPolicy::hasCameraPrivacyFeature() {
 // ----------------------------------------------------------------------------
 
 CameraService::CameraState::CameraState(const String8& id, int cost,
-        const std::set<String8>& conflicting, SystemCameraKind systemCameraKind) : mId(id),
+        const std::set<String8>& conflicting, SystemCameraKind systemCameraKind,
+        const std::vector<std::string>& physicalCameras) : mId(id),
         mStatus(StatusInternal::NOT_PRESENT), mCost(cost), mConflicting(conflicting),
-        mSystemCameraKind(systemCameraKind) {}
+        mSystemCameraKind(systemCameraKind), mPhysicalCameras(physicalCameras) {}
 
 CameraService::CameraState::~CameraState() {}
 
@@ -3803,6 +3971,11 @@ String8 CameraService::CameraState::getId() const {
 
 SystemCameraKind CameraService::CameraState::getSystemCameraKind() const {
     return mSystemCameraKind;
+}
+
+bool CameraService::CameraState::containsPhysicalCamera(const std::string& physicalCameraId) const {
+    return std::find(mPhysicalCameras.begin(), mPhysicalCameras.end(), physicalCameraId)
+            != mPhysicalCameras.end();
 }
 
 bool CameraService::CameraState::addUnavailablePhysicalId(const String8& physicalId) {
@@ -4289,12 +4462,20 @@ void CameraService::cacheClientTagDumpIfNeeded(const char *cameraId, BasicClient
 
     if (dumpVector.empty()) { return; }
 
+    std::string dumpString;
+
+    String8 currentTime = getFormattedCurrentTime();
+    dumpString += "Cached @ ";
+    dumpString += currentTime.string();
+    dumpString += "\n"; // First line is the timestamp of when client is cached.
+
+
     const String16 &packageName = client->getPackageName();
 
     String8 packageName8 = String8(packageName);
     const char *printablePackageName = packageName8.lockBuffer(packageName.size());
 
-    std::string dumpString;
+
     size_t i = dumpVector.size();
 
     // Store the string in reverse order (latest last)
@@ -4529,18 +4710,9 @@ std::list<String16> CameraService::getLogicalCameras(
     std::list<String16> retList;
     Mutex::Autolock lock(mCameraStatesLock);
     for (const auto& state : mCameraStates) {
-        std::vector<std::string> physicalCameraIds;
-        if (!mCameraProviderManager->isLogicalCamera(state.first.c_str(), &physicalCameraIds)) {
-            // This is not a logical multi-camera.
-            continue;
+        if (state.second->containsPhysicalCamera(physicalCameraId.c_str())) {
+            retList.emplace_back(String16(state.first));
         }
-        if (std::find(physicalCameraIds.begin(), physicalCameraIds.end(), physicalCameraId.c_str())
-                == physicalCameraIds.end()) {
-            // cameraId is not a physical camera of this logical multi-camera.
-            continue;
-        }
-
-        retList.emplace_back(String16(state.first));
     }
     return retList;
 }
