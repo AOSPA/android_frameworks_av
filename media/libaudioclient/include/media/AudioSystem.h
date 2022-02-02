@@ -33,6 +33,7 @@
 #include <android/media/audio/common/AudioPort.h>
 #include <media/AidlConversionUtil.h>
 #include <media/AudioContainers.h>
+#include <media/AppVolume.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioPolicy.h>
 #include <media/AudioProductStrategy.h>
@@ -648,6 +649,10 @@ public:
 
     static status_t setVibratorInfos(const std::vector<media::AudioVibratorInfo>& vibratorInfos);
 
+    static status_t setAppVolume(const String8& packageName, const float value);
+    static status_t setAppMute(const String8& packageName, const bool value);
+    static status_t listAppVolumes(std::vector<media::AppVolume> *vols);
+    
     static status_t getMmapPolicyInfo(
             media::audio::common::AudioMMapPolicyType policyType,
             std::vector<media::audio::common::AudioMMapPolicyInfo> *policyInfos);
