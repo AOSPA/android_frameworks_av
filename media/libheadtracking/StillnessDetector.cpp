@@ -19,11 +19,13 @@
 namespace android {
 namespace media {
 
-StillnessDetector::StillnessDetector(const Options& options) : mOptions(options) {}
+StillnessDetector::StillnessDetector(const Options& options)
+    : mOptions(options), mCosHalfRotationalThreshold(cos(mOptions.rotationalThreshold / 2)) {}
 
 void StillnessDetector::reset() {
     mFifo.clear();
     mWindowFull = false;
+    mSuppressionDeadline.reset();
 }
 
 void StillnessDetector::setInput(int64_t timestamp, const Pose3f& input) {
@@ -34,27 +36,34 @@ void StillnessDetector::setInput(int64_t timestamp, const Pose3f& input) {
 bool StillnessDetector::calculate(int64_t timestamp) {
     discardOld(timestamp);
 
-    // If the window has not been full, we don't consider ourselves still.
-    if (!mWindowFull) {
-        return false;
-    }
+    // Check whether all the poses in the queue are in the proximity of the new
+    // one. We want to do this before checking the overriding conditions below, in order to update
+    // the suppression deadline correctly.
+    bool moved = false;
 
-    // An empty FIFO and window full is considered still (this will happen in the unlikely case when
-    // the window duration is shorter than the gap between samples).
-    if (mFifo.empty()) {
-        return true;
-    }
-
-    // Otherwise, check whether all the poses remaining in the queue are in the proximity of the new
-    // one.
-    for (auto iter = mFifo.begin(); iter != mFifo.end() - 1; ++iter) {
-        const auto& event = *iter;
-        if (!areNear(event.pose, mFifo.back().pose)) {
-            return false;
+    if (!mFifo.empty()) {
+        for (auto iter = mFifo.begin(); iter != mFifo.end() - 1; ++iter) {
+            const auto& event = *iter;
+            if (!areNear(event.pose, mFifo.back().pose)) {
+                // Enable suppression for the duration of the window.
+                mSuppressionDeadline = timestamp + mOptions.windowDuration;
+                moved = true;
+                break;
+            }
         }
     }
 
-    return true;
+    // If the window has not been full, return the default value.
+    if (!mWindowFull) {
+        return mOptions.defaultValue;
+    }
+
+    // Force "in motion" while the suppression deadline is active.
+    if (mSuppressionDeadline.has_value()) {
+        return false;
+    }
+
+    return !moved;
 }
 
 void StillnessDetector::discardOld(int64_t timestamp) {
@@ -71,23 +80,26 @@ void StillnessDetector::discardOld(int64_t timestamp) {
         mWindowFull = true;
         mFifo.pop_front();
     }
+
+    // Expire the suppression deadline.
+    if (mSuppressionDeadline.has_value() && mSuppressionDeadline <= timestamp) {
+        mSuppressionDeadline.reset();
+    }
 }
 
 bool StillnessDetector::areNear(const Pose3f& pose1, const Pose3f& pose2) const {
     // Check translation. We use the L1 norm to reduce computational load on expense of accuracy.
     // The L1 norm is an upper bound for the actual (L2) norm, so this approach will err on the side
     // of "not near".
-    if ((pose1.translation() - pose2.translation()).lpNorm<1>() >=
-        mOptions.translationalThreshold) {
+    if ((pose1.translation() - pose2.translation()).lpNorm<1>() > mOptions.translationalThreshold) {
         return false;
     }
 
-    // Check orientation. We use the L1 norm of the imaginary components of the quaternion to reduce
-    // computational load on expense of accuracy. For small angles, those components are approx.
-    // equal to the angle of rotation and so the norm is approx. the total angle of rotation. The
-    // L1 norm is an upper bound, so this approach will err on the side of "not near".
-    if ((pose1.rotation().vec() - pose2.rotation().vec()).lpNorm<1>() >=
-        mOptions.rotationalThreshold) {
+    // Check orientation.
+    // The angle x between the quaternions is greater than that threshold iff
+    // cos(x/2) < cos(threshold/2).
+    // cos(x/2) can be efficiently calculated as the dot product of both quaternions.
+    if (pose1.rotation().dot(pose2.rotation()) < mCosHalfRotationalThreshold) {
         return false;
     }
 

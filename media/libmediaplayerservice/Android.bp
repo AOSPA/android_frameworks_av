@@ -72,6 +72,7 @@ cc_library {
     header_libs: [
         "media_plugin_headers",
         "libmediautils_headers",
+        "libstagefright_rtsp_headers",
     ],
 
     static_libs: [
@@ -96,7 +97,6 @@ cc_library {
     ],
 
     include_dirs: [
-        "frameworks/av/media/libstagefright/rtsp",
         "frameworks/av/media/libstagefright/webm",
         "frameworks/av/media/libavextensions",
         "frameworks/av/media/libmediaextractor",

@@ -47,7 +47,6 @@ cc_defaults {
 
     include_dirs: [
         "frameworks/av/media/libmediaplayerservice",
-        "frameworks/av/services/mediaresourcemanager",
     ],
 
     cflags: [

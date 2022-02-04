@@ -44,7 +44,7 @@ static void frameCallback(const AChoreographerFrameCallbackData* callbackData, v
     size_t length = AChoreographerFrameCallbackData_getFrameTimelinesLength(callbackData);
     std::vector<nsecs_t> timeline(length);
     for (size_t i = 0; i < length; i++) {
-        nsecs_t timestamp = AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentTime(
+        nsecs_t timestamp = AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentTimeNanos(
                 callbackData, i);
         timeline[i] = timestamp;
     }
@@ -195,6 +195,9 @@ status_t PreviewFrameScheduler::queueBufferToClientLocked(
                 __FUNCTION__, strerror(-res), res);
         return res;
     }
+
+    Camera3Stream::queueHDRMetadata(bufferHolder.anwBuffer.get()->handle, mConsumer,
+            mParent.getDynamicRangeProfile());
 
     res = mConsumer->queueBuffer(mConsumer.get(), bufferHolder.anwBuffer.get(),
             bufferHolder.releaseFence);
