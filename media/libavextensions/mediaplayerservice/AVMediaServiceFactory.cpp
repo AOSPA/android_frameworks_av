@@ -32,8 +32,8 @@
 
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AMessage.h>
-#include "ARTPConnection.h"
-#include "ARTSPConnection.h"
+#include <media/stagefright/rtsp/ARTPConnection.h>
+#include <media/stagefright/rtsp/ARTSPConnection.h>
 
 #include "MediaRecorderClient.h"
 #include "MediaPlayerService.h"

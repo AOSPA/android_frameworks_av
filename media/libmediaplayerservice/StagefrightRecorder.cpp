@@ -70,8 +70,9 @@
 
 #include <system/audio.h>
 
-#include "ARTPWriter.h"
+#include <media/stagefright/rtsp/ARTPWriter.h>
 #include <stagefright/AVExtensions.h>
+
 
 namespace android {
 

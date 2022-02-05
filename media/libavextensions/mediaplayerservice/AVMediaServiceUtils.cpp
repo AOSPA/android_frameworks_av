@@ -32,9 +32,9 @@
 #include <utils/Log.h>
 
 #include <media/stagefright/foundation/ADebug.h>
-#include "ARTPConnection.h"
-#include "ASessionDescription.h"
-#include "MyHandler.h"
+#include <media/stagefright/rtsp/ARTPConnection.h>
+#include <media/stagefright/rtsp/ASessionDescription.h>
+#include <media/stagefright/rtsp/MyHandler.h>
 
 #include "common/ExtensionsLoader.hpp"
 #include "mediaplayerservice/AVMediaServiceExtensions.h"
