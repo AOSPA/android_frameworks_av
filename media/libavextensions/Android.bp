@@ -71,6 +71,9 @@ cc_library_static {
         "external/flac/include",
         "frameworks/av/media/libstagefright/omx/include/media/stagefright",
     ],
+    static_libs: [
+        "libstagefright_mpeg2support_nocrypto",
+    ],
     cflags: [
         "-Wno-multichar",
         "-Werror",

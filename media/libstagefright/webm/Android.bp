@@ -33,13 +33,18 @@ cc_library_static {
         "WebmWriter.cpp",
     ],
 
-    export_include_dirs: [
-        ".",
-    ],
-
     include_dirs: [
         "frameworks/av/media/libstagefright/mpeg2ts",
         "frameworks/av/media/libavextensions",
+    ],
+    local_include_dirs: [
+        "include/webm",
+    ],
+
+    export_include_dirs: ["include"],
+
+    static_libs: [
+        "libstagefright_mpeg2support_nocrypto",
     ],
 
     shared_libs: [
@@ -65,4 +70,17 @@ cc_library_static {
         "libmedia_headers",
         "media_ndk_headers",
     ],
+}
+
+
+cc_library_headers {
+    name: "libstagefright_webm_headers",
+    export_include_dirs: ["include"],
+
+    host_supported: true,
+    target: {
+        darwin: {
+            enabled: false,
+        },
+    },
 }

@@ -37,7 +37,7 @@
 #include <media/IOMX.h>
 #include <camera/android/hardware/ICamera.h>
 #include <media/mediarecorder.h>
-#include "ESQueue.h"
+#include "mpeg2ts/ESQueue.h"
 
 namespace android {
 

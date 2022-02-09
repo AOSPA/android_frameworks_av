@@ -42,14 +42,12 @@ cc_library_static {
         "libmediametrics_headers",
         "media_plugin_headers",
         "libstagefright_headers",
+        "libstagefright_httplive_headers",
+        "libstagefright_mpeg2support_headers",
         "libstagefright_rtsp_headers",
     ],
 
     include_dirs: [
-        "frameworks/av/media/libstagefright/httplive",
-        "frameworks/av/media/libstagefright/mpeg2ts",
-        "frameworks/av/media/libstagefright/timedtext",
-        "frameworks/native/include/android",
         "frameworks/av/media/libavextensions",
         "frameworks/av/media/libmediaplayerservice",
         "frameworks/av/media/libmediaextractor",
@@ -83,6 +81,7 @@ cc_library_static {
 
     static_libs: [
         "libplayerservice_datasource",
+        "libstagefright_timedtext",
     ],
 
     name: "libstagefright_nuplayer",

@@ -360,6 +360,7 @@ cc_library {
         "framework-permission-aidl-cpp",
         "libmediandk_format",
         "libmedia_ndkformatpriv",
+        "libstagefright_mpeg2support_nocrypto"
     ],
 
     whole_static_libs: [

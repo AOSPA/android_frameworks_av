@@ -42,9 +42,8 @@
 #include <stagefright/AVExtensions.h>
 #include "mediaplayerservice/AVNuExtensions.h"
 #include <media/stagefright/SurfaceUtils.h>
+#include <mpeg2ts/ATSParser.h>
 #include <gui/Surface.h>
-
-#include "ATSParser.h"
 
 namespace android {
 
