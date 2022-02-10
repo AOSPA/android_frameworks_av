@@ -26,7 +26,8 @@
 
 #include <cutils/properties.h>
 #include <inttypes.h>
-#include "WebmWriter.h"
+#include <webm/WebmWriter.h>
+
 #include "StagefrightRecorder.h"
 
 #include <algorithm>

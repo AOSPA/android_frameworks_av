@@ -20,8 +20,6 @@
 
 #include "RTSPSource.h"
 
-#include "AnotherPacketSource.h"
-
 #include <cutils/properties.h>
 #include <media/IMediaHTTPService.h>
 #include <media/stagefright/MediaDefs.h>
@@ -29,6 +27,7 @@
 #include <media/stagefright/rtsp/MyHandler.h>
 #include <media/stagefright/rtsp/SDPLoader.h>
 #include <mediaplayerservice/AVMediaServiceExtensions.h>
+#include <mpeg2ts/AnotherPacketSource.h>
 
 namespace android {
 
