@@ -84,7 +84,7 @@ cc_binary {
         "libhidlbase",
         "libstagefright_omx_ext",
         "libstagefright_omx",
-        "libstagefright_xmlparser",
+        "libstagefright_xmlparser_ext",
         "android.hardware.media.omx@1.0",
         "android.hidl.memory@1.0",
     ],
