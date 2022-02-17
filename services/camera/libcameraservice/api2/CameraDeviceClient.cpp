@@ -51,8 +51,8 @@
 
 namespace android {
 using namespace camera2;
+using namespace camera3;
 using camera3::camera_stream_rotation_t::CAMERA_STREAM_ROTATION_0;
-using camera3::SessionConfigurationUtils;
 
 CameraDeviceClientBase::CameraDeviceClientBase(
         const sp<CameraService>& cameraService,
@@ -146,6 +146,40 @@ status_t CameraDeviceClient::initializeImpl(TProviderPtr providerPtr, const Stri
         mSupportedPhysicalRequestKeys.insert(mSupportedPhysicalRequestKeys.begin(),
                 physicalKeysEntry.data.i32,
                 physicalKeysEntry.data.i32 + physicalKeysEntry.count);
+    }
+
+    auto entry = deviceInfo.find(ANDROID_REQUEST_AVAILABLE_CAPABILITIES);
+    mDynamicProfileMap.emplace(
+            ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD,
+            ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD);
+    if (entry.count > 0) {
+        const auto it = std::find(entry.data.i32, entry.data.i32 + entry.count,
+                ANDROID_REQUEST_AVAILABLE_CAPABILITIES_DYNAMIC_RANGE_TEN_BIT);
+        if (it != entry.data.i32 + entry.count) {
+            entry = deviceInfo.find(ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP);
+            if (entry.count > 0 || ((entry.count % 2) != 0)) {
+                int standardBitmap = ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD;
+                for (size_t i = 0; i < entry.count; i += 2) {
+                    if (entry.data.i32[i] !=
+                            ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD) {
+                        mDynamicProfileMap.emplace(entry.data.i32[i], entry.data.i32[i+1]);
+                        if ((entry.data.i32[i+1] == 0) || (entry.data.i32[i+1] &
+                                ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD)) {
+                            standardBitmap |= entry.data.i32[i];
+                        }
+                    } else {
+                        ALOGE("%s: Device %s includes unexpected profile entry: 0x%x!",
+                                __FUNCTION__, mCameraIdStr.c_str(), entry.data.i32[i]);
+                    }
+                }
+                mDynamicProfileMap.emplace(
+                        ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD,
+                        standardBitmap);
+            } else {
+                ALOGE("%s: Device %s supports 10-bit output but doesn't include a dynamic range"
+                        " profile map!", __FUNCTION__, mCameraIdStr.c_str());
+            }
+        }
     }
 
     mProviderManager = providerPtr;
@@ -305,6 +339,7 @@ binder::Status CameraDeviceClient::submitRequestList(
         SurfaceMap surfaceMap;
         Vector<int32_t> outputStreamIds;
         std::vector<std::string> requestedPhysicalIds;
+        int dynamicProfileBitmap = 0;
         if (request.mSurfaceList.size() > 0) {
             for (const sp<Surface>& surface : request.mSurfaceList) {
                 if (surface == 0) continue;
@@ -321,6 +356,8 @@ binder::Status CameraDeviceClient::submitRequestList(
                     String8 requestedPhysicalId(
                             mConfiguredOutputs.valueAt(index).getPhysicalCameraId());
                     requestedPhysicalIds.push_back(requestedPhysicalId.string());
+                    dynamicProfileBitmap |=
+                            mConfiguredOutputs.valueAt(index).getDynamicRangeProfile();
                 } else {
                     ALOGW("%s: Output stream Id not found among configured outputs!", __FUNCTION__);
                 }
@@ -356,6 +393,41 @@ binder::Status CameraDeviceClient::submitRequestList(
                 String8 requestedPhysicalId(
                         mConfiguredOutputs.valueAt(index).getPhysicalCameraId());
                 requestedPhysicalIds.push_back(requestedPhysicalId.string());
+                dynamicProfileBitmap |=
+                        mConfiguredOutputs.valueAt(index).getDynamicRangeProfile();
+            }
+        }
+
+        if (dynamicProfileBitmap !=
+                    ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD) {
+            for (int i = ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD;
+                    i < ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_MAX; i <<= 1) {
+                if ((dynamicProfileBitmap & i) == 0) {
+                    continue;
+                }
+
+                const auto& it = mDynamicProfileMap.find(i);
+                if (it != mDynamicProfileMap.end()) {
+                    if ((it->second == 0) ||
+                            ((it->second & dynamicProfileBitmap) == dynamicProfileBitmap)) {
+                        continue;
+                    } else {
+                        ALOGE("%s: Camera %s: Tried to submit a request with a surfaces that"
+                                " reference an unsupported dynamic range profile combination"
+                                " 0x%x!", __FUNCTION__, mCameraIdStr.string(),
+                                dynamicProfileBitmap);
+                        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
+                                "Request targets an unsupported dynamic range profile"
+                                " combination");
+                    }
+                } else {
+                    ALOGE("%s: Camera %s: Tried to submit a request with a surface that"
+                            " references unsupported dynamic range profile 0x%x!",
+                            __FUNCTION__, mCameraIdStr.string(), i);
+                    return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
+                            "Request targets 10-bit Surface with unsupported dynamic range"
+                            " profile");
+                }
             }
         }
 
@@ -646,7 +718,7 @@ binder::Status CameraDeviceClient::isSessionConfigurationSupported(
         return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.string());
     }
 
-    hardware::camera::device::V3_7::StreamConfiguration streamConfiguration;
+    hardware::camera::device::V3_8::StreamConfiguration streamConfiguration;
     bool earlyExit = false;
     camera3::metadataGetter getMetadata = [this](const String8 &id, bool /*overrideForPerfClass*/) {
           return mDevice->infoPhysical(id);};
@@ -809,6 +881,7 @@ binder::Status CameraDeviceClient::createStream(
     String8 physicalCameraId = String8(outputConfiguration.getPhysicalCameraId());
     bool deferredConsumerOnly = deferredConsumer && numBufferProducers == 0;
     bool isMultiResolution = outputConfiguration.isMultiResolution();
+    int dynamicRangeProfile = outputConfiguration.getDynamicRangeProfile();
 
     res = SessionConfigurationUtils::checkSurfaceType(numBufferProducers, deferredConsumer,
             outputConfiguration.getSurfaceType());
@@ -852,7 +925,8 @@ binder::Status CameraDeviceClient::createStream(
         sp<Surface> surface;
         res = SessionConfigurationUtils::createSurfaceFromGbp(streamInfo,
                 isStreamInfoValid, surface, bufferProducer, mCameraIdStr,
-                mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed, mPrivilegedClient);
+                mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed, dynamicRangeProfile,
+                mPrivilegedClient);
 
         if (!res.isOk())
             return res;
@@ -896,7 +970,8 @@ binder::Status CameraDeviceClient::createStream(
                 streamInfo.height, streamInfo.format, streamInfo.dataSpace,
                 static_cast<camera_stream_rotation_t>(outputConfiguration.getRotation()),
                 &streamId, physicalCameraId, streamInfo.sensorPixelModesUsed, &surfaceIds,
-                outputConfiguration.getSurfaceSetID(), isShared, isMultiResolution);
+                outputConfiguration.getSurfaceSetID(), isShared, isMultiResolution,
+                streamInfo.dynamicRangeProfile);
     }
 
     if (err != OK) {
@@ -990,7 +1065,8 @@ binder::Status CameraDeviceClient::createDeferredSurfaceStreamLocked(
             overriddenSensorPixelModesUsed,
             &surfaceIds,
             outputConfiguration.getSurfaceSetID(), isShared,
-            outputConfiguration.isMultiResolution(), consumerUsage);
+            outputConfiguration.isMultiResolution(), consumerUsage,
+            outputConfiguration.getDynamicRangeProfile());
 
     if (err != OK) {
         res = STATUS_ERROR_FMT(CameraService::ERROR_INVALID_OPERATION,
@@ -1003,7 +1079,8 @@ binder::Status CameraDeviceClient::createDeferredSurfaceStreamLocked(
         mDeferredStreams.push_back(streamId);
         mStreamInfoMap.emplace(std::piecewise_construct, std::forward_as_tuple(streamId),
                 std::forward_as_tuple(width, height, format, dataSpace, consumerUsage,
-                        overriddenSensorPixelModesUsed));
+                        overriddenSensorPixelModesUsed,
+                        outputConfiguration.getDynamicRangeProfile()));
 
         ALOGV("%s: Camera %s: Successfully created a new stream ID %d for a deferred surface"
                 " (%d x %d) stream with format 0x%x.",
@@ -1192,12 +1269,15 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
     const std::vector<int32_t> &sensorPixelModesUsed =
             outputConfiguration.getSensorPixelModesUsed();
 
+    int dynamicRangeProfile = outputConfiguration.getDynamicRangeProfile();
+
     for (size_t i = 0; i < newOutputsMap.size(); i++) {
         OutputStreamInfo outInfo;
         sp<Surface> surface;
         res = SessionConfigurationUtils::createSurfaceFromGbp(outInfo,
                 /*isStreamInfoValid*/ false, surface, newOutputsMap.valueAt(i), mCameraIdStr,
-                mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed, mPrivilegedClient);
+                mDevice->infoPhysical(physicalCameraId), sensorPixelModesUsed, dynamicRangeProfile,
+                mPrivilegedClient);
         if (!res.isOk())
             return res;
 
@@ -1554,6 +1634,7 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
     std::vector<sp<Surface>> consumerSurfaces;
     const std::vector<int32_t> &sensorPixelModesUsed =
             outputConfiguration.getSensorPixelModesUsed();
+    int dynamicRangeProfile = outputConfiguration.getDynamicRangeProfile();
     for (auto& bufferProducer : bufferProducers) {
         // Don't create multiple streams for the same target surface
         ssize_t index = mStreamMap.indexOfKey(IInterface::asBinder(bufferProducer));
@@ -1566,7 +1647,8 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
         sp<Surface> surface;
         res = SessionConfigurationUtils::createSurfaceFromGbp(mStreamInfoMap[streamId],
                 true /*isStreamInfoValid*/, surface, bufferProducer, mCameraIdStr,
-                mDevice->infoPhysical(physicalId), sensorPixelModesUsed, mPrivilegedClient);
+                mDevice->infoPhysical(physicalId), sensorPixelModesUsed, dynamicRangeProfile,
+                mPrivilegedClient);
 
         if (!res.isOk())
             return res;

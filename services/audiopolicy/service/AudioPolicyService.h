@@ -214,7 +214,8 @@ public:
                                       std::vector<bool>* formatsEnabled) override;
     binder::Status getReportedSurroundFormats(
             Int* count, std::vector<AudioFormatDescription>* formats) override;
-    binder::Status getHwOffloadEncodingFormatsSupportedForA2DP(
+    binder::Status getHwOffloadFormatsSupportedForBluetoothMedia(
+            const AudioDeviceDescription& device,
             std::vector<AudioFormatDescription>* _aidl_return) override;
     binder::Status setSurroundFormatEnabled(const AudioFormatDescription& audioFormat,
                                             bool enabled) override;
@@ -272,6 +273,10 @@ public:
             const std::optional<AudioConfig>& config,
             const std::vector<AudioDevice>& devices,
             bool* _aidl_return) override;
+
+    binder::Status getDirectPlaybackSupport(const media::AudioAttributesInternal& attr,
+                                            const AudioConfig& config,
+                                            media::AudioDirectMode* _aidl_return) override;
 
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) override;
 
@@ -386,8 +391,9 @@ private:
     app_state_t apmStatFromAmState(int amState);
 
     bool isSupportedSystemUsage(audio_usage_t usage);
-    status_t validateUsage(audio_usage_t usage);
-    status_t validateUsage(audio_usage_t usage, const AttributionSourceState& attributionSource);
+    status_t validateUsage(const audio_attributes_t& attr);
+    status_t validateUsage(const audio_attributes_t& attr,
+                           const AttributionSourceState& attributionSource);
 
     void updateUidStates();
     void updateUidStates_l() REQUIRES(mLock);

@@ -172,6 +172,12 @@ public:
     virtual binder::Status    setTorchMode(const String16& cameraId, bool enabled,
             const sp<IBinder>& clientBinder);
 
+    virtual binder::Status    turnOnTorchWithStrengthLevel(const String16& cameraId,
+            int32_t torchStrength, const sp<IBinder>& clientBinder);
+
+    virtual binder::Status    getTorchStrengthLevel(const String16& cameraId,
+            int32_t* torchStrength);
+
     virtual binder::Status    notifySystemEvent(int32_t eventId,
             const std::vector<int32_t>& args);
 
@@ -583,7 +589,7 @@ private:
          * returned in the HAL's camera_info struct for each device.
          */
         CameraState(const String8& id, int cost, const std::set<String8>& conflicting,
-                SystemCameraKind deviceKind);
+                SystemCameraKind deviceKind, const std::vector<std::string>& physicalCameras);
         virtual ~CameraState();
 
         /**
@@ -641,6 +647,12 @@ private:
         SystemCameraKind getSystemCameraKind() const;
 
         /**
+         * Return whether this camera is a logical multi-camera and has a
+         * particular physical sub-camera.
+         */
+        bool containsPhysicalCamera(const std::string& physicalCameraId) const;
+
+        /**
          * Add/Remove the unavailable physical camera ID.
          */
         bool addUnavailablePhysicalId(const String8& physicalId);
@@ -668,6 +680,7 @@ private:
         mutable Mutex mStatusLock;
         CameraParameters mShimParams;
         const SystemCameraKind mSystemCameraKind;
+        const std::vector<std::string> mPhysicalCameras; // Empty if not a logical multi-camera
     }; // class CameraState
 
     // Observer for UID lifecycle enforcing that UIDs in idle
@@ -1172,7 +1185,7 @@ private:
     status_t handleSetCameraMute(const Vector<String16>& args);
 
     // Handle 'watch' command as passed through 'cmd'
-    status_t handleWatchCommand(const Vector<String16> &args, int outFd);
+    status_t handleWatchCommand(const Vector<String16> &args, int inFd, int outFd);
 
     // Enable tag monitoring of the given tags in provided clients
     status_t startWatchingTags(const Vector<String16> &args, int outFd);
@@ -1180,20 +1193,16 @@ private:
     // Disable tag monitoring
     status_t stopWatchingTags(int outFd);
 
+    // Clears mWatchedClientsDumpCache
+    status_t clearCachedMonitoredTagDumps(int outFd);
+
     // Print events of monitored tags in all cached and attached clients
-    status_t printWatchedTags(const Vector<String16> &args, int outFd);
+    status_t printWatchedTags(int outFd);
 
     // Print events of monitored tags in all attached clients as they are captured. New events are
-    // fetched every `refreshMicros` us
-    // NOTE: This function does not terminate unless interrupted.
-    status_t printWatchedTagsUntilInterrupt(useconds_t refreshMicros, int outFd);
-
-    // Print all events in vector `events' that came after lastPrintedEvent
-    static void printNewWatchedEvents(int outFd,
-                                      const char *cameraId,
-                                      const String16 &packageName,
-                                      const std::vector<std::string> &events,
-                                      const std::string &lastPrintedEvent);
+    // fetched every `refreshMillis` ms
+    // NOTE: This function does not terminate until user passes '\n' to inFd.
+    status_t printWatchedTagsUntilInterrupt(const Vector<String16> &args, int inFd, int outFd);
 
     // Parses comma separated clients list and adds them to mWatchedClientPackages.
     // Does not acquire mLogLock before modifying mWatchedClientPackages. It is the caller's
@@ -1235,6 +1244,8 @@ private:
     void broadcastTorchModeStatus(const String8& cameraId,
             hardware::camera::common::V1_0::TorchModeStatus status,
             SystemCameraKind systemCameraKind);
+
+    void broadcastTorchStrengthLevel(const String8& cameraId, int32_t newTorchStrengthLevel);
 
     void disconnectClient(const String8& id, sp<BasicClient> clientToDisconnect);
 
@@ -1300,15 +1311,22 @@ private:
             wp<CameraService> mParent;
     };
 
+    // When injecting the camera, it will check whether the injecting camera status is unavailable.
+    // If it is, the disconnect function will be called to to prevent camera access on the device.
+    status_t checkIfInjectionCameraIsPresent(const String8& externalCamId,
+            sp<BasicClient> clientSp);
+
     void clearInjectionParameters();
 
     // This is the existing camera id being replaced.
     String8 mInjectionInternalCamId;
     // This is the external camera Id replacing the internalId.
     String8 mInjectionExternalCamId;
-    bool mInjectionInitPending = true;
+    bool mInjectionInitPending = false;
     // Guard mInjectionInternalCamId and mInjectionInitPending.
     Mutex mInjectionParametersLock;
+
+    void updateTorchUidMapLocked(const String16& cameraId, int uid);
 };
 
 } // namespace android

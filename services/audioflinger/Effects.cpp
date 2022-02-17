@@ -2413,6 +2413,7 @@ size_t AudioFlinger::EffectChain::removeEffect_l(const sp<EffectModule>& effect,
                 if (i == size - 1 && i != 0) {
                     mEffects[i - 1]->configure();
                     mEffects[i - 1]->setOutBuffer(mOutBuffer);
+                    mEffects[i - 1]->updateAccessMode();      // reconfig if neeeded.
                 }
             }
             mEffects.removeAt(i);
@@ -2422,6 +2423,7 @@ size_t AudioFlinger::EffectChain::removeEffect_l(const sp<EffectModule>& effect,
             if (i == 0 && size > 1) {
                 mEffects[0]->configure();
                 mEffects[0]->setInBuffer(mInBuffer);
+                mEffects[0]->updateAccessMode();      // reconfig if neeeded.
             }
 
             ALOGV("removeEffect_l() effect %p, removed from chain %p at rank %zu", effect.get(),
@@ -3258,6 +3260,8 @@ status_t AudioFlinger::DeviceEffectProxy::checkPort(const PatchPanel::Patch& pat
         } else {
             mHalEffect->setDevices({mDevice});
         }
+        mHalEffect->configure();
+
         *handle = new EffectHandle(mHalEffect, nullptr, nullptr, 0 /*priority*/,
                                    mNotifyFramesProcessed);
         status = (*handle)->initCheck();
@@ -3306,8 +3310,14 @@ status_t AudioFlinger::DeviceEffectProxy::checkPort(const PatchPanel::Patch& pat
 }
 
 void AudioFlinger::DeviceEffectProxy::onReleasePatch(audio_patch_handle_t patchHandle) {
-    Mutex::Autolock _l(mProxyLock);
-    mEffectHandles.erase(patchHandle);
+    sp<EffectHandle> effect;
+    {
+        Mutex::Autolock _l(mProxyLock);
+        if (mEffectHandles.find(patchHandle) != mEffectHandles.end()) {
+            effect = mEffectHandles.at(patchHandle);
+            mEffectHandles.erase(patchHandle);
+        }
+    }
 }
 
 
@@ -3315,6 +3325,7 @@ size_t AudioFlinger::DeviceEffectProxy::removeEffect(const sp<EffectModule>& eff
 {
     Mutex::Autolock _l(mProxyLock);
     if (effect == mHalEffect) {
+        mHalEffect->release_l();
         mHalEffect.clear();
         mDevicePort.id = AUDIO_PORT_HANDLE_NONE;
     }
@@ -3462,7 +3473,7 @@ status_t AudioFlinger::DeviceEffectProxy::ProxyCallback::removeEffectFromHal(
     if (proxy == nullptr) {
         return NO_INIT;
     }
-    return proxy->addEffectToHal(effect);
+    return proxy->removeEffectFromHal(effect);
 }
 
 bool AudioFlinger::DeviceEffectProxy::ProxyCallback::isOutput() const {
@@ -3512,6 +3523,24 @@ uint32_t AudioFlinger::DeviceEffectProxy::ProxyCallback::outChannelCount() const
         return 2;
     }
     return proxy->channelCount();
+}
+
+void AudioFlinger::DeviceEffectProxy::ProxyCallback::onEffectEnable(
+        const sp<EffectBase>& effectBase) {
+    sp<EffectModule> effect = effectBase->asEffectModule();
+    if (effect == nullptr) {
+        return;
+    }
+    effect->start();
+}
+
+void AudioFlinger::DeviceEffectProxy::ProxyCallback::onEffectDisable(
+        const sp<EffectBase>& effectBase) {
+    sp<EffectModule> effect = effectBase->asEffectModule();
+    if (effect == nullptr) {
+        return;
+    }
+    effect->stop();
 }
 
 } // namespace android

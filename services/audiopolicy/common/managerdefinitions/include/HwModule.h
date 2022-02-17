@@ -80,6 +80,7 @@ public:
 
     sp<DeviceDescriptor> getRouteSinkDevice(const sp<AudioRoute> &route) const;
     DeviceVector getRouteSourceDevices(const sp<AudioRoute> &route) const;
+    const AudioRouteVector& getRoutes() const { return mRoutes; }
     void setRoutes(const AudioRouteVector &routes);
 
     status_t addOutputProfile(const sp<IOProfile> &profile);
@@ -114,7 +115,7 @@ public:
                        const sp<PolicyAudioPort> &dstPort) const;
 
     // TODO remove from here (split serialization)
-    void dump(String8 *dst) const;
+    void dump(String8 *dst, int spaces) const;
 
     OutputProfileCollection mOutputProfiles; // output profiles exposed by this module
 

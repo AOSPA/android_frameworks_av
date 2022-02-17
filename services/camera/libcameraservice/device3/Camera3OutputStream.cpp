@@ -22,6 +22,7 @@
 #include <fstream>
 
 #include <android-base/unique_fd.h>
+#include <cutils/properties.h>
 #include <ui/GraphicBuffer.h>
 #include <utils/Log.h>
 #include <utils/Trace.h>
@@ -45,10 +46,11 @@ Camera3OutputStream::Camera3OutputStream(int id,
         android_dataspace dataSpace, camera_stream_rotation_t rotation,
         nsecs_t timestampOffset, const String8& physicalCameraId,
         const std::unordered_set<int32_t> &sensorPixelModesUsed,
-        int setId, bool isMultiResolution) :
+        int setId, bool isMultiResolution, int dynamicRangeProfile) :
         Camera3IOStreamBase(id, CAMERA_STREAM_OUTPUT, width, height,
                             /*maxSize*/0, format, dataSpace, rotation,
-                            physicalCameraId, sensorPixelModesUsed, setId, isMultiResolution),
+                            physicalCameraId, sensorPixelModesUsed, setId, isMultiResolution,
+                            dynamicRangeProfile),
         mConsumer(consumer),
         mTransform(0),
         mTraceFirstBuffer(true),
@@ -73,10 +75,10 @@ Camera3OutputStream::Camera3OutputStream(int id,
         android_dataspace dataSpace, camera_stream_rotation_t rotation,
         nsecs_t timestampOffset, const String8& physicalCameraId,
         const std::unordered_set<int32_t> &sensorPixelModesUsed,
-        int setId, bool isMultiResolution) :
+        int setId, bool isMultiResolution, int dynamicRangeProfile) :
         Camera3IOStreamBase(id, CAMERA_STREAM_OUTPUT, width, height, maxSize,
                             format, dataSpace, rotation, physicalCameraId, sensorPixelModesUsed,
-                            setId, isMultiResolution),
+                            setId, isMultiResolution, dynamicRangeProfile),
         mConsumer(consumer),
         mTransform(0),
         mTraceFirstBuffer(true),
@@ -108,10 +110,11 @@ Camera3OutputStream::Camera3OutputStream(int id,
         camera_stream_rotation_t rotation, nsecs_t timestampOffset,
         const String8& physicalCameraId,
         const std::unordered_set<int32_t> &sensorPixelModesUsed,
-        int setId, bool isMultiResolution) :
+        int setId, bool isMultiResolution, int dynamicRangeProfile) :
         Camera3IOStreamBase(id, CAMERA_STREAM_OUTPUT, width, height,
                             /*maxSize*/0, format, dataSpace, rotation,
-                            physicalCameraId, sensorPixelModesUsed, setId, isMultiResolution),
+                            physicalCameraId, sensorPixelModesUsed, setId, isMultiResolution,
+                            dynamicRangeProfile),
         mConsumer(nullptr),
         mTransform(0),
         mTraceFirstBuffer(true),
@@ -148,11 +151,13 @@ Camera3OutputStream::Camera3OutputStream(int id, camera_stream_type_t type,
                                          const String8& physicalCameraId,
                                         const std::unordered_set<int32_t> &sensorPixelModesUsed,
                                          uint64_t consumerUsage, nsecs_t timestampOffset,
-                                         int setId, bool isMultiResolution) :
+                                         int setId, bool isMultiResolution,
+                                         int dynamicRangeProfile) :
         Camera3IOStreamBase(id, type, width, height,
                             /*maxSize*/0,
                             format, dataSpace, rotation,
-                            physicalCameraId, sensorPixelModesUsed, setId, isMultiResolution),
+                            physicalCameraId, sensorPixelModesUsed, setId, isMultiResolution,
+                            dynamicRangeProfile),
         mTransform(0),
         mTraceFirstBuffer(true),
         mUseMonoTimestamp(false),
@@ -263,14 +268,16 @@ status_t Camera3OutputStream::queueBufferToConsumer(sp<ANativeWindow>& consumer,
 
 status_t Camera3OutputStream::returnBufferLocked(
         const camera_stream_buffer &buffer,
-        nsecs_t timestamp, int32_t transform, const std::vector<size_t>& surface_ids) {
+        nsecs_t timestamp, nsecs_t readoutTimestamp,
+        int32_t transform, const std::vector<size_t>& surface_ids) {
     ATRACE_HFR_CALL();
 
     if (mHandoutTotalBufferCount == 1) {
         returnPrefetchedBuffersLocked();
     }
 
-    status_t res = returnAnyBufferLocked(buffer, timestamp, /*output*/true, transform, surface_ids);
+    status_t res = returnAnyBufferLocked(buffer, timestamp, readoutTimestamp,
+                                         /*output*/true, transform, surface_ids);
 
     if (res != OK) {
         return res;
@@ -285,6 +292,7 @@ status_t Camera3OutputStream::returnBufferLocked(
 status_t Camera3OutputStream::returnBufferCheckedLocked(
             const camera_stream_buffer &buffer,
             nsecs_t timestamp,
+            nsecs_t readoutTimestamp,
             bool output,
             int32_t transform,
             const std::vector<size_t>& surface_ids,
@@ -347,20 +355,6 @@ status_t Camera3OutputStream::returnBufferCheckedLocked(
             mTraceFirstBuffer = false;
         }
 
-        if (transform != -1) {
-            setTransformLocked(transform);
-        }
-
-        /* Certain consumers (such as AudioSource or HardwareComposer) use
-         * MONOTONIC time, causing time misalignment if camera timestamp is
-         * in BOOTTIME. Do the conversion if necessary. */
-        res = native_window_set_buffers_timestamp(mConsumer.get(),
-                mUseMonoTimestamp ? timestamp - mTimestampOffset : timestamp);
-        if (res != OK) {
-            ALOGE("%s: Stream %d: Error setting timestamp: %s (%d)",
-                  __FUNCTION__, mId, strerror(-res), res);
-            return res;
-        }
         // If this is a JPEG output, and image dump mask is set, save image to
         // disk.
         if (getFormat() == HAL_PIXEL_FORMAT_BLOB && getDataSpace() == HAL_DATASPACE_V0_JFIF &&
@@ -368,10 +362,35 @@ status_t Camera3OutputStream::returnBufferCheckedLocked(
             dumpImageToDisk(timestamp, anwBuffer, anwReleaseFence);
         }
 
-        res = queueBufferToConsumer(currentConsumer, anwBuffer, anwReleaseFence, surface_ids);
-        if (shouldLogError(res, state)) {
-            ALOGE("%s: Stream %d: Error queueing buffer to native window:"
-                  " %s (%d)", __FUNCTION__, mId, strerror(-res), res);
+        /* Certain consumers (such as AudioSource or HardwareComposer) use
+         * MONOTONIC time, causing time misalignment if camera timestamp is
+         * in BOOTTIME. Do the conversion if necessary. */
+        nsecs_t t = mPreviewFrameScheduler != nullptr ? readoutTimestamp : timestamp;
+        nsecs_t adjustedTs = mUseMonoTimestamp ? t - mTimestampOffset : t;
+        if (mPreviewFrameScheduler != nullptr) {
+            res = mPreviewFrameScheduler->queuePreviewBuffer(adjustedTs, transform,
+                    anwBuffer, anwReleaseFence);
+            if (res != OK) {
+                ALOGE("%s: Stream %d: Error queuing buffer to preview buffer scheduler: %s (%d)",
+                        __FUNCTION__, mId, strerror(-res), res);
+                return res;
+            }
+        } else {
+            setTransform(transform);
+            res = native_window_set_buffers_timestamp(mConsumer.get(), adjustedTs);
+            if (res != OK) {
+                ALOGE("%s: Stream %d: Error setting timestamp: %s (%d)",
+                      __FUNCTION__, mId, strerror(-res), res);
+                return res;
+            }
+
+            queueHDRMetadata(anwBuffer->handle, currentConsumer, dynamic_range_profile);
+
+            res = queueBufferToConsumer(currentConsumer, anwBuffer, anwReleaseFence, surface_ids);
+            if (shouldLogError(res, state)) {
+                ALOGE("%s: Stream %d: Error queueing buffer to native window:"
+                      " %s (%d)", __FUNCTION__, mId, strerror(-res), res);
+            }
         }
     }
     mLock.lock();
@@ -412,6 +431,9 @@ status_t Camera3OutputStream::setTransform(int transform) {
 
 status_t Camera3OutputStream::setTransformLocked(int transform) {
     status_t res = OK;
+
+    if (transform == -1) return res;
+
     if (mState == STATE_ERROR) {
         ALOGE("%s: Stream in error state", __FUNCTION__);
         return INVALID_OPERATION;
@@ -437,7 +459,7 @@ status_t Camera3OutputStream::configureQueueLocked() {
         return res;
     }
 
-    if ((res = configureConsumerQueueLocked()) != OK) {
+    if ((res = configureConsumerQueueLocked(true /*allowPreviewScheduler*/)) != OK) {
         return res;
     }
 
@@ -461,7 +483,7 @@ status_t Camera3OutputStream::configureQueueLocked() {
     return OK;
 }
 
-status_t Camera3OutputStream::configureConsumerQueueLocked() {
+status_t Camera3OutputStream::configureConsumerQueueLocked(bool allowPreviewScheduler) {
     status_t res;
 
     mTraceFirstBuffer = true;
@@ -547,6 +569,15 @@ status_t Camera3OutputStream::configureConsumerQueueLocked() {
     }
 
     mTotalBufferCount = maxConsumerBuffers + camera_stream::max_buffers;
+    if (allowPreviewScheduler && isConsumedByHWComposer()) {
+        // We cannot distinguish between a SurfaceView and an ImageReader of
+        // preview buffer format. The PreviewFrameScheduler needs to handle both.
+        if (!property_get_bool("camera.disable_preview_scheduler", false)) {
+            mPreviewFrameScheduler = std::make_unique<PreviewFrameScheduler>(*this, mConsumer);
+            mTotalBufferCount += PreviewFrameScheduler::kQueueDepthWatermark;
+        }
+    }
+
     mHandoutTotalBufferCount = 0;
     mFrameCount = 0;
     mLastTimestamp = 0;
@@ -1183,6 +1214,11 @@ void Camera3OutputStream::returnPrefetchedBuffersLocked() {
     if (batchedBuffers.size() > 0) {
         mConsumer->cancelBuffers(batchedBuffers);
     }
+}
+
+bool Camera3OutputStream::shouldLogError(status_t res) {
+    Mutex::Autolock l(mLock);
+    return shouldLogError(res, mState);
 }
 
 }; // namespace camera3

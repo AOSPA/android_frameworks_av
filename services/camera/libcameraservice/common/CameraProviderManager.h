@@ -36,6 +36,7 @@
 #include <android/hardware/camera/provider/2.6/ICameraProvider.h>
 #include <android/hardware/camera/provider/2.7/ICameraProvider.h>
 #include <android/hardware/camera/device/3.7/types.h>
+#include <android/hardware/camera/device/3.8/types.h>
 #include <android/hidl/manager/1.0/IServiceNotification.h>
 #include <camera/VendorTagDescriptor.h>
 
@@ -88,6 +89,7 @@ enum SystemCameraKind {
 #define CAMERA_DEVICE_API_VERSION_3_5 HARDWARE_DEVICE_API_VERSION(3, 5)
 #define CAMERA_DEVICE_API_VERSION_3_6 HARDWARE_DEVICE_API_VERSION(3, 6)
 #define CAMERA_DEVICE_API_VERSION_3_7 HARDWARE_DEVICE_API_VERSION(3, 7)
+#define CAMERA_DEVICE_API_VERSION_3_8 HARDWARE_DEVICE_API_VERSION(3, 8)
 
 /**
  * A manager for all camera providers available on an Android device.
@@ -242,7 +244,7 @@ public:
      * Check for device support of specific stream combination.
      */
     status_t isSessionConfigurationSupported(const std::string& id,
-            const hardware::camera::device::V3_7::StreamConfiguration &configuration,
+            const hardware::camera::device::V3_8::StreamConfiguration &configuration,
             bool *status /*out*/) const;
 
     /**
@@ -257,11 +259,40 @@ public:
     bool supportSetTorchMode(const std::string &id) const;
 
     /**
+     * Check if torch strength update should be skipped or not.
+     */
+    bool shouldSkipTorchStrengthUpdate(const std::string &id, int32_t torchStrength) const;
+
+    /**
+     * Return the default torch strength level if the torch strength control
+     * feature is supported.
+     */
+    int32_t getTorchDefaultStrengthLevel(const std::string &id) const;
+
+    /**
      * Turn on or off the flashlight on a given camera device.
      * May fail if the device does not support this API, is in active use, or if the device
      * doesn't exist, etc.
      */
     status_t setTorchMode(const std::string &id, bool enabled);
+
+    /**
+     * Change the brightness level of the flash unit associated with the cameraId and
+     * set it to the value in torchStrength.
+     * If the torch is OFF and torchStrength > 0, the torch will be turned ON with the
+     * specified strength level. If the torch is ON, only the brightness level will be
+     * changed.
+     *
+     * This operation will fail if the device does not have flash unit, has flash unit
+     * but does not support this API, torchStrength is invalid or if the device doesn't
+     * exist etc.
+     */
+    status_t turnOnTorchWithStrengthLevel(const std::string &id, int32_t torchStrength);
+
+    /**
+     * Return the torch strength level of this camera device.
+     */
+    status_t getTorchStrengthLevel(const std::string &id, int32_t* torchStrength);
 
     /**
      * Setup vendor tags for all registered providers
@@ -474,10 +505,17 @@ private:
             hardware::camera::common::V1_0::CameraDeviceStatus mStatus;
 
             wp<ProviderInfo> mParentProvider;
+            // Torch strength default, maximum levels if the torch strength control
+            // feature is supported.
+            int32_t mTorchStrengthLevel;
+            int32_t mTorchMaximumStrengthLevel;
+            int32_t mTorchDefaultStrengthLevel;
 
             bool hasFlashUnit() const { return mHasFlashUnit; }
             bool supportNativeZoomRatio() const { return mSupportNativeZoomRatio; }
             virtual status_t setTorchMode(bool enabled) = 0;
+            virtual status_t turnOnTorchWithStrengthLevel(int32_t torchStrength) = 0;
+            virtual status_t getTorchStrengthLevel(int32_t *torchStrength) = 0;
             virtual status_t getCameraInfo(hardware::CameraInfo *info) const = 0;
             virtual bool isAPI1Compatible() const = 0;
             virtual status_t dumpState(int fd) = 0;
@@ -495,7 +533,7 @@ private:
             }
 
             virtual status_t isSessionConfigurationSupported(
-                    const hardware::camera::device::V3_7::StreamConfiguration &/*configuration*/,
+                    const hardware::camera::device::V3_8::StreamConfiguration &/*configuration*/,
                     bool * /*status*/) {
                 return INVALID_OPERATION;
             }
@@ -515,8 +553,10 @@ private:
                     mName(name), mId(id), mVersion(version), mProviderTagid(tagId),
                     mIsLogicalCamera(false), mResourceCost(resourceCost),
                     mStatus(hardware::camera::common::V1_0::CameraDeviceStatus::PRESENT),
-                    mParentProvider(parentProvider), mHasFlashUnit(false),
-                    mSupportNativeZoomRatio(false), mPublicCameraIds(publicCameraIds) {}
+                    mParentProvider(parentProvider), mTorchStrengthLevel(0),
+                    mTorchMaximumStrengthLevel(0), mTorchDefaultStrengthLevel(0),
+                    mHasFlashUnit(false), mSupportNativeZoomRatio(false),
+                    mPublicCameraIds(publicCameraIds) {}
             virtual ~DeviceInfo();
         protected:
             bool mHasFlashUnit; // const after constructor
@@ -550,6 +590,9 @@ private:
             typedef hardware::camera::device::V3_2::ICameraDevice InterfaceT;
 
             virtual status_t setTorchMode(bool enabled) override;
+            virtual status_t turnOnTorchWithStrengthLevel(int32_t torchStrength) override;
+            virtual status_t getTorchStrengthLevel(int32_t *torchStrength) override;
+
             virtual status_t getCameraInfo(hardware::CameraInfo *info) const override;
             virtual bool isAPI1Compatible() const override;
             virtual status_t dumpState(int fd) override;
@@ -559,7 +602,7 @@ private:
             virtual status_t getPhysicalCameraCharacteristics(const std::string& physicalCameraId,
                     CameraMetadata *characteristics) const override;
             virtual status_t isSessionConfigurationSupported(
-                    const hardware::camera::device::V3_7::StreamConfiguration &configuration,
+                    const hardware::camera::device::V3_8::StreamConfiguration &configuration,
                     bool *status /*out*/)
                     override;
             virtual status_t filterSmallJpegSizes() override;

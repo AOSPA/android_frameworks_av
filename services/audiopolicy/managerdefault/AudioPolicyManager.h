@@ -321,8 +321,8 @@ public:
                                                     audio_format_t *surroundFormats);
         virtual status_t setSurroundFormatEnabled(audio_format_t audioFormat, bool enabled);
 
-        virtual status_t getHwOffloadEncodingFormatsSupportedForA2DP(
-                    std::vector<audio_format_t> *formats);
+        virtual status_t getHwOffloadFormatsSupportedForBluetoothMedia(
+                    audio_devices_t device, std::vector<audio_format_t> *formats);
 
         virtual void setAppState(audio_port_handle_t portId, app_state_t state);
 
@@ -366,6 +366,9 @@ public:
                                                 audio_io_handle_t *output);
 
         virtual status_t releaseSpatializerOutput(audio_io_handle_t output);
+
+        virtual audio_direct_mode_t getDirectPlaybackSupport(const audio_attributes_t *attr,
+                                                             const audio_config_t *config);
 
         bool isCallScreenModeSupported() override;
 
@@ -1070,6 +1073,9 @@ protected:
 
         sp<SwAudioOutputDescriptor> openOutputWithProfileAndDevice(const sp<IOProfile>& profile,
                                                                    const DeviceVector& devices);
+
+        bool isOffloadPossible(const audio_offload_info_t& offloadInfo,
+                               bool durationIgnored = false);
 
 };
 

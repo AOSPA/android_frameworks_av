@@ -476,7 +476,7 @@ void AudioPolicyService::NotificationClient::onAudioPatchListUpdate()
     }
 }
 
-void AudioPolicyService::NotificationClient::onAudioVolumeGroupChanged(volume_group_t group, 
+void AudioPolicyService::NotificationClient::onAudioVolumeGroupChanged(volume_group_t group,
                                                                       int flags)
 {
     if (mAudioPolicyServiceClient != 0 && mAudioVolumeGroupCallbacksEnabled) {
@@ -729,7 +729,8 @@ void AudioPolicyService::updateUidStates_l()
         if (current->attributes.source != AUDIO_SOURCE_HOTWORD) {
             onlyHotwordActive = false;
         }
-        if (currentUid == mPhoneStateOwnerUid) {
+        if (currentUid == mPhoneStateOwnerUid &&
+                !isVirtualSource(current->attributes.source)) {
             isPhoneStateOwnerActive = true;
         }
     }
@@ -1040,7 +1041,7 @@ status_t AudioPolicyService::onTransact(
         case TRANSACTION_removeUidDeviceAffinities:
         case TRANSACTION_setUserIdDeviceAffinities:
         case TRANSACTION_removeUserIdDeviceAffinities:
-        case TRANSACTION_getHwOffloadEncodingFormatsSupportedForA2DP:
+        case TRANSACTION_getHwOffloadFormatsSupportedForBluetoothMedia:
         case TRANSACTION_listAudioVolumeGroups:
         case TRANSACTION_getVolumeGroupFromAudioAttributes:
         case TRANSACTION_acquireSoundTriggerSession:

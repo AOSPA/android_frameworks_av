@@ -37,7 +37,8 @@ class Camera3IOStreamBase :
             android_dataspace dataSpace, camera_stream_rotation_t rotation,
             const String8& physicalCameraId,
             const std::unordered_set<int32_t> &sensorPixelModesUsed,
-            int setId = CAMERA3_STREAM_SET_ID_INVALID, bool isMultiResolution = false);
+            int setId = CAMERA3_STREAM_SET_ID_INVALID, bool isMultiResolution = false,
+            int dynamicProfile = ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD);
 
   public:
 
@@ -67,6 +68,7 @@ class Camera3IOStreamBase :
     status_t         returnAnyBufferLocked(
             const camera_stream_buffer &buffer,
             nsecs_t timestamp,
+            nsecs_t readoutTimestamp,
             bool output,
             int32_t transform,
             const std::vector<size_t>& surface_ids = std::vector<size_t>());
@@ -74,6 +76,7 @@ class Camera3IOStreamBase :
     virtual status_t returnBufferCheckedLocked(
             const camera_stream_buffer &buffer,
             nsecs_t timestamp,
+            nsecs_t readoutTimestamp,
             bool output,
             int32_t transform,
             const std::vector<size_t>& surface_ids,

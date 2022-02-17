@@ -2301,6 +2301,8 @@ aidl2legacy_AudioFlag_audio_flags_mask_t(media::AudioFlag aidl) {
             return AUDIO_FLAG_CONTENT_SPATIALIZED;
         case media::AudioFlag::NEVER_SPATIALIZE:
             return AUDIO_FLAG_NEVER_SPATIALIZE;
+        case media::AudioFlag::CALL_REDIRECTION:
+            return AUDIO_FLAG_CALL_REDIRECTION;
     }
     return unexpected(BAD_VALUE);
 }
@@ -2342,6 +2344,8 @@ legacy2aidl_audio_flags_mask_t_AudioFlag(audio_flags_mask_t legacy) {
             return media::AudioFlag::CONTENT_SPATIALIZED;
         case AUDIO_FLAG_NEVER_SPATIALIZE:
             return media::AudioFlag::NEVER_SPATIALIZE;
+        case AUDIO_FLAG_CALL_REDIRECTION:
+            return media::AudioFlag::CALL_REDIRECTION;
     }
     return unexpected(BAD_VALUE);
 }
@@ -2957,11 +2961,8 @@ aidl2legacy_AudioPort_audio_port_v7(const media::AudioPort& aidl) {
                                  }));
     legacy.num_gains = aidl.hal.gains.size();
 
-    media::AudioPortConfig aidlPortConfig;
-    aidlPortConfig.hal = aidl.hal.activeConfig;
-    aidlPortConfig.sys = aidl.sys.activeConfig;
     legacy.active_config = VALUE_OR_RETURN(
-            aidl2legacy_AudioPortConfig_audio_port_config(aidlPortConfig));
+            aidl2legacy_AudioPortConfig_audio_port_config(aidl.sys.activeConfig));
     legacy.ext = VALUE_OR_RETURN(
             aidl2legacy_AudioPortExt_audio_port_v7_ext(aidl.hal.ext, aidl.sys.type, aidl.sys.ext));
     return legacy;
@@ -3007,10 +3008,9 @@ legacy2aidl_audio_port_v7_AudioPort(const audio_port_v7& legacy) {
                          }));
     aidl.sys.gains.resize(legacy.num_gains);
 
-    media::AudioPortConfig aidlPortConfig = VALUE_OR_RETURN(
+    aidl.sys.activeConfig = VALUE_OR_RETURN(
             legacy2aidl_audio_port_config_AudioPortConfig(legacy.active_config));
-    aidl.hal.activeConfig = aidlPortConfig.hal;
-    aidl.sys.activeConfig = aidlPortConfig.sys;
+    aidl.sys.activeConfig.hal.portId = aidl.hal.id;
     RETURN_IF_ERROR(
             legacy2aidl_AudioPortExt(legacy.ext, legacy.type, &aidl.hal.ext, &aidl.sys.ext));
     return aidl;
@@ -3033,6 +3033,10 @@ aidl2legacy_AudioMode_audio_mode_t(AudioMode aidl) {
             return AUDIO_MODE_IN_COMMUNICATION;
         case AudioMode::CALL_SCREEN:
             return AUDIO_MODE_CALL_SCREEN;
+        case AudioMode::SYS_RESERVED_CALL_REDIRECT:
+            return AUDIO_MODE_CALL_REDIRECT;
+        case AudioMode::SYS_RESERVED_COMMUNICATION_REDIRECT:
+            return AUDIO_MODE_COMMUNICATION_REDIRECT;
     }
     return unexpected(BAD_VALUE);
 }
@@ -3054,6 +3058,10 @@ legacy2aidl_audio_mode_t_AudioMode(audio_mode_t legacy) {
             return AudioMode::IN_COMMUNICATION;
         case AUDIO_MODE_CALL_SCREEN:
             return AudioMode::CALL_SCREEN;
+        case AUDIO_MODE_CALL_REDIRECT:
+            return AudioMode::SYS_RESERVED_CALL_REDIRECT;
+        case AUDIO_MODE_COMMUNICATION_REDIRECT:
+            return AudioMode::SYS_RESERVED_COMMUNICATION_REDIRECT;
         case AUDIO_MODE_CNT:
             break;
     }
@@ -3304,6 +3312,55 @@ legacy2aidl_TrackSecondaryOutputInfoPair_TrackSecondaryOutputInfo(
             VALUE_OR_RETURN(convertContainer<std::vector<int32_t>>(
                     legacy.second, legacy2aidl_audio_io_handle_t_int32_t));
     return trackSecondaryOutputInfo;
+}
+
+ConversionResult<audio_direct_mode_t>
+aidl2legacy_AudioDirectMode_audio_direct_mode_t(media::AudioDirectMode aidl) {
+    switch (aidl) {
+        case media::AudioDirectMode::NONE:
+            return AUDIO_DIRECT_NOT_SUPPORTED;
+        case media::AudioDirectMode::OFFLOAD:
+            return AUDIO_DIRECT_OFFLOAD_SUPPORTED;
+        case media::AudioDirectMode::OFFLOAD_GAPLESS:
+            return AUDIO_DIRECT_OFFLOAD_GAPLESS_SUPPORTED;
+        case media::AudioDirectMode::BITSTREAM:
+            return AUDIO_DIRECT_BITSTREAM_SUPPORTED;
+    }
+    return unexpected(BAD_VALUE);
+}
+ConversionResult<media::AudioDirectMode>
+legacy2aidl_audio_direct_mode_t_AudioDirectMode(audio_direct_mode_t legacy) {
+    switch (legacy) {
+        case AUDIO_DIRECT_NOT_SUPPORTED:
+            return media::AudioDirectMode::NONE;
+        case AUDIO_DIRECT_OFFLOAD_SUPPORTED:
+            return media::AudioDirectMode::OFFLOAD;
+        case AUDIO_DIRECT_OFFLOAD_GAPLESS_SUPPORTED:
+            return media::AudioDirectMode::OFFLOAD_GAPLESS;
+        case AUDIO_DIRECT_BITSTREAM_SUPPORTED:
+            return media::AudioDirectMode::BITSTREAM;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<audio_direct_mode_t> aidl2legacy_int32_t_audio_direct_mode_t_mask(int32_t aidl) {
+    using LegacyMask = std::underlying_type_t<audio_direct_mode_t>;
+
+    LegacyMask converted = VALUE_OR_RETURN(
+            (convertBitmask<LegacyMask, int32_t, audio_direct_mode_t, media::AudioDirectMode>(
+                    aidl, aidl2legacy_AudioDirectMode_audio_direct_mode_t,
+                    indexToEnum_index<media::AudioDirectMode>,
+                    enumToMask_bitmask<LegacyMask, audio_direct_mode_t>)));
+    return static_cast<audio_direct_mode_t>(converted);
+}
+ConversionResult<int32_t> legacy2aidl_audio_direct_mode_t_int32_t_mask(audio_direct_mode_t legacy) {
+    using LegacyMask = std::underlying_type_t<audio_direct_mode_t>;
+
+    LegacyMask legacyMask = static_cast<LegacyMask>(legacy);
+    return convertBitmask<int32_t, LegacyMask, media::AudioDirectMode, audio_direct_mode_t>(
+            legacyMask, legacy2aidl_audio_direct_mode_t_AudioDirectMode,
+            indexToEnum_bitmask<audio_direct_mode_t>,
+            enumToMask_index<int32_t, media::AudioDirectMode>);
 }
 
 }  // namespace android

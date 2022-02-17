@@ -108,10 +108,10 @@ cc_library_static {
         "libstagefright_headers",
         "libmediadrm_headers",
         "libmediametrics_headers",
-	"libmediautils_headers",
+        "libmediautils_headers",
+        "libstagefright_rtsp_headers",
     ],
     include_dirs: [
-        "frameworks/av/media/libstagefright/rtsp",
         "frameworks/av/media/libmediaplayerservice",
         "frameworks/av/media/libmediaextractor",
         "frameworks/av/media/libavextensions",

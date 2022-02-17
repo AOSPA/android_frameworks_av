@@ -277,6 +277,14 @@ public:
         return mIsPrivacySensitive;
     }
 
+    bool getRequireMonoBlend() const {
+        return mRequireMonoBlend;
+    }
+
+    float getAudioBalance() const {
+        return mAudioBalance;
+    }
+
     /**
      * This is only valid after setChannelMask() and setFormat()
      * have been called.
@@ -631,6 +639,20 @@ protected:
         mIsPrivacySensitive = privacySensitive;
     }
 
+    /**
+     * This should not be called after the open() call.
+     */
+    void setRequireMonoBlend(bool requireMonoBlend) {
+        mRequireMonoBlend = requireMonoBlend;
+    }
+
+    /**
+     * This should not be called after the open() call.
+     */
+    void setAudioBalance(float audioBalance) {
+        mAudioBalance = audioBalance;
+    }
+
     std::string mMetricsId; // set once during open()
 
     std::mutex                 mStreamLock;
@@ -672,6 +694,8 @@ private:
     aaudio_input_preset_t       mInputPreset     = AAUDIO_UNSPECIFIED;
     aaudio_allowed_capture_policy_t mAllowedCapturePolicy = AAUDIO_ALLOW_CAPTURE_BY_ALL;
     bool                        mIsPrivacySensitive = false;
+    bool                        mRequireMonoBlend = false;
+    float                       mAudioBalance = 0;
 
     int32_t                     mSessionId = AAUDIO_UNSPECIFIED;
 

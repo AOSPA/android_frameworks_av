@@ -80,15 +80,22 @@ bool AudioPolicyService::isSupportedSystemUsage(audio_usage_t usage) {
         != std::end(mSupportedSystemUsages);
 }
 
-status_t AudioPolicyService::validateUsage(audio_usage_t usage) {
-     return validateUsage(usage, getCallingAttributionSource());
+status_t AudioPolicyService::validateUsage(const audio_attributes_t& attr) {
+     return validateUsage(attr, getCallingAttributionSource());
 }
 
-status_t AudioPolicyService::validateUsage(audio_usage_t usage,
+status_t AudioPolicyService::validateUsage(const audio_attributes_t& attr,
         const AttributionSourceState& attributionSource) {
-    if (isSystemUsage(usage)) {
-        if (isSupportedSystemUsage(usage)) {
-            if (!modifyAudioRoutingAllowed(attributionSource)) {
+    if (isSystemUsage(attr.usage)) {
+        if (isSupportedSystemUsage(attr.usage)) {
+            if (attr.usage == AUDIO_USAGE_CALL_ASSISTANT
+                    && ((attr.flags & AUDIO_FLAG_CALL_REDIRECTION) != 0)) {
+                if (!callAudioInterceptionAllowed(attributionSource)) {
+                    ALOGE(("permission denied: modify audio routing not allowed "
+                           "for attributionSource %s"), attributionSource.toString().c_str());
+                    return PERMISSION_DENIED;
+                }
+            } else if (!modifyAudioRoutingAllowed(attributionSource)) {
                 ALOGE(("permission denied: modify audio routing not allowed "
                        "for attributionSource %s"), attributionSource.toString().c_str());
                 return PERMISSION_DENIED;
@@ -220,7 +227,15 @@ Status AudioPolicyService::setPhoneState(AudioMode stateAidl, int32_t uidAidl)
     // can be interleaved).
     Mutex::Autolock _l(mLock);
     // TODO: check if it is more appropriate to do it in platform specific policy manager
-    AudioSystem::setMode(state);
+
+    // Audio HAL mode conversion for call redirect modes
+    audio_mode_t halMode = state;
+    if (state == AUDIO_MODE_CALL_REDIRECT) {
+        halMode = AUDIO_MODE_CALL_SCREEN;
+    } else if (state == AUDIO_MODE_COMMUNICATION_REDIRECT) {
+        halMode = AUDIO_MODE_NORMAL;
+    }
+    AudioSystem::setMode(halMode);
 
     AutoCallerClear acc;
     mAudioPolicyManager->setPhoneState(state);
@@ -337,7 +352,7 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
 
     RETURN_IF_BINDER_ERROR(
             binderStatusFromStatusT(AudioValidator::validateAudioAttributes(attr, "68953950")));
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr.usage, attributionSource)));
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr, attributionSource)));
 
     ALOGV("%s()", __func__);
     Mutex::Autolock _l(mLock);
@@ -379,7 +394,12 @@ Status AudioPolicyService::getOutputForAttr(const media::AudioAttributesInternal
         case AudioPolicyInterface::API_OUTPUT_LEGACY:
             break;
         case AudioPolicyInterface::API_OUTPUT_TELEPHONY_TX:
-            if (!modifyPhoneStateAllowed(adjAttributionSource)) {
+            if (((attr.flags & AUDIO_FLAG_CALL_REDIRECTION) != 0)
+                && !callAudioInterceptionAllowed(adjAttributionSource)) {
+                ALOGE("%s() permission denied: call redirection not allowed for uid %d",
+                    __func__, adjAttributionSource.uid);
+                result = PERMISSION_DENIED;
+            } else if (!modifyPhoneStateAllowed(adjAttributionSource)) {
                 ALOGE("%s() permission denied: modify phone state not allowed for uid %d",
                     __func__, adjAttributionSource.uid);
                 result = PERMISSION_DENIED;
@@ -615,7 +635,7 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
         adjAttributionSource.pid = callingPid;
     }
 
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr.usage,
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attr,
             adjAttributionSource)));
 
     // check calling permissions.
@@ -637,14 +657,18 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
     }
 
     bool canCaptureOutput = captureAudioOutputAllowed(adjAttributionSource);
-    if ((inputSource == AUDIO_SOURCE_VOICE_UPLINK
-            || inputSource == AUDIO_SOURCE_VOICE_DOWNLINK
-            || inputSource == AUDIO_SOURCE_VOICE_CALL
-            || inputSource == AUDIO_SOURCE_ECHO_REFERENCE)
+    bool canInterceptCallAudio = callAudioInterceptionAllowed(adjAttributionSource);
+    bool isCallAudioSource = inputSource == AUDIO_SOURCE_VOICE_UPLINK
+             || inputSource == AUDIO_SOURCE_VOICE_DOWNLINK
+             || inputSource == AUDIO_SOURCE_VOICE_CALL;
+
+    if (isCallAudioSource && !canInterceptCallAudio && !canCaptureOutput) {
+        return binderStatusFromStatusT(PERMISSION_DENIED);
+    }
+    if (inputSource == AUDIO_SOURCE_ECHO_REFERENCE
             && !canCaptureOutput) {
         return binderStatusFromStatusT(PERMISSION_DENIED);
     }
-
     if (inputSource == AUDIO_SOURCE_FM_TUNER
         && !canCaptureOutput
         && !captureTunerAudioInputAllowed(adjAttributionSource)) {
@@ -689,7 +713,12 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
             case AudioPolicyInterface::API_INPUT_LEGACY:
                 break;
             case AudioPolicyInterface::API_INPUT_TELEPHONY_RX:
+                if ((attr.flags & AUDIO_FLAG_CALL_REDIRECTION) != 0
+                        && canInterceptCallAudio) {
+                    break;
+                }
                 // FIXME: use the same permission as for remote submix for now.
+                FALLTHROUGH_INTENDED;
             case AudioPolicyInterface::API_INPUT_MIX_CAPTURE:
                 if (!canCaptureOutput) {
                     if (property_get_bool("vendor.audio.enable.mirrorlink", false)) {
@@ -702,20 +731,22 @@ Status AudioPolicyService::getInputForAttr(const media::AudioAttributesInternal&
                             break;
                         }
                   }
-                  ALOGE("getInputForAttr() permission denied: capture not allowed");
+                  ALOGE("%s permission denied: capture not allowed", __func__);
                   status = PERMISSION_DENIED;
                 }
                 break;
             case AudioPolicyInterface::API_INPUT_MIX_EXT_POLICY_REROUTE:
-                if (!modifyAudioRoutingAllowed(adjAttributionSource)) {
-                    ALOGE("getInputForAttr() permission denied: modify audio routing not allowed");
+                if (!(modifyAudioRoutingAllowed(adjAttributionSource)
+                        || ((attr.flags & AUDIO_FLAG_CALL_REDIRECTION) != 0
+                            && canInterceptCallAudio))) {
+                    ALOGE("%s permission denied for remote submix capture", __func__);
                     status = PERMISSION_DENIED;
                 }
                 break;
             case AudioPolicyInterface::API_INPUT_INVALID:
             default:
-                LOG_ALWAYS_FATAL("getInputForAttr() encountered an invalid input type %d",
-                        (int)inputType);
+                LOG_ALWAYS_FATAL("%s encountered an invalid input type %d",
+                        __func__, (int)inputType);
             }
         }
 
@@ -1501,7 +1532,7 @@ Status AudioPolicyService::isDirectOutputSupported(
         return binderStatusFromStatusT(NO_INIT);
     }
 
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attributes.usage)));
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attributes)));
 
     Mutex::Autolock _l(mLock);
     *_aidl_return = mAudioPolicyManager->isDirectOutputSupported(config, attributes);
@@ -1817,7 +1848,7 @@ Status AudioPolicyService::startAudioSource(const media::AudioPortConfig& source
         return binderStatusFromStatusT(NO_INIT);
     }
 
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attributes.usage)));
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(validateUsage(attributes)));
 
     // startAudioSource should be created as the calling uid
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
@@ -1943,7 +1974,8 @@ Status AudioPolicyService::getReportedSurroundFormats(
     return Status::ok();
 }
 
-Status AudioPolicyService::getHwOffloadEncodingFormatsSupportedForA2DP(
+Status AudioPolicyService::getHwOffloadFormatsSupportedForBluetoothMedia(
+        const AudioDeviceDescription& deviceAidl,
         std::vector<AudioFormatDescription>* _aidl_return) {
     std::vector<audio_format_t> formats;
 
@@ -1952,8 +1984,10 @@ Status AudioPolicyService::getHwOffloadEncodingFormatsSupportedForA2DP(
     }
     Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
+    audio_devices_t device = VALUE_OR_RETURN_BINDER_STATUS(
+            aidl2legacy_AudioDeviceDescription_audio_devices_t(deviceAidl));
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
-            mAudioPolicyManager->getHwOffloadEncodingFormatsSupportedForA2DP(&formats)));
+            mAudioPolicyManager->getHwOffloadFormatsSupportedForBluetoothMedia(device, &formats)));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
             convertContainer<std::vector<AudioFormatDescription>>(
                     formats,
@@ -2317,6 +2351,26 @@ Status AudioPolicyService::canBeSpatialized(
 
     Mutex::Autolock _l(mLock);
     *_aidl_return = mAudioPolicyManager->canBeSpatialized(&attr, &config, devices);
+    return Status::ok();
+}
+
+Status AudioPolicyService::getDirectPlaybackSupport(const media::AudioAttributesInternal &attrAidl,
+                                                    const AudioConfig &configAidl,
+                                                    media::AudioDirectMode *_aidl_return) {
+    if (mAudioPolicyManager == nullptr) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    if (_aidl_return == nullptr) {
+        return binderStatusFromStatusT(BAD_VALUE);
+    }
+    audio_attributes_t attr = VALUE_OR_RETURN_BINDER_STATUS(
+            aidl2legacy_AudioAttributesInternal_audio_attributes_t(attrAidl));
+    audio_config_t config = VALUE_OR_RETURN_BINDER_STATUS(
+            aidl2legacy_AudioConfig_audio_config_t(configAidl, false /*isInput*/));
+    Mutex::Autolock _l(mLock);
+    *_aidl_return = static_cast<media::AudioDirectMode>(
+            VALUE_OR_RETURN_BINDER_STATUS(legacy2aidl_audio_direct_mode_t_int32_t_mask(
+                    mAudioPolicyManager->getDirectPlaybackSupport(&attr, &config))));
     return Status::ok();
 }
 

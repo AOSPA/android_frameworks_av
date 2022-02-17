@@ -19,6 +19,7 @@
 #include "TunerHidlFilter.h"
 
 #include <aidl/android/hardware/tv/tuner/Constant.h>
+#include <aidl/android/hardware/tv/tuner/DemuxScIndex.h>
 #include <aidl/android/hardware/tv/tuner/Result.h>
 #include <aidlcommonsupport/NativeHandle.h>
 #include <binder/IPCThreadState.h>
@@ -28,6 +29,7 @@
 #include "TunerHidlService.h"
 
 using ::aidl::android::hardware::tv::tuner::AudioExtraMetaData;
+using ::aidl::android::hardware::tv::tuner::AudioStreamType;
 using ::aidl::android::hardware::tv::tuner::Constant;
 using ::aidl::android::hardware::tv::tuner::DemuxAlpFilterSettings;
 using ::aidl::android::hardware::tv::tuner::DemuxAlpFilterSettingsFilterSettings;
@@ -55,6 +57,7 @@ using ::aidl::android::hardware::tv::tuner::DemuxMmtpFilterSettings;
 using ::aidl::android::hardware::tv::tuner::DemuxMmtpFilterSettingsFilterSettings;
 using ::aidl::android::hardware::tv::tuner::DemuxMmtpFilterType;
 using ::aidl::android::hardware::tv::tuner::DemuxPid;
+using ::aidl::android::hardware::tv::tuner::DemuxScIndex;
 using ::aidl::android::hardware::tv::tuner::DemuxTlvFilterSettings;
 using ::aidl::android::hardware::tv::tuner::DemuxTlvFilterSettingsFilterSettings;
 using ::aidl::android::hardware::tv::tuner::DemuxTsFilterSettings;
@@ -521,7 +524,7 @@ TunerHidlFilter::~TunerHidlFilter() {
     return ::ndk::ScopedAStatus::ok();
 }
 
-::ndk::ScopedAStatus TunerHidlFilter::createSharedFilter(string* _aidl_return) {
+::ndk::ScopedAStatus TunerHidlFilter::acquireSharedFilterToken(string* _aidl_return) {
     Mutex::Autolock _l(mLock);
     if (mFilter == nullptr) {
         ALOGE("IFilter is not initialized");
@@ -545,7 +548,7 @@ TunerHidlFilter::~TunerHidlFilter() {
     return ::ndk::ScopedAStatus::ok();
 }
 
-::ndk::ScopedAStatus TunerHidlFilter::releaseSharedFilter(const string& /* in_filterToken */) {
+::ndk::ScopedAStatus TunerHidlFilter::freeSharedFilterToken(const string& /* in_filterToken */) {
     Mutex::Autolock _l(mLock);
     if (mFilter == nullptr) {
         ALOGE("IFilter is not initialized");
@@ -580,6 +583,12 @@ TunerHidlFilter::~TunerHidlFilter() {
     return ::ndk::ScopedAStatus::ok();
 }
 
+::ndk::ScopedAStatus TunerHidlFilter::setDelayHint(const FilterDelayHint&) {
+    // setDelayHint is not supported in HIDL HAL
+    return ::ndk::ScopedAStatus::fromServiceSpecificError(
+                static_cast<int32_t>(Result::UNAVAILABLE));
+}
+
 bool TunerHidlFilter::isSharedFilterAllowed(int callingPid) {
     return mShared && mClientPid != callingPid;
 }
@@ -596,7 +605,11 @@ sp<HidlIFilter> TunerHidlFilter::getHalFilter() {
 
 bool TunerHidlFilter::getHidlAvStreamType(const AvStreamType avStreamType, HidlAvStreamType& type) {
     if (isAudioFilter()) {
-        type.audio(static_cast<HidlAudioStreamType>(avStreamType.get<AvStreamType::audio>()));
+        AudioStreamType audio = avStreamType.get<AvStreamType::audio>();
+        if (static_cast<int32_t>(audio) > static_cast<int32_t>(HidlAudioStreamType::DRA)) {
+            return false;
+        }
+        type.audio(static_cast<HidlAudioStreamType>(audio));
         return true;
     }
 
@@ -866,16 +879,26 @@ HidlDemuxFilterRecordSettings TunerHidlFilter::getHidlRecordSettings(
         const DemuxFilterRecordSettings& settings) {
     HidlDemuxFilterRecordSettings record{
             .tsIndexMask = static_cast<uint32_t>(settings.tsIndexMask),
-            .scIndexType = static_cast<HidlDemuxRecordScIndexType>(settings.scIndexType),
     };
 
     switch (settings.scIndexMask.getTag()) {
     case DemuxFilterScIndexMask::scIndex: {
+        record.scIndexType = static_cast<HidlDemuxRecordScIndexType>(settings.scIndexType);
         record.scIndexMask.sc(
                 static_cast<uint32_t>(settings.scIndexMask.get<DemuxFilterScIndexMask::scIndex>()));
         break;
     }
+    case DemuxFilterScIndexMask::scAvc: {
+        record.scIndexType = HidlDemuxRecordScIndexType::SC;
+        uint32_t index =
+                static_cast<uint32_t>(settings.scIndexMask.get<DemuxFilterScIndexMask::scAvc>());
+        // HIDL HAL starting from 1 << 4; AIDL starting from 1 << 0.
+        index = index << 4;
+        record.scIndexMask.sc(index);
+        break;
+    }
     case DemuxFilterScIndexMask::scHevc: {
+        record.scIndexType = static_cast<HidlDemuxRecordScIndexType>(settings.scIndexType);
         record.scIndexMask.scHevc(
                 static_cast<uint32_t>(settings.scIndexMask.get<DemuxFilterScIndexMask::scHevc>()));
         break;
@@ -941,8 +964,10 @@ void TunerHidlFilter::FilterCallback::attachSharedFilterCallback(
 
 void TunerHidlFilter::FilterCallback::detachSharedFilterCallback() {
     Mutex::Autolock _l(mCallbackLock);
-    mTunerFilterCallback = mOriginalCallback;
-    mOriginalCallback = nullptr;
+    if (mTunerFilterCallback != nullptr && mOriginalCallback != nullptr) {
+        mTunerFilterCallback = mOriginalCallback;
+        mOriginalCallback = nullptr;
+    }
 }
 
 /////////////// FilterCallback Helper Methods ///////////////////////
@@ -1016,12 +1041,16 @@ void TunerHidlFilter::FilterCallback::getMediaEvent(
         media.streamId = static_cast<int32_t>(mediaEvent.streamId);
         media.isPtsPresent = mediaEvent.isPtsPresent;
         media.pts = static_cast<int64_t>(mediaEvent.pts);
+        media.isDtsPresent = false;
+        media.dts = static_cast<int64_t>(-1);
         media.dataLength = static_cast<int64_t>(mediaEvent.dataLength);
         media.offset = static_cast<int64_t>(mediaEvent.offset);
         media.isSecureMemory = mediaEvent.isSecureMemory;
         media.avDataId = static_cast<int64_t>(mediaEvent.avDataId);
         media.mpuSequenceNumber = static_cast<int32_t>(mediaEvent.mpuSequenceNumber);
         media.isPesPrivateData = mediaEvent.isPesPrivateData;
+        media.scIndexMask.set<DemuxFilterScIndexMask::scIndex>(
+                static_cast<int32_t>(DemuxScIndex::UNDEFINED));
 
         if (mediaEvent.extraMetaData.getDiscriminator() ==
             HidlDemuxFilterMediaEvent::ExtraMetaData::hidl_discriminator::audio) {
@@ -1058,7 +1087,7 @@ void TunerHidlFilter::FilterCallback::getSectionEvent(
         section.tableId = static_cast<int32_t>(sectionEvent.tableId);
         section.version = static_cast<int32_t>(sectionEvent.version);
         section.sectionNum = static_cast<int32_t>(sectionEvent.sectionNum);
-        section.dataLength = static_cast<int32_t>(sectionEvent.dataLength);
+        section.dataLength = static_cast<int64_t>(sectionEvent.dataLength);
 
         DemuxFilterEvent filterEvent;
         filterEvent.set<DemuxFilterEvent::section>(move(section));
@@ -1092,8 +1121,13 @@ void TunerHidlFilter::FilterCallback::getTsRecordEvent(
         DemuxFilterScIndexMask scIndexMask;
         if (tsRecordEvent.scIndexMask.getDiscriminator() ==
             HidlDemuxFilterTsRecordEvent::ScIndexMask::hidl_discriminator::sc) {
-            scIndexMask.set<DemuxFilterScIndexMask::scIndex>(
-                    static_cast<int32_t>(tsRecordEvent.scIndexMask.sc()));
+            int32_t hidlScIndex = static_cast<int32_t>(tsRecordEvent.scIndexMask.sc());
+            if (hidlScIndex <= static_cast<int32_t>(DemuxScIndex::SEQUENCE)) {
+                scIndexMask.set<DemuxFilterScIndexMask::scIndex>(hidlScIndex);
+            } else {
+                // HIDL HAL starting from 1 << 4; AIDL starting from 1 << 0.
+                scIndexMask.set<DemuxFilterScIndexMask::scAvc>(hidlScIndex >> 4);
+            }
         } else if (tsRecordEvent.scIndexMask.getDiscriminator() ==
                    HidlDemuxFilterTsRecordEvent::ScIndexMask::hidl_discriminator::scHevc) {
             scIndexMask.set<DemuxFilterScIndexMask::scHevc>(
@@ -1161,6 +1195,7 @@ void TunerHidlFilter::FilterCallback::getDownloadEvent(
         DemuxFilterDownloadEvent download;
 
         download.itemId = static_cast<int32_t>(downloadEvent.itemId);
+        download.downloadId = -1;
         download.itemFragmentIndex = static_cast<int32_t>(downloadEvent.itemFragmentIndex);
         download.mpuSequenceNumber = static_cast<int32_t>(downloadEvent.mpuSequenceNumber);
         download.lastItemFragmentIndex = static_cast<int32_t>(downloadEvent.lastItemFragmentIndex);

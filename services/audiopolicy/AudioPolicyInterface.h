@@ -300,8 +300,8 @@ public:
 
     virtual bool     isHapticPlaybackSupported() = 0;
 
-    virtual status_t getHwOffloadEncodingFormatsSupportedForA2DP(
-                std::vector<audio_format_t> *formats) = 0;
+    virtual status_t getHwOffloadFormatsSupportedForBluetoothMedia(
+                audio_devices_t device, std::vector<audio_format_t> *formats) = 0;
 
     virtual void     setAppState(audio_port_handle_t portId, app_state_t state) = 0;
 
@@ -392,6 +392,18 @@ public:
      * @return NO_ERROR if an output was closed, INVALID_OPERATION or BAD_VALUE otherwise
      */
     virtual status_t releaseSpatializerOutput(audio_io_handle_t output) = 0;
+
+    /**
+     * Query how the direct playback is currently supported on the device.
+     * @param attr audio attributes describing the playback use case
+     * @param config audio configuration for the playback
+     * @param directMode out: a set of flags describing how the direct playback is currently
+     *        supported on the device
+     * @return NO_ERROR in case of success, DEAD_OBJECT, NO_INIT, BAD_VALUE, PERMISSION_DENIED
+     *         in case of error.
+     */
+    virtual audio_direct_mode_t getDirectPlaybackSupport(const audio_attributes_t *attr,
+                                                         const audio_config_t *config) = 0;
 };
 
 

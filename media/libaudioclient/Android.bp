@@ -207,7 +207,7 @@ cc_library_headers {
     ],
     apex_available: [
         "//apex_available:platform",
-        "com.android.bluetooth.updatable",
+        "com.android.bluetooth",
         "com.android.media",
         "com.android.media.swcodec",
     ],
@@ -316,6 +316,7 @@ aidl_interface {
     srcs: [
         "aidl/android/media/AudioAttributesInternal.aidl",
         "aidl/android/media/AudioClient.aidl",
+        "aidl/android/media/AudioDirectMode.aidl",
         "aidl/android/media/AudioDualMonoMode.aidl",
         "aidl/android/media/AudioFlag.aidl",
         "aidl/android/media/AudioGainSys.aidl",

@@ -20,6 +20,7 @@ import android.content.AttributionSourceState;
 
 import android.media.AudioAttributesEx;
 import android.media.AudioAttributesInternal;
+import android.media.AudioDirectMode;
 import android.media.AudioMix;
 import android.media.AudioOffloadMode;
 import android.media.AudioPatch;
@@ -295,7 +296,8 @@ interface IAudioPolicyService {
     void getReportedSurroundFormats(inout Int count,
                                     out AudioFormatDescription[] formats);
 
-    AudioFormatDescription[] getHwOffloadEncodingFormatsSupportedForA2DP();
+    AudioFormatDescription[] getHwOffloadFormatsSupportedForBluetoothMedia(
+                                    in AudioDeviceDescription device);
 
     void setSurroundFormatEnabled(in AudioFormatDescription audioFormat, boolean enabled);
 
@@ -375,4 +377,10 @@ interface IAudioPolicyService {
     boolean canBeSpatialized(in @nullable AudioAttributesInternal attr,
                              in @nullable AudioConfig config,
                              in AudioDevice[] devices);
+
+    /**
+     * Query how the direct playback is currently supported on the device.
+     */
+     AudioDirectMode getDirectPlaybackSupport(in AudioAttributesInternal attr,
+                                              in AudioConfig config);
 }
