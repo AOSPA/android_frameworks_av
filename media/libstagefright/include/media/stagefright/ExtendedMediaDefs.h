@@ -46,6 +46,7 @@ extern const char *MEDIA_MIMETYPE_CONTAINER_3G2;
 extern const char *MEDIA_MIMETYPE_AUDIO_DTS;
 extern const char *MEDIA_MIMETYPE_AUDIO_DTS_LBR;
 extern const char *MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS;
+extern const char *MEDIA_MIMETYPE_AUDIO_QC_AMR_WB_PLUS;
 extern const char *MEDIA_MIMETYPE_AUDIO_AIFF;
 extern const char *MEDIA_MIMETYPE_AUDIO_ALAC;
 extern const char *MEDIA_MIMETYPE_AUDIO_APE;

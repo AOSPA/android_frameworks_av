@@ -148,6 +148,8 @@ const char *GetComponentRole(bool isEncoder, const char *mime) {
           "video_decoder.hevc", "video_encoder.hevc" },
         { MEDIA_MIMETYPE_AUDIO_AMR_WB_PLUS,
             "audio_decoder.amrwbplus", "audio_encoder.amrwbplus" },
+        { MEDIA_MIMETYPE_AUDIO_QC_AMR_WB_PLUS,
+            "audio_decoder.amrwbplus", "audio_encoder.amrwbplus" },
         { MEDIA_MIMETYPE_AUDIO_EVRC,
             "audio_decoder.evrchw", "audio_encoder.evrc" },
         { MEDIA_MIMETYPE_AUDIO_QCELP,
