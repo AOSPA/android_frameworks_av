@@ -73,6 +73,7 @@ cc_library {
         "media_plugin_headers",
         "libmediautils_headers",
         "libstagefright_rtsp_headers",
+        "libstagefright_mpeg2support_headers",
     ],
 
     static_libs: [
@@ -80,6 +81,9 @@ cc_library {
         "libstagefright_nuplayer",
         "libstagefright_rtsp",
         "libstagefright_timedtext",
+        // this needs it, but it can get it transitively through libstagefright.
+        // i'm going to leave it here.
+        "libstagefright_webm",
         "framework-permission-aidl-cpp",
     ],
 
@@ -97,13 +101,16 @@ cc_library {
     ],
 
     include_dirs: [
-        "frameworks/av/media/libstagefright/webm",
         "frameworks/av/media/libavextensions",
         "frameworks/av/media/libmediaextractor",
         "frameworks/av/media/libstagefright/mpeg2ts",
     ],
 
     local_include_dirs: ["include"],
+
+    export_include_dirs: [
+        ".",
+    ],
 
     cflags: [
         "-Werror",

@@ -45,10 +45,6 @@ cc_defaults {
         "libregistermsext",
     ],
 
-    include_dirs: [
-        "frameworks/av/media/libmediaplayerservice",
-    ],
-
     cflags: [
         "-Werror",
         "-Wall",
