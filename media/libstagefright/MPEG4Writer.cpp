@@ -159,7 +159,8 @@ public:
     bool isHeic() const { return mIsHeic; }
     bool isAudio() const { return mIsAudio; }
     bool isMPEG4() const { return mIsMPEG4; }
-    bool usePrefix() const { return (mIsAvc || mIsHevc || mIsHeic) && !mNalLengthBitstream; }
+    bool usePrefix() const { return (mIsAvc || mIsHevc || mIsHeic || mIsDovi)
+      && !mNalLengthBitstream; }
     bool isExifData(MediaBufferBase *buffer, uint32_t *tiffHdrOffset) const;
     void addChunkOffset(off64_t offset);
     void addItemOffsetAndSize(off64_t offset, size_t size, bool isExif);
@@ -167,6 +168,7 @@ public:
     TrackId& getTrackId() { return mTrackId; }
     status_t dump(int fd, const Vector<String16>& args) const;
     static const char *getFourCCForMime(const char *mime);
+    const char *getDoviFourCC() const;
     const char *getTrackType() const;
     void resetInternal();
     int64_t trackMetaDataSize();
@@ -319,6 +321,7 @@ private:
     volatile bool mStarted;
     bool mIsAvc;
     bool mIsHevc;
+    bool mIsDovi;
     bool mIsAudio;
     bool mIsVideo;
     bool mIsHeic;
@@ -375,6 +378,10 @@ private:
     uint8_t mProfileCompatible;
     uint8_t mLevelIdc;
 
+    uint8_t mDoviProfile;
+    void *mDoviConfigData;
+    size_t mDoviConfigDataSize;
+
     void *mCodecSpecificData;
     size_t mCodecSpecificDataSize;
     bool mGotAllCodecSpecificData;
@@ -426,6 +433,8 @@ private:
     status_t parseHEVCCodecSpecificData(
             const uint8_t *data, size_t size, HevcParameterSets &paramSets);
 
+    status_t makeDoviCodecSpecificData();
+
     status_t parseMHASPackets(MediaBufferBase *buffer);
     // Track authoring progress status
     void trackProgressStatus(int64_t timeUs, status_t err = OK);
@@ -464,6 +473,7 @@ private:
     void writePaspBox();
     void writeAvccBox();
     void writeHvccBox();
+    void writeDoviConfigBox();
     void writeUrlBox();
     void writeDrefBox();
     void writeDinfBox();
@@ -624,6 +634,17 @@ status_t MPEG4Writer::Track::dump(
     return OK;
 }
 
+const char *MPEG4Writer::Track::getDoviFourCC() const {
+    if (mDoviProfile == 5) {
+        return "dvh1";
+    } else if (mDoviProfile == 8) {
+        return "hvc1";
+    } else if (mDoviProfile == 9 || mDoviProfile == 32) {
+        return "avc1";
+    }
+    return (const char*)NULL;
+}
+
 // static
 const char *MPEG4Writer::Track::getFourCCForMime(const char *mime) {
     if (mime == NULL) {
@@ -680,7 +701,9 @@ status_t MPEG4Writer::addSource(const sp<MediaSource> &source) {
         mIsBackgroundMode |= isBackgroundMode;
     }
 
-    if (Track::getFourCCForMime(mime) == NULL) {
+    if (!strcmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        ALOGV("Add source mime '%s'", mime);
+    } else if (Track::getFourCCForMime(mime) == NULL) {
         ALOGE("Unsupported mime '%s'", mime);
         return ERROR_UNSUPPORTED;
     }
@@ -2184,6 +2207,8 @@ MPEG4Writer::Track::Track(
       mMinCttsOffsetTimeUs(0),
       mMinCttsOffsetTicks(0),
       mMaxCttsOffsetTicks(0),
+      mDoviConfigData(NULL),
+      mDoviConfigDataSize(0),
       mCodecSpecificData(NULL),
       mCodecSpecificDataSize(0),
       mGotAllCodecSpecificData(false),
@@ -2210,6 +2235,7 @@ MPEG4Writer::Track::Track(
     mMeta->findCString(kKeyMIMEType, &mime);
     mIsAvc = !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_AVC);
     mIsHevc = !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_HEVC);
+    mIsDovi = !strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION);
     mIsAudio = !strncasecmp(mime, "audio/", 6);
     mIsVideo = !strncasecmp(mime, "video/", 6);
     mIsHeic = !strcasecmp(mime, MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC);
@@ -2648,7 +2674,12 @@ void MPEG4Writer::Track::getCodecSpecificDataFromInputFormatIfPossible() {
                !strcasecmp(mime, MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC)) {
         mMeta->findData(kKeyHVCC, &type, &data, &size);
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
-        mMeta->findData(kKeyDVCC, &type, &data, &size);
+        makeDoviCodecSpecificData();
+        if (!mMeta->findData(kKeyAVCC, &type, &data, &size) &&
+                !mMeta->findData(kKeyHVCC, &type, &data, &size)) {
+            ALOGE("Failed: No HVCC/AVCC for Dolby Vision ..\n");
+            return;
+        }
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_MPEG4) ||
                !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC)) {
         if (mMeta->findData(kKeyESDS, &type, &data, &size)) {
@@ -2688,6 +2719,11 @@ MPEG4Writer::Track::~Track() {
     if (mCodecSpecificData != NULL) {
         free(mCodecSpecificData);
         mCodecSpecificData = NULL;
+    }
+
+    if (mDoviConfigData != NULL) {
+        free(mDoviConfigData);
+        mDoviConfigData = NULL;
     }
 }
 
@@ -3405,6 +3441,37 @@ status_t MPEG4Writer::Track::makeHEVCCodecSpecificData(
     return OK;
 }
 
+status_t MPEG4Writer::Track::makeDoviCodecSpecificData() {
+    uint32_t type;
+    const void *data = NULL;
+    size_t size = 0;
+
+    if (mDoviConfigData != NULL) {
+        ALOGE("Already have Dolby Vision codec specific data");
+        return OK;
+    }
+
+    if (!mMeta->findData(kKeyDVCC, &type, &data, &size)
+             && !mMeta->findData(kKeyDVVC, &type, &data, &size)
+             && !mMeta->findData(kKeyDVWC, &type, &data, &size)) {
+        ALOGE("Failed getting Dovi config for Dolby Vision %d", (int)size);
+        return ERROR_MALFORMED;
+    }
+
+    mDoviConfigData = malloc(size);
+    if (mDoviConfigData == NULL) {
+        ALOGE("Failed allocating Dolby Vision config data");
+        return ERROR_MALFORMED;
+    }
+
+    mDoviConfigDataSize = size;
+    memcpy(mDoviConfigData, data, size);
+
+    mDoviProfile = (((char *)data)[2] >> 1) & 0x7f; //getting profile info
+
+    return OK;
+}
+
 uint32_t parseEscaped(ABitReader &br, uint32_t bits1 = 0,
                       uint32_t bits2 = 0, uint32_t bits3 = 0) {
   if (bits1 == 0)
@@ -3590,6 +3657,23 @@ status_t MPEG4Writer::Track::threadEntry() {
                 } else if (mIsMPEG4) {
                     err = copyCodecSpecificData((const uint8_t *)buffer->data() + buffer->range_offset(),
                             buffer->range_length());
+                }
+                if (mIsDovi) {
+                    err = makeDoviCodecSpecificData();
+
+                    const void *data = NULL;
+                    size_t size = 0;
+
+                    uint32_t type = 0;
+                    if (mDoviProfile == 9){
+                        mMeta->findData(kKeyAVCC, &type, &data, &size);
+                    } else if (mDoviProfile < 9)  {
+                        mMeta->findData(kKeyHVCC, &type, &data, &size);
+                    }
+
+                    if (data != NULL && copyCodecSpecificData((uint8_t *)data, size) == OK) {
+                        mGotAllCodecSpecificData = true;
+                    }
                 }
             }
 
@@ -4304,6 +4388,7 @@ status_t MPEG4Writer::Track::checkCodecSpecificData() const {
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_MPEG4, mime) ||
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_AVC, mime) ||
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_HEVC, mime) ||
+        !strcasecmp(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, mime) ||
         !strcasecmp(MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC, mime)) {
         if (!mCodecSpecificData ||
             mCodecSpecificDataSize <= 0) {
@@ -4428,7 +4513,13 @@ void MPEG4Writer::Track::writeVideoFourCCBox() {
     const char *mime;
     bool success = mMeta->findCString(kKeyMIMEType, &mime);
     CHECK(success);
-    const char *fourcc = getFourCCForMime(mime);
+    const char *fourcc;
+    if (!strcmp(mime, MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+        fourcc = getDoviFourCC();
+    } else {
+        fourcc = getFourCCForMime(mime);
+    }
+
     if (fourcc == NULL) {
         ALOGE("Unknown mime type '%s'.", mime);
         TRESPASS();
@@ -4468,6 +4559,13 @@ void MPEG4Writer::Track::writeVideoFourCCBox() {
         writeAvccBox();
     } else if (!strcasecmp(MEDIA_MIMETYPE_VIDEO_HEVC, mime)) {
         writeHvccBox();
+    } else if (!strcasecmp(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION, mime)) {
+        if (mDoviProfile <= 8) {
+            writeHvccBox();
+        } else if (mDoviProfile == 9 || mDoviProfile == 32) {
+            writeAvccBox();
+        }
+        writeDoviConfigBox();
     }
 
     writePaspBox();
@@ -4481,30 +4579,31 @@ void MPEG4Writer::Track::writeColrBox() {
     memset(&aspects, 0, sizeof(aspects));
     // Color metadata may have changed.
     sp<MetaData> meta = mSource->getFormat();
-    // TRICKY: using | instead of || because we want to execute all findInt32-s
-    if (meta->findInt32(kKeyColorPrimaries, (int32_t*)&aspects.mPrimaries)
-            | meta->findInt32(kKeyTransferFunction, (int32_t*)&aspects.mTransfer)
-            | meta->findInt32(kKeyColorMatrix, (int32_t*)&aspects.mMatrixCoeffs)
-            | meta->findInt32(kKeyColorRange, (int32_t*)&aspects.mRange)) {
-        int32_t primaries, transfer, coeffs;
-        bool fullRange;
-        ALOGV("primaries=%s transfer=%s matrix=%s range=%s",
-                asString(aspects.mPrimaries),
-                asString(aspects.mTransfer),
-                asString(aspects.mMatrixCoeffs),
-                asString(aspects.mRange));
-        ColorUtils::convertCodecColorAspectsToIsoAspects(
-                aspects, &primaries, &transfer, &coeffs, &fullRange);
-        mOwner->beginBox("colr");
-        mOwner->writeFourcc("nclx");
-        mOwner->writeInt16(primaries);
-        mOwner->writeInt16(transfer);
-        mOwner->writeInt16(coeffs);
-        mOwner->writeInt8(int8_t(fullRange ? 0x80 : 0x0));
-        mOwner->endBox(); // colr
-    } else {
+    bool findPrimaries = meta->findInt32(kKeyColorPrimaries, (int32_t*)&aspects.mPrimaries);
+    bool findTransfer = meta->findInt32(kKeyTransferFunction, (int32_t*)&aspects.mTransfer);
+    bool findMatrix = meta->findInt32(kKeyColorMatrix, (int32_t*)&aspects.mMatrixCoeffs);
+    bool findRange = meta->findInt32(kKeyColorRange, (int32_t*)&aspects.mRange);
+    if (!findPrimaries && !findTransfer && !findMatrix && !findRange) {
         ALOGV("no color information");
+        return;
     }
+
+    int32_t primaries, transfer, coeffs;
+    bool fullRange;
+    ALOGV("primaries=%s transfer=%s matrix=%s range=%s",
+            asString(aspects.mPrimaries),
+            asString(aspects.mTransfer),
+            asString(aspects.mMatrixCoeffs),
+            asString(aspects.mRange));
+    ColorUtils::convertCodecColorAspectsToIsoAspects(
+            aspects, &primaries, &transfer, &coeffs, &fullRange);
+    mOwner->beginBox("colr");
+    mOwner->writeFourcc("nclx");
+    mOwner->writeInt16(primaries);
+    mOwner->writeInt16(transfer);
+    mOwner->writeInt16(coeffs);
+    mOwner->writeInt8(int8_t(fullRange ? 0x80 : 0x0));
+    mOwner->endBox(); // colr
 }
 
 void MPEG4Writer::Track::writeMdcvAndClliBoxes() {
@@ -5023,18 +5122,35 @@ void MPEG4Writer::Track::writeAvccBox() {
     mOwner->endBox();  // avcC
 }
 
-
 void MPEG4Writer::Track::writeHvccBox() {
     CHECK(mCodecSpecificData);
     CHECK_GE(mCodecSpecificDataSize, 5u);
 
-    // Patch avcc's lengthSize field to match the number
+    // Patch hvcc's lengthSize field to match the number
     // of bytes we use to indicate the size of a nal unit.
     uint8_t *ptr = (uint8_t *)mCodecSpecificData;
     ptr[21] = (ptr[21] & 0xfc) | (mOwner->useNalLengthFour() ? 3 : 1);
     mOwner->beginBox("hvcC");
     mOwner->write(mCodecSpecificData, mCodecSpecificDataSize);
     mOwner->endBox();  // hvcC
+}
+
+void MPEG4Writer::Track::writeDoviConfigBox() {
+    CHECK(mDoviConfigData);
+    CHECK_EQ(mDoviConfigDataSize, 24u);
+
+    uint8_t *ptr = (uint8_t *)mDoviConfigData;
+    uint8_t profile = (ptr[2] >> 1) & 0x7f;
+
+    if (profile > 10) {
+        mOwner->beginBox("dvwC");
+    } else if (profile > 7) {
+        mOwner->beginBox("dvvC");
+    } else {
+        mOwner->beginBox("dvcC");
+    }
+    mOwner->write(mDoviConfigData, mDoviConfigDataSize);
+    mOwner->endBox();  // dvwC/dvvC/dvcC
 }
 
 void MPEG4Writer::Track::writeD263Box() {

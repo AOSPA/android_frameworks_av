@@ -30,6 +30,7 @@
 #include <android/media/ISpatializer.h>
 #include <android/media/audio/common/AudioMMapPolicyInfo.h>
 #include <android/media/audio/common/AudioMMapPolicyType.h>
+#include <android/media/audio/common/AudioPort.h>
 #include <media/AidlConversionUtil.h>
 #include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
@@ -263,8 +264,8 @@ public:
     // IAudioPolicyService interface (see AudioPolicyInterface for method descriptions)
     //
     static void onNewAudioModulesAvailable();
-    static status_t setDeviceConnectionState(audio_devices_t device, audio_policy_dev_state_t state,
-                                             const char *device_address, const char *device_name,
+    static status_t setDeviceConnectionState(audio_policy_dev_state_t state,
+                                             const android::media::audio::common::AudioPort& port,
                                              audio_format_t encodedFormat);
     static audio_policy_dev_state_t getDeviceConnectionState(audio_devices_t device,
                                                                 const char *device_address);
@@ -444,6 +445,8 @@ public:
 
     static bool     isHapticPlaybackSupported();
 
+    static bool     isUltrasoundSupported();
+
     static status_t listAudioProductStrategies(AudioProductStrategyVector &strategies);
     static status_t getProductStrategyFromAudioAttributes(
             const AudioAttributes &aa, product_strategy_t &productStrategy,
@@ -549,6 +552,16 @@ public:
                                              const audio_config_t *config,
                                              audio_direct_mode_t *directMode);
 
+
+    /**
+     * Query which direct audio profiles are available for the specified audio attributes.
+     * @param attr audio attributes describing the playback use case
+     * @param audioProfiles out: a vector of audio profiles
+     * @return NO_ERROR in case of success, DEAD_OBJECT, NO_INIT, BAD_VALUE, PERMISSION_DENIED
+     *         in case of error.
+     */
+    static status_t getDirectProfilesForAttributes(const audio_attributes_t* attr,
+                                            std::vector<audio_profile>* audioProfiles);
 
     // A listener for capture state changes.
     class CaptureStateListener : public virtual RefBase {

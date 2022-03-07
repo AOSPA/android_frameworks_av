@@ -94,15 +94,16 @@ bool isPublicFormat(int32_t format);
 // Create a Surface from an IGraphicBufferProducer. Returns error if
 // IGraphicBufferProducer's property doesn't match with streamInfo
 binder::Status createSurfaceFromGbp(
-    camera3::OutputStreamInfo& streamInfo, bool isStreamInfoValid,
-    sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp,
-    const String8 &logicalCameraId, const CameraMetadata &physicalCameraMetadata,
-    const std::vector<int32_t> &sensorPixelModesUsed, int dynamicRangeProfile,
-    bool isPriviledgedClient=false);
+        camera3::OutputStreamInfo& streamInfo, bool isStreamInfoValid,
+        sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp,
+        const String8 &logicalCameraId, const CameraMetadata &physicalCameraMetadata,
+        const std::vector<int32_t> &sensorPixelModesUsed,  int dynamicRangeProfile,
+        int streamUseCase,
+        bool isPriviledgedClient=false);
 
 void mapStreamInfo(const camera3::OutputStreamInfo &streamInfo,
         camera3::camera_stream_rotation_t rotation, String8 physicalId, int32_t groupId,
-        hardware::camera::device::V3_7::Stream *stream /*out*/);
+        hardware::camera::device::V3_8::Stream *stream /*out*/);
 
 //check if format is 10-bit output compatible
 bool is10bitCompatibleFormat(int32_t format);
@@ -112,6 +113,8 @@ bool is10bitDynamicRangeProfile(int32_t dynamicRangeProfile);
 
 // Check if the device supports a given dynamicRangeProfile
 bool isDynamicRangeProfileSupported(int dynamicRangeProfile, const CameraMetadata& staticMeta);
+
+bool isStreamUseCaseSupported(int streamUseCase, const CameraMetadata &deviceInfo);
 
 // Check that the physicalCameraId passed in is spported by the camera
 // device.

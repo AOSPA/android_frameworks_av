@@ -38,6 +38,7 @@
 #include <vector>
 
 #include <Serializer.h>
+#include <android/media/audio/common/AudioPort.h>
 #include <cutils/bitops.h>
 #include <cutils/properties.h>
 #include <media/AudioParameter.h>
@@ -53,6 +54,10 @@
 
 namespace android {
 
+using android::media::audio::common::AudioDevice;
+using android::media::audio::common::AudioDeviceAddress;
+using android::media::audio::common::AudioPortDeviceExt;
+using android::media::audio::common::AudioPortExt;
 using content::AttributionSourceState;
 
 //FIXME: workaround for truncated touch sounds
@@ -132,44 +137,80 @@ bool operator!= (const SortedVector<T> &left, const SortedVector<T> &right)
 // AudioPolicyInterface implementation
 // ----------------------------------------------------------------------------
 
-status_t AudioPolicyManager::setDeviceConnectionState(audio_devices_t device,
-                                                      audio_policy_dev_state_t state,
-                                                      const char *device_address,
-                                                      const char *device_name,
-                                                      audio_format_t encodedFormat)
-{
-    status_t status = setDeviceConnectionStateInt(device, state, device_address,
-                                                  device_name, encodedFormat);
+status_t AudioPolicyManager::setDeviceConnectionState(audio_policy_dev_state_t state,
+        const android::media::audio::common::AudioPort& port, audio_format_t encodedFormat) {
+    status_t status = setDeviceConnectionStateInt(state, port, encodedFormat);
     nextAudioPortGeneration();
     return status;
+}
+
+status_t AudioPolicyManager::setDeviceConnectionState(audio_devices_t device,
+                                                      audio_policy_dev_state_t state,
+                                                      const char* device_address,
+                                                      const char* device_name,
+                                                      audio_format_t encodedFormat) {
+    media::AudioPort aidlPort;
+    if (status_t status = deviceToAudioPort(device, device_address, device_name, &aidlPort);
+        status == OK) {
+        return setDeviceConnectionState(state, aidlPort.hal, encodedFormat);
+    } else {
+        ALOGE("Failed to convert to AudioPort Parcelable: %s", statusToString(status).c_str());
+        return status;
+    }
 }
 
 void AudioPolicyManager::broadcastDeviceConnectionState(const sp<DeviceDescriptor> &device,
                                                         audio_policy_dev_state_t state)
 {
-    AudioParameter param(String8(device->address().c_str()));
-    const String8 key(state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE ?
-                AudioParameter::keyDeviceConnect : AudioParameter::keyDeviceDisconnect);
-    param.addInt(key, device->type());
-    mpClientInterface->setParameters(AUDIO_IO_HANDLE_NONE, param.toString());
+    audio_port_v7 devicePort;
+    device->toAudioPort(&devicePort);
+    if (status_t status = mpClientInterface->setDeviceConnectedState(
+                    &devicePort, state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
+            status != OK) {
+        ALOGE("Error %d while setting connected state for device %s", status,
+                device->getDeviceTypeAddr().toString(false).c_str());
+    }
+}
+
+status_t AudioPolicyManager::setDeviceConnectionStateInt(
+        audio_policy_dev_state_t state, const android::media::audio::common::AudioPort& port,
+        audio_format_t encodedFormat) {
+    // TODO: b/211601178 Forward 'port' to Audio HAL via mHwModules. For now, only device_type,
+    // device_address and device_name are forwarded.
+    if (port.ext.getTag() != AudioPortExt::device) {
+        return BAD_VALUE;
+    }
+    audio_devices_t device_type;
+    std::string device_address;
+    if (status_t status = aidl2legacy_AudioDevice_audio_device(
+                port.ext.get<AudioPortExt::device>().device, &device_type, &device_address);
+        status != OK) {
+        return status;
+    };
+    const char* device_name = port.name.c_str();
+    // connect/disconnect only 1 device at a time
+    if (!audio_is_output_device(device_type) && !audio_is_input_device(device_type))
+        return BAD_VALUE;
+
+    sp<DeviceDescriptor> device = mHwModules.getDeviceDescriptor(
+            device_type, device_address.c_str(), device_name, encodedFormat,
+            state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
+    return device ? setDeviceConnectionStateInt(device, state) : INVALID_OPERATION;
 }
 
 status_t AudioPolicyManager::setDeviceConnectionStateInt(audio_devices_t deviceType,
                                                          audio_policy_dev_state_t state,
-                                                         const char *device_address,
-                                                         const char *device_name,
-                                                         audio_format_t encodedFormat)
-{
-    ALOGV("setDeviceConnectionStateInt() device: 0x%X, state %d, address %s name %s format 0x%X",
-            deviceType, state, device_address, device_name, encodedFormat);
-
-    // connect/disconnect only 1 device at a time
-    if (!audio_is_output_device(deviceType) && !audio_is_input_device(deviceType)) return BAD_VALUE;
-
-    sp<DeviceDescriptor> device =
-            mHwModules.getDeviceDescriptor(deviceType, device_address, device_name, encodedFormat,
-                                           state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
-    return device ? setDeviceConnectionStateInt(device, state) : INVALID_OPERATION;
+                                                         const char* device_address,
+                                                         const char* device_name,
+                                                         audio_format_t encodedFormat) {
+    media::AudioPort aidlPort;
+    if (status_t status = deviceToAudioPort(deviceType, device_address, device_name, &aidlPort);
+        status == OK) {
+        return setDeviceConnectionStateInt(state, aidlPort.hal, encodedFormat);
+    } else {
+        ALOGE("Failed to convert to AudioPort Parcelable: %s", statusToString(status).c_str());
+        return status;
+    }
 }
 
 status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescriptor> &device,
@@ -433,6 +474,14 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
 
     ALOGW("%s() invalid device: %s", __func__, device->toString().c_str());
     return BAD_VALUE;
+}
+
+status_t AudioPolicyManager::deviceToAudioPort(audio_devices_t device, const char* device_address,
+                                               const char* device_name,
+                                               media::AudioPort* aidlPort) {
+    DeviceDescriptorBase devDescr(device, device_address);
+    devDescr.setName(device_name);
+    return devDescr.writeToParcelable(aidlPort);
 }
 
 void AudioPolicyManager::setEngineDeviceConnectionState(const sp<DeviceDescriptor> device,
@@ -4119,6 +4168,47 @@ audio_direct_mode_t AudioPolicyManager::getDirectPlaybackSupport(const audio_att
     return directMode;
 }
 
+status_t AudioPolicyManager::getDirectProfilesForAttributes(const audio_attributes_t* attr,
+                                                AudioProfileVector& audioProfilesVector) {
+    AudioDeviceTypeAddrVector devices;
+    status_t status = getDevicesForAttributes(*attr, &devices);
+    if (status != OK) {
+        return status;
+    }
+    ALOGV("%s: found %zu output devices for attributes.", __func__, devices.size());
+    if (devices.empty()) {
+        return OK; // no output devices for the attributes
+    }
+
+    for (const auto& hwModule : mHwModules) {
+        for (const auto& curProfile : hwModule->getOutputProfiles()) {
+            if (!curProfile->asAudioPort()->isDirectOutput()) {
+                continue;
+            }
+            // Allow only profiles that support all the available and routed devices
+            DeviceVector supportedDevices = curProfile->getSupportedDevices();
+            if (supportedDevices.getDevicesFromDeviceTypeAddrVec(devices).size()
+                    != devices.size()) {
+                continue;
+            }
+
+            const auto audioProfiles = curProfile->asAudioPort()->getAudioProfiles();
+            ALOGV("%s: found direct profile (%s) with %zu audio profiles.",
+                __func__, curProfile->getTagName().c_str(), audioProfiles.size());
+            for (const auto& audioProfile : audioProfiles) {
+                if (audioProfile->isValid() && !audioProfilesVector.contains(audioProfile)
+                // TODO - why do we have same PCM format with both dynamic and non dynamic format
+                    && audioProfile->isDynamicFormat()) {
+                    ALOGV("%s: adding audio profile with encoding (%d).",
+                        __func__, audioProfile->getFormat());
+                    audioProfilesVector.add(audioProfile);
+                }
+            }
+        }
+    }
+    return NO_ERROR;
+}
+
 status_t AudioPolicyManager::listAudioPorts(audio_port_role_t role,
                                             audio_port_type_t type,
                                             unsigned int *num_ports,
@@ -5175,6 +5265,37 @@ bool AudioPolicyManager::isHapticPlaybackSupported()
                 }
             }
         }
+    }
+    return false;
+}
+
+bool AudioPolicyManager::isUltrasoundSupported()
+{
+    bool hasUltrasoundOutput = false;
+    bool hasUltrasoundInput = false;
+    for (const auto& hwModule : mHwModules) {
+        const OutputProfileCollection &outputProfiles = hwModule->getOutputProfiles();
+        if (!hasUltrasoundOutput) {
+            for (const auto &outProfile : outputProfiles) {
+                if (outProfile->getFlags() & AUDIO_OUTPUT_FLAG_ULTRASOUND) {
+                    hasUltrasoundOutput = true;
+                    break;
+                }
+            }
+        }
+
+        const InputProfileCollection &inputProfiles = hwModule->getInputProfiles();
+        if (!hasUltrasoundInput) {
+            for (const auto &inputProfile : inputProfiles) {
+                if (inputProfile->getFlags() & AUDIO_INPUT_FLAG_ULTRASOUND) {
+                    hasUltrasoundInput = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasUltrasoundOutput && hasUltrasoundInput)
+            return true;
     }
     return false;
 }
@@ -6620,6 +6741,7 @@ DeviceTypeSet AudioPolicyManager::getDevicesForStream(audio_stream_type_t stream
     return devices.types();
 }
 
+// TODO - consider MSD routes b/214971780
 status_t AudioPolicyManager::getDevicesForAttributes(
         const audio_attributes_t &attr, AudioDeviceTypeAddrVector *devices) {
     if (devices == nullptr) {

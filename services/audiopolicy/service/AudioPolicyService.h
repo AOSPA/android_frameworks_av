@@ -82,9 +82,8 @@ public:
     //
     binder::Status onNewAudioModulesAvailable() override;
     binder::Status setDeviceConnectionState(
-            const AudioDevice& device,
             media::AudioPolicyDeviceState state,
-            const std::string& deviceName,
+            const android::media::audio::common::AudioPort& port,
             const AudioFormatDescription& encodedFormat) override;
     binder::Status getDeviceConnectionState(const AudioDevice& device,
                                             media::AudioPolicyDeviceState* _aidl_return) override;
@@ -224,6 +223,7 @@ public:
     binder::Status setA11yServicesUids(const std::vector<int32_t>& uids) override;
     binder::Status setCurrentImeUid(int32_t uid) override;
     binder::Status isHapticPlaybackSupported(bool* _aidl_return) override;
+    binder::Status isUltrasoundSupported(bool* _aidl_return) override;
 
           status_t doStartOutput(audio_port_handle_t portId);
     binder::Status listAudioProductStrategies(
@@ -277,6 +277,9 @@ public:
     binder::Status getDirectPlaybackSupport(const media::AudioAttributesInternal& attr,
                                             const AudioConfig& config,
                                             media::AudioDirectMode* _aidl_return) override;
+
+    binder::Status getDirectProfilesForAttributes(const media::AudioAttributesInternal& attr,
+                        std::vector<media::audio::common::AudioProfile>* _aidl_return) override;
 
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) override;
 
@@ -812,6 +815,9 @@ private:
 
         status_t updateSecondaryOutputs(
                 const TrackSecondaryOutputsMap& trackSecondaryOutputs) override;
+
+        status_t setDeviceConnectedState(
+                const struct audio_port_v7 *port, bool connected) override;
 
      private:
         AudioPolicyService *mAudioPolicyService;

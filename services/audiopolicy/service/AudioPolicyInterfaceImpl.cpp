@@ -120,14 +120,9 @@ void AudioPolicyService::doOnNewAudioModulesAvailable()
 }
 
 Status AudioPolicyService::setDeviceConnectionState(
-        const AudioDevice& deviceAidl,
         media::AudioPolicyDeviceState stateAidl,
-        const std::string& deviceNameAidl,
+        const android::media::audio::common::AudioPort& port,
         const AudioFormatDescription& encodedFormatAidl) {
-    audio_devices_t device;
-    std::string address;
-    RETURN_BINDER_STATUS_IF_ERROR(
-            aidl2legacy_AudioDevice_audio_device(deviceAidl, &device, &address));
     audio_policy_dev_state_t state = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioPolicyDeviceState_audio_policy_dev_state_t(stateAidl));
     audio_format_t encodedFormat = VALUE_OR_RETURN_BINDER_STATUS(
@@ -148,7 +143,7 @@ Status AudioPolicyService::setDeviceConnectionState(
     Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
     status_t status = mAudioPolicyManager->setDeviceConnectionState(
-            device, state, address.c_str(), deviceNameAidl.c_str(), encodedFormat);
+            state, port, encodedFormat);
     if (status == NO_ERROR) {
         onCheckSpatializer_l();
     }
@@ -167,6 +162,7 @@ Status AudioPolicyService::getDeviceConnectionState(const AudioDevice& deviceAid
                         AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE));
         return Status::ok();
     }
+    Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
             legacy2aidl_audio_policy_dev_state_t_AudioPolicyDeviceState(
@@ -2078,6 +2074,17 @@ Status AudioPolicyService::isHapticPlaybackSupported(bool* _aidl_return)
     return Status::ok();
 }
 
+Status AudioPolicyService::isUltrasoundSupported(bool* _aidl_return)
+{
+    if (mAudioPolicyManager == NULL) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    Mutex::Autolock _l(mLock);
+    AutoCallerClear acc;
+    *_aidl_return = mAudioPolicyManager->isUltrasoundSupported();
+    return Status::ok();
+}
+
 Status AudioPolicyService::listAudioProductStrategies(
         std::vector<media::AudioProductStrategy>* _aidl_return) {
     AudioProductStrategyVector strategies;
@@ -2389,6 +2396,26 @@ Status AudioPolicyService::getDirectPlaybackSupport(const media::AudioAttributes
     *_aidl_return = static_cast<media::AudioDirectMode>(
             VALUE_OR_RETURN_BINDER_STATUS(legacy2aidl_audio_direct_mode_t_int32_t_mask(
                     mAudioPolicyManager->getDirectPlaybackSupport(&attr, &config))));
+    return Status::ok();
+}
+
+Status AudioPolicyService::getDirectProfilesForAttributes(
+                                const media::AudioAttributesInternal& attrAidl,
+                                std::vector<media::audio::common::AudioProfile>* _aidl_return) {
+   if (mAudioPolicyManager == nullptr) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    audio_attributes_t attr = VALUE_OR_RETURN_BINDER_STATUS(
+            aidl2legacy_AudioAttributesInternal_audio_attributes_t(attrAidl));
+    AudioProfileVector audioProfiles;
+
+    Mutex::Autolock _l(mLock);
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
+            mAudioPolicyManager->getDirectProfilesForAttributes(&attr, audioProfiles)));
+    *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
+            convertContainer<std::vector<media::audio::common::AudioProfile>>(
+                audioProfiles, legacy2aidl_AudioProfile_common, false /*isInput*/));
+
     return Status::ok();
 }
 

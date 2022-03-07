@@ -542,6 +542,9 @@ constexpr int32_t DolbyVisionLevelUhd24   = 0x20;
 constexpr int32_t DolbyVisionLevelUhd30   = 0x40;
 constexpr int32_t DolbyVisionLevelUhd48   = 0x80;
 constexpr int32_t DolbyVisionLevelUhd60   = 0x100;
+constexpr int32_t DolbyVisionLevelUhd120  = 0x200;
+constexpr int32_t DolbyVisionLevel8k30    = 0x400;
+constexpr int32_t DolbyVisionLevel8k60    = 0x800;
 
 inline static const char *asString_DolbyVisionLevel(int32_t i, const char *def = "??") {
     switch (i) {
@@ -554,6 +557,9 @@ inline static const char *asString_DolbyVisionLevel(int32_t i, const char *def =
         case DolbyVisionLevelUhd30: return "Uhd30";
         case DolbyVisionLevelUhd48: return "Uhd48";
         case DolbyVisionLevelUhd60: return "Uhd60";
+        case DolbyVisionLevelUhd120: return "Uhd120";
+        case DolbyVisionLevel8k30:  return "8k30";
+        case DolbyVisionLevel8k60:  return "8k60";
         default:                    return def;
     }
 }
@@ -588,9 +594,11 @@ constexpr int32_t COLOR_Format24BitARGB6666           = 42;
 constexpr int32_t COLOR_Format24bitBGR888             = 12;
 constexpr int32_t COLOR_Format24bitRGB888             = 11;
 constexpr int32_t COLOR_Format25bitARGB1888           = 14;
+constexpr int32_t COLOR_Format32bitABGR2101010        = 0x7F00AAA2;
 constexpr int32_t COLOR_Format32bitABGR8888           = 0x7F00A000;
 constexpr int32_t COLOR_Format32bitARGB8888           = 16;
 constexpr int32_t COLOR_Format32bitBGRA8888           = 15;
+constexpr int32_t COLOR_Format64bitABGRFloat          = 0x7F000F16;
 constexpr int32_t COLOR_Format8bitRGB332              = 2;
 constexpr int32_t COLOR_FormatCbYCrY                  = 27;
 constexpr int32_t COLOR_FormatCrYCbY                  = 28;
@@ -644,9 +652,11 @@ inline static const char *asString_ColorFormat(int32_t i, const char *def = "??"
         case COLOR_Format24bitBGR888:               return "24bitBGR888";
         case COLOR_Format24bitRGB888:               return "24bitRGB888";
         case COLOR_Format25bitARGB1888:             return "25bitARGB1888";
+        case COLOR_Format32bitABGR2101010:          return "32bitABGR2101010";
         case COLOR_Format32bitABGR8888:             return "32bitABGR8888";
         case COLOR_Format32bitARGB8888:             return "32bitARGB8888";
         case COLOR_Format32bitBGRA8888:             return "32bitBGRA8888";
+        case COLOR_Format64bitABGRFloat:            return "64bitABGRFloat";
         case COLOR_Format8bitRGB332:                return "8bitRGB332";
         case COLOR_FormatCbYCrY:                    return "CbYCrY";
         case COLOR_FormatCrYCbY:                    return "CrYCbY";
@@ -679,6 +689,7 @@ inline static const char *asString_ColorFormat(int32_t i, const char *def = "??"
         case COLOR_FormatYUV422SemiPlanar:          return "YUV422SemiPlanar";
         case COLOR_FormatYUV444Flexible:            return "YUV444Flexible";
         case COLOR_FormatYUV444Interleaved:         return "YUV444Interleaved";
+        case COLOR_FormatYUVP010:                   return "YUVP010";
         case COLOR_QCOM_FormatYUV420SemiPlanar:     return "QCOM_YUV420SemiPlanar";
         case COLOR_TI_FormatYUV420PackedSemiPlanar: return "TI_YUV420PackedSemiPlanar";
         default:                                    return def;
@@ -800,6 +811,7 @@ constexpr char KEY_MAX_BIT_RATE[] = "max-bitrate";
 constexpr char KEY_MAX_FPS_TO_ENCODER[] = "max-fps-to-encoder";
 constexpr char KEY_MAX_HEIGHT[] = "max-height";
 constexpr char KEY_MAX_INPUT_SIZE[] = "max-input-size";
+constexpr char KEY_MAX_OUTPUT_CHANNEL_COUNT[] = "max-output-channel-count";
 constexpr char KEY_MAX_PTS_GAP_TO_ENCODER[] = "max-pts-gap-to-encoder";
 constexpr char KEY_MAX_WIDTH[] = "max-width";
 constexpr char KEY_MIME[] = "mime";

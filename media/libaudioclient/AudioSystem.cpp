@@ -834,33 +834,18 @@ void AudioSystem::onNewAudioModulesAvailable() {
     aps->onNewAudioModulesAvailable();
 }
 
-status_t AudioSystem::setDeviceConnectionState(audio_devices_t device,
-                                               audio_policy_dev_state_t state,
-                                               const char* device_address,
-                                               const char* device_name,
+status_t AudioSystem::setDeviceConnectionState(audio_policy_dev_state_t state,
+                                               const android::media::audio::common::AudioPort& port,
                                                audio_format_t encodedFormat) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
-    const char* address = "";
-    const char* name = "";
 
     if (aps == 0) return PERMISSION_DENIED;
 
-    if (device_address != NULL) {
-        address = device_address;
-    }
-    if (device_name != NULL) {
-        name = device_name;
-    }
-
-    AudioDevice deviceAidl = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_audio_device_AudioDevice(device, address));
-
     return statusTFromBinderStatus(
             aps->setDeviceConnectionState(
-                    deviceAidl,
                     VALUE_OR_RETURN_STATUS(
                             legacy2aidl_audio_policy_dev_state_t_AudioPolicyDeviceState(state)),
-                    name,
+                    port,
                     VALUE_OR_RETURN_STATUS(
                             legacy2aidl_audio_format_t_AudioFormatDescription(encodedFormat))));
 }
@@ -1972,6 +1957,19 @@ bool AudioSystem::isHapticPlaybackSupported() {
     return result.value_or(false);
 }
 
+bool AudioSystem::isUltrasoundSupported() {
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0) return false;
+
+    auto result = [&]() -> ConversionResult<bool> {
+        bool retVal;
+        RETURN_IF_ERROR(
+                statusTFromBinderStatus(aps->isUltrasoundSupported(&retVal)));
+        return retVal;
+    }();
+    return result.value_or(false);
+}
+
 status_t AudioSystem::getHwOffloadFormatsSupportedForBluetoothMedia(
         audio_devices_t device, std::vector<audio_format_t>* formats) {
     if (formats == nullptr) {
@@ -2314,6 +2312,28 @@ status_t AudioSystem::getDirectPlaybackSupport(const audio_attributes_t *attr,
     return NO_ERROR;
 }
 
+status_t AudioSystem::getDirectProfilesForAttributes(const audio_attributes_t* attr,
+                                                std::vector<audio_profile>* audioProfiles) {
+    if (attr == nullptr) {
+        return BAD_VALUE;
+    }
+
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0) {
+        return PERMISSION_DENIED;
+    }
+
+    media::AudioAttributesInternal attrAidl = VALUE_OR_RETURN_STATUS(
+            legacy2aidl_audio_attributes_t_AudioAttributesInternal(*attr));
+
+    std::vector<media::audio::common::AudioProfile> audioProfilesAidl;
+    RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(
+            aps->getDirectProfilesForAttributes(attrAidl, &audioProfilesAidl)));
+    *audioProfiles = VALUE_OR_RETURN_STATUS(convertContainer<std::vector<audio_profile>>(
+                    audioProfilesAidl, aidl2legacy_AudioProfile_audio_profile, false /*isInput*/));
+
+    return NO_ERROR;
+}
 
 class CaptureStateListenerImpl : public media::BnCaptureStateListener,
                                  public IBinder::DeathRecipient {
