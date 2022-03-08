@@ -48,7 +48,9 @@ import android.media.audio.common.AudioDevice;
 import android.media.audio.common.AudioDeviceDescription;
 import android.media.audio.common.AudioFormatDescription;
 import android.media.audio.common.AudioMode;
+import android.media.audio.common.AudioProfile;
 import android.media.audio.common.AudioOffloadInfo;
+import android.media.audio.common.AudioPort;
 import android.media.audio.common.AudioSource;
 import android.media.audio.common.AudioStreamType;
 import android.media.audio.common.AudioUsage;
@@ -63,9 +65,8 @@ import android.media.audio.common.Int;
 interface IAudioPolicyService {
     oneway void onNewAudioModulesAvailable();
 
-    void setDeviceConnectionState(in AudioDevice device,
-                                  in AudioPolicyDeviceState state,
-                                  @utf8InCpp String deviceName,
+    void setDeviceConnectionState(in AudioPolicyDeviceState state,
+                                  in android.media.audio.common.AudioPort port,
                                   in AudioFormatDescription encodedFormat);
 
     AudioPolicyDeviceState getDeviceConnectionState(in AudioDevice device);
@@ -311,6 +312,8 @@ interface IAudioPolicyService {
 
     boolean isHapticPlaybackSupported();
 
+    boolean isUltrasoundSupported();
+
     AudioProductStrategy[] listAudioProductStrategies();
     int /* product_strategy_t */ getProductStrategyFromAudioAttributes(in AudioAttributesEx aa,
                                                                        boolean fallbackOnDefault);
@@ -381,6 +384,12 @@ interface IAudioPolicyService {
     /**
      * Query how the direct playback is currently supported on the device.
      */
-     AudioDirectMode getDirectPlaybackSupport(in AudioAttributesInternal attr,
+    AudioDirectMode getDirectPlaybackSupport(in AudioAttributesInternal attr,
                                               in AudioConfig config);
+
+    /**
+     * Query audio profiles available for direct playback on the current output device(s)
+     * for the specified audio attributes.
+     */
+    AudioProfile[] getDirectProfilesForAttributes(in AudioAttributesInternal attr);
 }

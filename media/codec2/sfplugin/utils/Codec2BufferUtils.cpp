@@ -88,7 +88,7 @@ static status_t _ImageCopy(View &view, const MediaImage2 *img, ImagePixel *imgBa
         uint32_t planeW = img->mWidth / plane.colSampling;
         uint32_t planeH = img->mHeight / plane.rowSampling;
 
-        bool canCopyByRow = (plane.colInc == 1) && (img->mPlane[i].mColInc == 1);
+        bool canCopyByRow = (plane.colInc == bpp) && (img->mPlane[i].mColInc == bpp);
         bool canCopyByPlane = canCopyByRow && (plane.rowInc == img->mPlane[i].mRowInc);
         if (canCopyByPlane) {
             MemCopier<ToMediaImage, 0>::copy(imgRow, viewRow, plane.rowInc * planeH);
@@ -117,22 +117,6 @@ static status_t _ImageCopy(View &view, const MediaImage2 *img, ImagePixel *imgBa
 }
 
 }  // namespace
-
-bool IsFormatR10G10B10A2SupportedForLegacyRendering() {
-    const AHardwareBuffer_Desc desc = {
-        .width = 320,
-        .height = 240,
-        .format = AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM,
-        .layers = 1,
-        .usage = AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
-                 AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
-        .stride = 0,
-        .rfu0 = 0,
-        .rfu1 = 0,
-    };
-
-    return AHardwareBuffer_isSupported(&desc);
-}
 
 status_t ImageCopy(uint8_t *imgBase, const MediaImage2 *img, const C2GraphicView &view) {
     if (view.crop().width != img->mWidth || view.crop().height != img->mHeight) {

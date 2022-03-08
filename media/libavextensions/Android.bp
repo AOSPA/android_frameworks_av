@@ -116,6 +116,7 @@ cc_library_static {
     ],
     include_dirs: [
         "frameworks/av/media/libmediaplayerservice",
+        "frameworks/av/media/libmediaplayerservice/nuplayer/include",
         "frameworks/av/media/libmediaextractor",
         "frameworks/av/media/libavextensions",
         "external/flac/include",

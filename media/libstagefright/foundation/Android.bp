@@ -23,6 +23,11 @@ cc_library_headers {
     vendor_available: true,
     host_supported: true,
     min_sdk_version: "29",
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.media",
+        "com.android.media.swcodec",
+    ],
 }
 
 cc_defaults {
@@ -123,6 +128,11 @@ cc_library {
     },
     defaults: ["libstagefright_foundation_defaults"],
     min_sdk_version: "29",
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.media",
+        "com.android.media.swcodec",
+    ],
     target: {
         vendor: {
             cflags: ["-D__ANDROID_VNDK__"],
@@ -158,6 +168,8 @@ cc_library_static {
     name: "libstagefright_foundation_without_imemory",
     defaults: ["libstagefright_foundation_defaults"],
     min_sdk_version: "29",
+    apex_available: ["com.android.media"],
+
 
     cflags: [
         "-Wno-multichar",
