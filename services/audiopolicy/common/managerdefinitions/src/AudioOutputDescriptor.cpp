@@ -157,7 +157,7 @@ bool AudioOutputDescriptor::isFixedVolume(const DeviceTypeSet& deviceTypes __unu
     return false;
 }
 
-bool AudioOutputDescriptor::setVolume(float volumeDb,
+bool AudioOutputDescriptor::setVolume(float volumeDb, bool /*muted*/,
                                       VolumeSource volumeSource,
                                       const StreamTypeVector &/*streams*/,
                                       const DeviceTypeSet& deviceTypes,
@@ -202,8 +202,7 @@ status_t AudioOutputDescriptor::applyAudioPortConfig(const struct audio_port_con
 void AudioOutputDescriptor::toAudioPortConfig(struct audio_port_config *dstConfig,
                                               const struct audio_port_config *srcConfig) const
 {
-    dstConfig->config_mask = AUDIO_PORT_CONFIG_SAMPLE_RATE|AUDIO_PORT_CONFIG_CHANNEL_MASK|
-                            AUDIO_PORT_CONFIG_FORMAT|AUDIO_PORT_CONFIG_GAIN;
+    dstConfig->config_mask = AUDIO_PORT_CONFIG_ALL;
     if (srcConfig != NULL) {
         dstConfig->config_mask |= srcConfig->config_mask;
     }
@@ -298,7 +297,6 @@ SwAudioOutputDescriptor::SwAudioOutputDescriptor(const sp<IOProfile>& profile,
                                                  AudioPolicyClientInterface *clientInterface)
     : AudioOutputDescriptor(profile, clientInterface),
     mProfile(profile), mLatency(0),
-    mFlags((audio_output_flags_t)0),
     mOutput1(0), mOutput2(0), mDirectOpenCount(0),
     mDirectClientSession(AUDIO_SESSION_NONE)
 {
@@ -455,14 +453,36 @@ void SwAudioOutputDescriptor::toAudioPort(struct audio_port_v7 *port) const
             mFlags & AUDIO_OUTPUT_FLAG_FAST ? AUDIO_LATENCY_LOW : AUDIO_LATENCY_NORMAL;
 }
 
-bool SwAudioOutputDescriptor::setVolume(float volumeDb,
+void SwAudioOutputDescriptor::setSwMute(
+        bool muted, VolumeSource vs, const StreamTypeVector &streamTypes,
+        const DeviceTypeSet& deviceTypes, uint32_t delayMs) {
+    // volume source active and more than one volume source is active, otherwise, no-op or let
+    // setVolume controlling SW and/or HW Gains
+    if (!streamTypes.empty() && isActive(vs) && (getActiveVolumeSources().size() > 1)) {
+        for (const auto& devicePort : devices()) {
+            if (isSingleDeviceType(deviceTypes, devicePort->type()) &&
+                    devicePort->hasGainController(true /*canUseForVolume*/)) {
+                float volumeAmpl = muted ? 0.0f : Volume::DbToAmpl(0);
+                ALOGV("%s: output: %d, vs: %d, muted: %d, active vs count: %zu", __func__,
+                      mIoHandle, vs, muted, getActiveVolumeSources().size());
+                for (const auto &stream : streamTypes) {
+                    mClientInterface->setStreamVolume(stream, volumeAmpl, mIoHandle, delayMs);
+                }
+                return;
+            }
+        }
+    }
+}
+
+bool SwAudioOutputDescriptor::setVolume(float volumeDb, bool muted,
                                         VolumeSource vs, const StreamTypeVector &streamTypes,
                                         const DeviceTypeSet& deviceTypes,
                                         uint32_t delayMs,
                                         bool force)
 {
     StreamTypeVector streams = streamTypes;
-    if (!AudioOutputDescriptor::setVolume(volumeDb, vs, streamTypes, deviceTypes, delayMs, force)) {
+    if (!AudioOutputDescriptor::setVolume(
+            volumeDb, muted, vs, streamTypes, deviceTypes, delayMs, force)) {
         return false;
     }
     if (streams.empty()) {
@@ -479,11 +499,17 @@ bool SwAudioOutputDescriptor::setVolume(float volumeDb,
             // different Volume Source (or if we allow several curves within same volume group)
             //
             // @todo: default stream volume to max (0) when using HW Port gain?
-            float volumeAmpl = Volume::DbToAmpl(0);
-            for (const auto &stream : streams) {
-                mClientInterface->setStreamVolume(stream, volumeAmpl, mIoHandle, delayMs);
+            // Allows to set SW Gain on AudioFlinger if:
+            //    -volume group has explicit stream(s) associated
+            //    -volume group with no explicit stream(s) is the only active source on this output
+            // Allows to mute SW Gain on AudioFlinger only for volume group with explicit stream(s)
+            if (!streamTypes.empty() || (getActiveVolumeSources().size() == 1)) {
+                const bool canMute = muted && (volumeDb != 0.0f) && !streamTypes.empty();
+                float volumeAmpl = canMute ? 0.0f : Volume::DbToAmpl(0);
+                for (const auto &stream : streams) {
+                    mClientInterface->setStreamVolume(stream, volumeAmpl, mIoHandle, delayMs);
+                }
             }
-
             AudioGains gains = devicePort->getGains();
             int gainMinValueInMb = gains[0]->getMinValueInMb();
             int gainMaxValueInMb = gains[0]->getMaxValueInMb();
@@ -728,14 +754,14 @@ void HwAudioOutputDescriptor::toAudioPort(struct audio_port_v7 *port) const
 }
 
 
-bool HwAudioOutputDescriptor::setVolume(float volumeDb,
+bool HwAudioOutputDescriptor::setVolume(float volumeDb, bool muted,
                                         VolumeSource volumeSource, const StreamTypeVector &streams,
                                         const DeviceTypeSet& deviceTypes,
                                         uint32_t delayMs,
                                         bool force)
 {
     bool changed = AudioOutputDescriptor::setVolume(
-            volumeDb, volumeSource, streams, deviceTypes, delayMs, force);
+            volumeDb, muted, volumeSource, streams, deviceTypes, delayMs, force);
 
     if (changed) {
       // TODO: use gain controller on source device if any to adjust volume

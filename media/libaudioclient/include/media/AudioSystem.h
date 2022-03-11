@@ -374,7 +374,8 @@ public:
                                    struct audio_port_v7 *ports,
                                    unsigned int *generation);
 
-    /* Get attributes for a given audio port */
+    /* Get attributes for a given audio port. On input, the port
+     * only needs the 'id' field to be filled in. */
     static status_t getAudioPort(struct audio_port_v7 *port);
 
     /* Create an audio patch between several source and sink ports */
@@ -438,8 +439,9 @@ public:
                                                audio_format_t *surroundFormats);
     static status_t setSurroundFormatEnabled(audio_format_t audioFormat, bool enabled);
 
-    static status_t setAssistantUid(uid_t uid);
-    static status_t setHotwordDetectionServiceUid(uid_t uid);
+    static status_t setAssistantServicesUids(const std::vector<uid_t>& uids);
+    static status_t setActiveAssistantServicesUids(const std::vector<uid_t>& activeUids);
+
     static status_t setA11yServicesUids(const std::vector<uid_t>& uids);
     static status_t setCurrentImeUid(uid_t uid);
 
