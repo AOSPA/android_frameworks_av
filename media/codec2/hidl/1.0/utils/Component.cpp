@@ -485,14 +485,14 @@ void Component::initListener(const sp<Component>& self) {
 
     struct ListenerDeathRecipient : public HwDeathRecipient {
         ListenerDeathRecipient(const wp<Component>& comp)
-            : component{comp} {
+            : mComponent{comp} {
         }
 
         virtual void serviceDied(
                 uint64_t /* cookie */,
                 const wp<::android::hidl::base::V1_0::IBase>& /* who */
                 ) override {
-            auto strongComponent = component.promote();
+            auto strongComponent = mComponent.promote();
             if (strongComponent) {
                 LOG(INFO) << "Client died ! release the component !!";
                 strongComponent->release();
@@ -501,7 +501,7 @@ void Component::initListener(const sp<Component>& self) {
             }
         }
 
-        wp<Component> component;
+        wp<Component> mComponent;
     };
 
     mDeathRecipient = new ListenerDeathRecipient(self);

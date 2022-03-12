@@ -54,8 +54,8 @@ Camera3Stream::Camera3Stream(int id,
         android_dataspace dataSpace, camera_stream_rotation_t rotation,
         const String8& physicalCameraId,
         const std::unordered_set<int32_t> &sensorPixelModesUsed,
-        int setId, bool isMultiResolution, int dynamicRangeProfile,
-        int streamUseCase) :
+        int setId, bool isMultiResolution, int64_t dynamicRangeProfile,
+        int streamUseCase, bool deviceTimeBaseIsRealtime, int timestampBase) :
     camera_stream(),
     mId(id),
     mSetId(setId),
@@ -80,7 +80,9 @@ Camera3Stream::Camera3Stream(int id,
     mOriginalDataSpace(dataSpace),
     mPhysicalCameraId(physicalCameraId),
     mLastTimestamp(0),
-    mIsMultiResolution(isMultiResolution) {
+    mIsMultiResolution(isMultiResolution),
+    mDeviceTimeBaseIsRealtime(deviceTimeBaseIsRealtime),
+    mTimestampBase(timestampBase) {
 
     camera_stream::stream_type = type;
     camera_stream::width = width;
@@ -153,7 +155,7 @@ int Camera3Stream::getOriginalFormat() const {
     return mOriginalFormat;
 }
 
-int Camera3Stream::getDynamicRangeProfile() const {
+int64_t Camera3Stream::getDynamicRangeProfile() const {
     return camera_stream::dynamic_range_profile;
 }
 
@@ -179,6 +181,14 @@ int Camera3Stream::getMaxHalBuffers() const {
 
 int Camera3Stream::getStreamUseCase() const {
     return camera_stream::use_case;
+}
+
+int Camera3Stream::getTimestampBase() const {
+    return mTimestampBase;
+}
+
+bool Camera3Stream::isDeviceTimeBaseRealtime() const {
+    return mDeviceTimeBaseIsRealtime;
 }
 
 void Camera3Stream::setOfflineProcessingSupport(bool support) {
@@ -1093,7 +1103,7 @@ status_t Camera3Stream::getBuffers(std::vector<OutstandingBuffer>* buffers,
 }
 
 void Camera3Stream::queueHDRMetadata(buffer_handle_t buffer, sp<ANativeWindow>& anw,
-        int dynamicRangeProfile) {
+        int64_t dynamicRangeProfile) {
     auto& mapper = GraphicBufferMapper::get();
     switch (dynamicRangeProfile) {
         case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HDR10: {
