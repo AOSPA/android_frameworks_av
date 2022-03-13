@@ -1497,13 +1497,12 @@ status_t AudioSystem::getAudioPort(struct audio_port_v7* port) {
     if (port == nullptr) {
         return BAD_VALUE;
     }
-
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
-    media::AudioPort portAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_port_v7_AudioPort(*port));
+    media::AudioPort portAidl;
     RETURN_STATUS_IF_ERROR(
-            statusTFromBinderStatus(aps->getAudioPort(portAidl, &portAidl)));
+            statusTFromBinderStatus(aps->getAudioPort(port->id, &portAidl)));
     *port = VALUE_OR_RETURN_STATUS(aidl2legacy_AudioPort_audio_port_v7(portAidl));
     return OK;
 }
@@ -1911,20 +1910,22 @@ status_t AudioSystem::setSurroundFormatEnabled(audio_format_t audioFormat, bool 
             aps->setSurroundFormatEnabled(audioFormatAidl, enabled));
 }
 
-status_t AudioSystem::setAssistantUid(uid_t uid) {
+status_t AudioSystem::setAssistantServicesUids(const std::vector<uid_t>& uids) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
-    int32_t uidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(uid));
-    return statusTFromBinderStatus(aps->setAssistantUid(uidAidl));
+    std::vector<int32_t> uidsAidl = VALUE_OR_RETURN_STATUS(
+                convertContainer<std::vector<int32_t>>(uids, legacy2aidl_uid_t_int32_t));
+    return statusTFromBinderStatus(aps->setAssistantServicesUids(uidsAidl));
 }
 
-status_t AudioSystem::setHotwordDetectionServiceUid(uid_t uid) {
+status_t AudioSystem::setActiveAssistantServicesUids(const std::vector<uid_t>& activeUids) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) return PERMISSION_DENIED;
 
-    int32_t uidAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(uid));
-    return statusTFromBinderStatus(aps->setHotwordDetectionServiceUid(uidAidl));
+    std::vector<int32_t> activeUidsAidl = VALUE_OR_RETURN_STATUS(
+                convertContainer<std::vector<int32_t>>(activeUids, legacy2aidl_uid_t_int32_t));
+    return statusTFromBinderStatus(aps->setActiveAssistantServicesUids(activeUidsAidl));
 }
 
 status_t AudioSystem::setA11yServicesUids(const std::vector<uid_t>& uids) {

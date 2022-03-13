@@ -44,14 +44,14 @@ static void frameCallback(const AChoreographerFrameCallbackData* callbackData, v
     size_t length = AChoreographerFrameCallbackData_getFrameTimelinesLength(callbackData);
     std::vector<nsecs_t> timeline(length);
     for (size_t i = 0; i < length; i++) {
-        nsecs_t timestamp = AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentTimeNanos(
+        nsecs_t timestamp = AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(
                 callbackData, i);
         timeline[i] = timestamp;
     }
 
     parent->onNewPresentationTime(timeline);
 
-    AChoreographer_postExtendedFrameCallback(AChoreographer_getInstance(), frameCallback, data);
+    AChoreographer_postVsyncCallback(AChoreographer_getInstance(), frameCallback, data);
 }
 
 struct ChoreographerThread : public Thread {
@@ -86,7 +86,7 @@ status_t ChoreographerThread::readyToRun() {
         return NO_INIT;
     }
 
-    AChoreographer_postExtendedFrameCallback(
+    AChoreographer_postVsyncCallback(
             AChoreographer_getInstance(), frameCallback, mParent);
     return OK;
 }
@@ -187,7 +187,7 @@ void PreviewFrameScheduler::onNewPresentationTime(const std::vector<nsecs_t>& ti
 
 status_t PreviewFrameScheduler::queueBufferToClientLocked(
         const BufferHolder& bufferHolder, nsecs_t timestamp) {
-    mParent.setTransform(bufferHolder.transform);
+    mParent.setTransform(bufferHolder.transform, true/*mayChangeMirror*/);
 
     status_t res = native_window_set_buffers_timestamp(mConsumer.get(), timestamp);
     if (res != OK) {
