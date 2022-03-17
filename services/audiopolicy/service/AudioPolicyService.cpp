@@ -397,6 +397,7 @@ void AudioPolicyService::doOnCheckSpatializer()
             if (status == NO_ERROR && currentOutput == newOutput) {
                 return;
             }
+            size_t numActiveTracks = countActiveClientsOnOutput_l(newOutput);
             mLock.unlock();
             // It is OK to call detachOutput() is none is already attached.
             mSpatializer->detachOutput();
@@ -404,7 +405,7 @@ void AudioPolicyService::doOnCheckSpatializer()
                 mLock.lock();
                 return;
             }
-            status = mSpatializer->attachOutput(newOutput);
+            status = mSpatializer->attachOutput(newOutput, numActiveTracks);
             mLock.lock();
             if (status != NO_ERROR) {
                 mAudioPolicyManager->releaseSpatializerOutput(newOutput);
@@ -420,6 +421,34 @@ void AudioPolicyService::doOnCheckSpatializer()
         }
     }
 }
+
+size_t AudioPolicyService::countActiveClientsOnOutput_l(audio_io_handle_t output) REQUIRES(mLock) {
+    size_t count = 0;
+    for (size_t i = 0; i < mAudioPlaybackClients.size(); i++) {
+        auto client = mAudioPlaybackClients.valueAt(i);
+        if (client->io == output && client->active) {
+            count++;
+        }
+    }
+    return count;
+}
+
+void AudioPolicyService::onUpdateActiveSpatializerTracks_l() {
+    if (mSpatializer == nullptr) {
+        return;
+    }
+    mOutputCommandThread->updateActiveSpatializerTracksCommand();
+}
+
+void AudioPolicyService::doOnUpdateActiveSpatializerTracks()
+{
+    Mutex::Autolock _l(mLock);
+    if (mSpatializer == nullptr) {
+        return;
+    }
+    mSpatializer->updateActiveTracks(countActiveClientsOnOutput_l(mSpatializer->getOutput()));
+}
+
 
 status_t AudioPolicyService::clientCreateAudioPatch(const struct audio_patch *patch,
                                                 audio_patch_handle_t *handle,
@@ -579,11 +608,6 @@ status_t AudioPolicyService::dumpInternals(int fd)
     const size_t SIZE = 256;
     char buffer[SIZE];
     String8 result;
-
-    snprintf(buffer, SIZE, "AudioPolicyManager: %p\n", mAudioPolicyManager);
-    result.append(buffer);
-    snprintf(buffer, SIZE, "Command Thread: %p\n", mAudioCommandThread.get());
-    result.append(buffer);
 
     snprintf(buffer, SIZE, "Supported System Usages:\n  ");
     result.append(buffer);
@@ -1014,12 +1038,24 @@ status_t AudioPolicyService::dump(int fd, const Vector<String16>& args __unused)
         }
 
         dumpInternals(fd);
+
+        String8 actPtr = String8::format("AudioCommandThread: %p\n", mAudioCommandThread.get());
+        write(fd, actPtr.string(), actPtr.size());
         if (mAudioCommandThread != 0) {
             mAudioCommandThread->dump(fd);
         }
 
+        String8 octPtr = String8::format("OutputCommandThread: %p\n", mOutputCommandThread.get());
+        write(fd, octPtr.string(), octPtr.size());
+        if (mOutputCommandThread != 0) {
+            mOutputCommandThread->dump(fd);
+        }
+
         if (mAudioPolicyManager) {
             mAudioPolicyManager->dump(fd);
+        } else {
+            String8 apmPtr = String8::format("AudioPolicyManager: %p\n", mAudioPolicyManager);
+            write(fd, apmPtr.string(), apmPtr.size());
         }
 
         mPackageManager.dump(fd);
@@ -1085,7 +1121,6 @@ status_t AudioPolicyService::onTransact(
         case TRANSACTION_isStreamActive:
         case TRANSACTION_isStreamActiveRemotely:
         case TRANSACTION_isSourceActive:
-        case TRANSACTION_getDevicesForStream:
         case TRANSACTION_registerPolicyMixes:
         case TRANSACTION_setMasterMono:
         case TRANSACTION_getSurroundFormats:
@@ -1959,14 +1994,25 @@ bool AudioPolicyService::AudioCommandThread::threadLoop()
                     mLock.lock();
                     } break;
 
-                case CHECK_SPATIALIZER: {
-                    ALOGV("AudioCommandThread() processing updateUID states");
+                case CHECK_SPATIALIZER_OUTPUT: {
+                    ALOGV("AudioCommandThread() processing check spatializer");
                     svc = mService.promote();
                     if (svc == 0) {
                         break;
                     }
                     mLock.unlock();
                     svc->doOnCheckSpatializer();
+                    mLock.lock();
+                    } break;
+
+                case UPDATE_ACTIVE_SPATIALIZER_TRACKS: {
+                    ALOGV("AudioCommandThread() processing update spatializer tracks");
+                    svc = mService.promote();
+                    if (svc == 0) {
+                        break;
+                    }
+                    mLock.unlock();
+                    svc->doOnUpdateActiveSpatializerTracks();
                     mLock.lock();
                     } break;
 
@@ -2022,10 +2068,6 @@ status_t AudioPolicyService::AudioCommandThread::dump(int fd)
     const size_t SIZE = 256;
     char buffer[SIZE];
     String8 result;
-
-    snprintf(buffer, SIZE, "AudioCommandThread %p Dump\n", this);
-    result.append(buffer);
-    write(fd, result.string(), result.size());
 
     const bool locked = dumpTryLock(mLock);
     if (!locked) {
@@ -2296,8 +2338,16 @@ void AudioPolicyService::AudioCommandThread::routingChangedCommand()
 void AudioPolicyService::AudioCommandThread::checkSpatializerCommand()
 {
     sp<AudioCommand>command = new AudioCommand();
-    command->mCommand = CHECK_SPATIALIZER;
+    command->mCommand = CHECK_SPATIALIZER_OUTPUT;
     ALOGV("AudioCommandThread() adding check spatializer");
+    sendCommand(command);
+}
+
+void AudioPolicyService::AudioCommandThread::updateActiveSpatializerTracksCommand()
+{
+    sp<AudioCommand>command = new AudioCommand();
+    command->mCommand = UPDATE_ACTIVE_SPATIALIZER_TRACKS;
+    ALOGV("AudioCommandThread() adding update active spatializer tracks");
     sendCommand(command);
 }
 

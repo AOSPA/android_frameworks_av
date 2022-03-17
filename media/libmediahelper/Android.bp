@@ -54,6 +54,11 @@ cc_defaults {
             enabled: false,
         },
     },
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.media",
+        "test_com.android.media",
+    ],
 }
 
 cc_library {
@@ -63,6 +68,7 @@ cc_library {
         enabled: true,
     },
     defaults: ["libmedia_helper_defaults"],
+    min_sdk_version: "29",
 }
 
 cc_library {
