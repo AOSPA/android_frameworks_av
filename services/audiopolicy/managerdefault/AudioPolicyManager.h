@@ -190,12 +190,37 @@ public:
             return mEngine->getProductStrategyForAttributes(attributes);
         }
 
-        // return the enabled output devices for the given stream type
-        virtual DeviceTypeSet getDevicesForStream(audio_stream_type_t stream);
-
+        /**
+         * Returns a vector of devices associated with attributes.
+         *
+         * An AudioTrack opened with specified attributes should play on the returned devices.
+         * If forVolume is set to true, the caller is AudioService, determining the proper
+         * device volume to adjust.
+         *
+         * Devices are determined in the following precedence:
+         * 1) Devices associated with a dynamic policy matching the attributes.  This is often
+         *    a remote submix from MIX_ROUTE_FLAG_LOOP_BACK.  Secondary mixes from a
+         *    dynamic policy are not included.
+         *
+         * If no such dynamic policy then
+         * 2) Devices containing an active client using setPreferredDevice
+         *    with same strategy as the attributes.
+         *    (from the default Engine::getOutputDevicesForAttributes() implementation).
+         *
+         * If no corresponding active client with setPreferredDevice then
+         * 3) Devices associated with the strategy determined by the attributes
+         *    (from the default Engine::getOutputDevicesForAttributes() implementation).
+         *
+         * @param attributes to be considered
+         * @param devices    an AudioDeviceTypeAddrVector container passed in that
+         *                   will be filled on success.
+         * @param forVolume  true if the devices are to be associated with current device volume.
+         * @return           NO_ERROR on success.
+         */
         virtual status_t getDevicesForAttributes(
                 const audio_attributes_t &attributes,
-                AudioDeviceTypeAddrVector *devices);
+                AudioDeviceTypeAddrVector *devices,
+                bool forVolume);
 
         virtual audio_io_handle_t getOutputForEffect(const effect_descriptor_t *desc = NULL);
         virtual status_t registerEffect(const effect_descriptor_t *desc,
@@ -239,10 +264,7 @@ public:
         virtual status_t getAudioPort(struct audio_port_v7 *port);
         virtual status_t createAudioPatch(const struct audio_patch *patch,
                                            audio_patch_handle_t *handle,
-                                           uid_t uid) {
-            return createAudioPatchInternal(patch, handle, uid);
-        }
-
+                                           uid_t uid);
         virtual status_t releaseAudioPatch(audio_patch_handle_t handle,
                                               uid_t uid);
         virtual status_t listAudioPatches(unsigned int *num_patches,
@@ -614,13 +636,22 @@ protected:
         void updateCallAndOutputRouting(bool forceVolumeReeval = true, uint32_t delayMs = 0);
 
         bool isCallRxAudioSource(const sp<SourceClientDescriptor> &source) {
-            return mCallRxSourceClientPort != AUDIO_PORT_HANDLE_NONE
-                && source == mAudioSources.valueFor(mCallRxSourceClientPort);
+            return mCallRxSourceClient != nullptr && source == mCallRxSourceClient;
         }
 
         void connectTelephonyRxAudioSource();
 
-        void disconnectTelephonyRxAudioSource();
+        void disconnectTelephonyAudioSource(sp<SourceClientDescriptor> &clientDesc);
+
+        void connectTelephonyTxAudioSource(const sp<DeviceDescriptor> &srcdevice,
+                                           const sp<DeviceDescriptor> &sinkDevice,
+                                           uint32_t delayMs);
+
+        bool isTelephonyRxOrTx(const sp<SwAudioOutputDescriptor>& desc) const {
+            return (mCallRxSourceClient != nullptr && mCallRxSourceClient->belongsToOutput(desc))
+                    || (mCallTxSourceClient != nullptr
+                    &&  mCallTxSourceClient->belongsToOutput(desc));
+        }
 
         /**
          * @brief updates routing for all inputs.
@@ -829,6 +860,12 @@ protected:
         status_t connectAudioSource(const sp<SourceClientDescriptor>& sourceDesc);
         status_t disconnectAudioSource(const sp<SourceClientDescriptor>& sourceDesc);
 
+        status_t connectAudioSourceToSink(const sp<SourceClientDescriptor>& sourceDesc,
+                                          const sp<DeviceDescriptor> &sinkDevice,
+                                          const struct audio_patch *patch,
+                                          audio_patch_handle_t &handle,
+                                          uid_t uid, uint32_t delayMs);
+
         sp<SourceClientDescriptor> getSourceForAttributesOnOutput(audio_io_handle_t output,
                                                                   const audio_attributes_t &attr);
         void clearAudioSourcesForOutput(audio_io_handle_t output);
@@ -879,8 +916,6 @@ protected:
 
         SoundTriggerSessionCollection mSoundTriggerSessions;
 
-        sp<AudioPatch> mCallTxPatch;
-
         HwAudioOutputCollection mHwOutputs;
         SourceClientCollection mAudioSources;
 
@@ -921,9 +956,16 @@ protected:
 
         // The port handle of the hardware audio source created internally for the Call RX audio
         // end point.
-        audio_port_handle_t mCallRxSourceClientPort = AUDIO_PORT_HANDLE_NONE;
+        sp<SourceClientDescriptor> mCallRxSourceClient;
+        sp<SourceClientDescriptor> mCallTxSourceClient;
+
+        bool isMsdPatch(const audio_patch_handle_t &handle) const;
 
 private:
+        sp<SourceClientDescriptor> startAudioSourceInternal(
+                const struct audio_port_config *source, const audio_attributes_t *attributes,
+                uid_t uid);
+
         void onNewAudioModulesAvailableInt(DeviceVector *newDevices);
         void chkDpConnAndAllowedForVoice(audio_devices_t device, audio_policy_dev_state_t state);
 
@@ -1107,21 +1149,25 @@ protected:
          * @param[out] handle patch handle to be provided if patch installed correctly
          * @param[in] uid of the client
          * @param[in] delayMs if required
-         * @param[in] sourceDesc [optional] in case of external source, source client to be
-         * configured by the patch, i.e. assigning an Output (HW or SW)
+         * @param[in] sourceDesc source client to be configured when creating the patch, i.e.
+         *            assigning an Output (HW or SW) used for volume control.
          * @return NO_ERROR if patch installed correctly, error code otherwise.
          */
         status_t createAudioPatchInternal(const struct audio_patch *patch,
                                           audio_patch_handle_t *handle,
-                                          uid_t uid, uint32_t delayMs = 0,
-                                          const sp<SourceClientDescriptor>& sourceDesc = nullptr);
+                                          uid_t uid, uint32_t delayMs,
+                                          const sp<SourceClientDescriptor>& sourceDesc);
         /**
          * @brief releaseAudioPatchInternal internal function to remove an audio patch
          * @param[in] handle of the patch to be removed
          * @param[in] delayMs if required
+         * @param[in] sourceDesc [optional] in case of external source, source client to be
+         * unrouted from the patch, i.e. assigning an Output (HW or SW)
          * @return NO_ERROR if patch removed correctly, error code otherwise.
          */
-        status_t releaseAudioPatchInternal(audio_patch_handle_t handle, uint32_t delayMs = 0);
+        status_t releaseAudioPatchInternal(audio_patch_handle_t handle,
+                                           uint32_t delayMs = 0,
+                                           const sp<SourceClientDescriptor>& sourceDesc = nullptr);
 
         status_t installPatch(const char *caller,
                 audio_patch_handle_t *patchHandle,
