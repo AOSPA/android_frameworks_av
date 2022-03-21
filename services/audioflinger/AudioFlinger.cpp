@@ -2127,8 +2127,7 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
 
-    // we don't yet support anything other than linear PCM
-    if (!audio_is_valid_format(input.config.format) || !audio_is_linear_pcm(input.config.format)) {
+    if (!audio_is_valid_format(input.config.format) ) {
         ALOGE("createRecord() invalid format %#x", input.config.format);
         lStatus = BAD_VALUE;
         goto Exit;
