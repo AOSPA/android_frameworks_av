@@ -16,6 +16,24 @@
       "message": "where is 1/2 ?\n",
       "revId": "ff718b706408da4161d58b83a3a46e28bae6e64f",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "66b779ac_3cc35e60",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000092
+      },
+      "writtenOn": "2022-03-26T09:32:17Z",
+      "side": 1,
+      "message": "Need rebase.\nhttps://gerrit.aospa.co/c/AOSPA/android_frameworks_base/+/20946",
+      "parentUuid": "dbbc4066_aac7cfe7",
+      "revId": "ff718b706408da4161d58b83a3a46e28bae6e64f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
