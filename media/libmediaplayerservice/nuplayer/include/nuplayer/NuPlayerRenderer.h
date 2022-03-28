@@ -70,6 +70,7 @@ struct NuPlayer::Renderer : public AHandler {
     void resume();
 
     void setVideoFrameRate(float fps);
+    void setIsSeekonPause();
 
     status_t getCurrentPosition(int64_t *mediaUs);
     int64_t getVideoLateByUs();
@@ -309,6 +310,7 @@ protected:
 
 private:
     bool mNeedVideoClearAnchor;
+    bool mIsSeekonPause;
     float mVideoRenderFps;
 };
 

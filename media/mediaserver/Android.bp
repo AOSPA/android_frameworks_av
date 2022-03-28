@@ -30,7 +30,7 @@ cc_defaults {
     name: "mediaserver_defaults",
     shared_libs: [
         "android.hardware.media.omx@1.0",
-        "libandroidicu",
+        "libicu",
         "libfmq",
         "libbinder",
         "libhidlbase",

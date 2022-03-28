@@ -344,7 +344,7 @@ bool isPublicFormat(int32_t format)
     }
 }
 
-bool isStreamUseCaseSupported(int streamUseCase,
+bool isStreamUseCaseSupported(int64_t streamUseCase,
         const CameraMetadata &deviceInfo) {
     camera_metadata_ro_entry_t availableStreamUseCases =
             deviceInfo.find(ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES);
@@ -355,7 +355,7 @@ bool isStreamUseCaseSupported(int streamUseCase,
     }
 
     for (size_t i = 0; i < availableStreamUseCases.count; i++) {
-        if (availableStreamUseCases.data.i32[i] == streamUseCase) {
+        if (availableStreamUseCases.data.i64[i] == streamUseCase) {
             return true;
         }
     }
@@ -367,7 +367,7 @@ binder::Status createSurfaceFromGbp(
         sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp,
         const String8 &logicalCameraId, const CameraMetadata &physicalCameraMetadata,
         const std::vector<int32_t> &sensorPixelModesUsed, int64_t dynamicRangeProfile,
-        int streamUseCase,
+        int64_t streamUseCase,
         int timestampBase,
         int mirrorMode,
         bool isPriviledgedClient) {
@@ -487,7 +487,7 @@ binder::Status createSurfaceFromGbp(
     }
     if (!SessionConfigurationUtils::isStreamUseCaseSupported(streamUseCase,
             physicalCameraMetadata)) {
-        String8 msg = String8::format("Camera %s: stream use case %d not supported,"
+        String8 msg = String8::format("Camera %s: stream use case %" PRId64 " not supported,"
                 " failed to create output stream", logicalCameraId.string(), streamUseCase);
         ALOGE("%s: %s", __FUNCTION__, msg.string());
         return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.string());
@@ -753,7 +753,7 @@ convertToHALStreamCombination(
             return res;
         }
 
-        int streamUseCase = it.getStreamUseCase();
+        int64_t streamUseCase = it.getStreamUseCase();
         int timestampBase = it.getTimestampBase();
         int mirrorMode = it.getMirrorMode();
         if (deferredConsumer) {
@@ -1078,7 +1078,7 @@ bool convertHALStreamCombinationFromV38ToV37(
             // image
             return false;
         }
-        if (static_cast<int32_t>(streamConfigV38.streams[i].useCase) !=
+        if (static_cast<int64_t>(streamConfigV38.streams[i].useCase) !=
                 ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT) {
             // ICameraDevice older than 3.8 doesn't support stream use case
             return false;
