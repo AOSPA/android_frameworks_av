@@ -99,7 +99,7 @@ binder::Status createSurfaceFromGbp(
         sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp,
         const String8 &logicalCameraId, const CameraMetadata &physicalCameraMetadata,
         const std::vector<int32_t> &sensorPixelModesUsed,  int64_t dynamicRangeProfile,
-        int streamUseCase,
+        int64_t streamUseCase,
         int timestampBase,
         int mirrorMode,
         bool isPriviledgedClient=false);
@@ -117,7 +117,7 @@ bool is10bitDynamicRangeProfile(int64_t dynamicRangeProfile);
 // Check if the device supports a given dynamicRangeProfile
 bool isDynamicRangeProfileSupported(int64_t dynamicRangeProfile, const CameraMetadata& staticMeta);
 
-bool isStreamUseCaseSupported(int streamUseCase, const CameraMetadata &deviceInfo);
+bool isStreamUseCaseSupported(int64_t streamUseCase, const CameraMetadata &deviceInfo);
 
 void mapStreamInfo(const OutputStreamInfo &streamInfo,
         camera3::camera_stream_rotation_t rotation, String8 physicalId,

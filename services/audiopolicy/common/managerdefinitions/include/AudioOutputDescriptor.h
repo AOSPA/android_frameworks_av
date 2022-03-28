@@ -439,6 +439,8 @@ public:
 
     uint32_t getRecommendedMuteDurationMs() const override;
 
+    void setTracksInvalidatedStatusByStrategy(product_strategy_t strategy);
+
     const sp<IOProfile> mProfile;          // I/O profile this output derives from
     uint32_t mLatency;                  //
     using AudioOutputDescriptor::mFlags;
