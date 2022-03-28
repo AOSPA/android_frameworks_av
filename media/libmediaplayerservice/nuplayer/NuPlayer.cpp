@@ -1468,6 +1468,9 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 }
                 break;
             }
+            if(mPaused) {
+                mRenderer -> setIsSeekonPause();
+            }
 
             mDeferredActions.push_back(
                     new FlushDecoderAction(FLUSH_CMD_FLUSH /* audio */,
