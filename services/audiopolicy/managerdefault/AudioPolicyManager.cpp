@@ -6885,13 +6885,8 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
         uid = 0;
     }
 
-    // Check for source AUDIO_SOURCE_VOICE_UPLINK when in call.
-    // Device switch during in call record use case returns built-in mic
-    // as new device which is not supported on primary input.
-    // Avoid this by retrieving device based on highest priority source.
     if ((attributes.source == AUDIO_SOURCE_DEFAULT ||
-        (attributes.source != AUDIO_SOURCE_VOICE_UPLINK
-         && attributes.source != AUDIO_SOURCE_ECHO_REFERENCE))
+        attributes.source != AUDIO_SOURCE_ECHO_REFERENCE)
         && isInCall()) {
         attributes.source = AUDIO_SOURCE_VOICE_COMMUNICATION;
     }
