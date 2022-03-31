@@ -3591,7 +3591,7 @@ status_t MPEG4Writer::Track::threadEntry() {
     status_t err = OK;
     MediaBufferBase *buffer;
     const char *trackName = getTrackType();
-    while (!mDone && (err = mSource->read(&buffer)) == OK) {
+    while (!mDone && (err = mSource->read(&buffer)) == OK && buffer != NULL) {
         ALOGV("read:buffer->range_length:%lld", (long long)buffer->range_length());
         int32_t isEOS = false;
         if (buffer->range_length() == 0) {

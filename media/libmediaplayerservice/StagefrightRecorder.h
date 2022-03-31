@@ -20,6 +20,7 @@
 
 #include <media/MediaMetricsItem.h>
 #include <media/MediaRecorderBase.h>
+#include <media/stagefright/AudioSource.h>
 #include <camera/CameraParameters.h>
 #include <utils/String8.h>
 #include <system/audio.h>
@@ -120,6 +121,7 @@ protected:
     audio_encoder mAudioEncoder;
     video_encoder mVideoEncoder;
     bool mUse64BitFileOffset;
+    bool mEnabledCompressAACRecording;
     int32_t mVideoWidth, mVideoHeight;
     int32_t mFrameRate;
     int32_t mVideoBitRate;
@@ -192,6 +194,7 @@ protected:
     float mSelectedMicFieldDimension;
 
     static const int kMaxHighSpeedFps = 1000;
+    static const uint32_t kDspSupportedBitRate = 36000;
 
     virtual status_t prepareInternal();
     status_t setupMPEG4orWEBMRecording();
@@ -265,6 +268,8 @@ protected:
     virtual status_t handleCustomAudioSource(sp<AMessage> /*format*/) {return UNKNOWN_ERROR;}
     virtual status_t handleCustomAudioEncoder() {return UNKNOWN_ERROR;}
     virtual sp<MediaSource> setPCMRecording() {return NULL;}
+    bool isCompressAACRecordingSupported();
+    virtual sp<AudioSource> setAACCompressRecording() {return NULL;}
 
     StagefrightRecorder(const StagefrightRecorder &);
     StagefrightRecorder &operator=(const StagefrightRecorder &);
