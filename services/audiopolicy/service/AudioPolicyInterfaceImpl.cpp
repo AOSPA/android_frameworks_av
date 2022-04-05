@@ -495,6 +495,7 @@ status_t AudioPolicyService::doStartOutput(audio_port_handle_t portId)
     status_t status = mAudioPolicyManager->startOutput(portId);
     if (status == NO_ERROR) {
         client->active = true;
+        onUpdateActiveSpatializerTracks_l();
     }
     return status;
 }
@@ -532,6 +533,7 @@ status_t  AudioPolicyService::doStopOutput(audio_port_handle_t portId)
     status_t status = mAudioPolicyManager->stopOutput(portId);
     if (status == NO_ERROR) {
         client->active = false;
+        onUpdateActiveSpatializerTracks_l();
     }
     return status;
 }
@@ -562,8 +564,10 @@ void AudioPolicyService::doReleaseOutput(audio_port_handle_t portId)
             client->io, client->stream, client->session);
     }
     Mutex::Autolock _l(mLock);
+    if (client != nullptr && client->active) {
+        onUpdateActiveSpatializerTracks_l();
+    }
     mAudioPlaybackClients.removeItem(portId);
-
     // called from internal thread: no need to clear caller identity
     mAudioPolicyManager->releaseOutput(portId);
 }
@@ -1179,31 +1183,8 @@ Status AudioPolicyService::getStrategyForStream(AudioStreamType streamAidl,
     return Status::ok();
 }
 
-//audio policy: use audio_device_t appropriately
-
-Status AudioPolicyService::getDevicesForStream(
-        AudioStreamType streamAidl,
-        std::vector<AudioDeviceDescription>* _aidl_return) {
-    audio_stream_type_t stream = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioStreamType_audio_stream_type_t(streamAidl));
-
-    if (uint32_t(stream) >= AUDIO_STREAM_PUBLIC_CNT) {
-        *_aidl_return = std::vector<AudioDeviceDescription>{};
-        return Status::ok();
-    }
-    if (mAudioPolicyManager == NULL) {
-        return binderStatusFromStatusT(NO_INIT);
-    }
-    Mutex::Autolock _l(mLock);
-    AutoCallerClear acc;
-    *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
-            convertContainer<std::vector<AudioDeviceDescription>>(
-                    mAudioPolicyManager->getDevicesForStream(stream),
-                    legacy2aidl_audio_devices_t_AudioDeviceDescription));
-    return Status::ok();
-}
-
 Status AudioPolicyService::getDevicesForAttributes(const media::AudioAttributesEx& attrAidl,
+                                                   bool forVolume,
                                                    std::vector<AudioDevice>* _aidl_return)
 {
     AudioAttributes aa = VALUE_OR_RETURN_BINDER_STATUS(
@@ -1216,7 +1197,8 @@ Status AudioPolicyService::getDevicesForAttributes(const media::AudioAttributesE
     Mutex::Autolock _l(mLock);
     AutoCallerClear acc;
     RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
-            mAudioPolicyManager->getDevicesForAttributes(aa.getAttributes(), &devices)));
+            mAudioPolicyManager->getDevicesForAttributes(
+                    aa.getAttributes(), &devices, forVolume)));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
             convertContainer<std::vector<AudioDevice>>(devices,
                                                        legacy2aidl_AudioDeviceTypeAddress));
@@ -1587,12 +1569,9 @@ Status AudioPolicyService::listAudioPorts(media::AudioPortRole roleAidl,
     return Status::ok();
 }
 
-Status AudioPolicyService::getAudioPort(const media::AudioPort& portAidl,
+Status AudioPolicyService::getAudioPort(int portId,
                                         media::AudioPort* _aidl_return) {
-    audio_port_v7 port = VALUE_OR_RETURN_BINDER_STATUS(
-            aidl2legacy_AudioPort_audio_port_v7(portAidl));
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(AudioValidator::validateAudioPort(port)));
-
+    audio_port_v7 port{ .id = portId };
     Mutex::Autolock _l(mLock);
     if (mAudioPolicyManager == NULL) {
         return binderStatusFromStatusT(NO_INIT);
@@ -2022,34 +2001,43 @@ Status AudioPolicyService::setSurroundFormatEnabled(
             mAudioPolicyManager->setSurroundFormatEnabled(audioFormat, enabled));
 }
 
-Status AudioPolicyService::setAssistantUid(int32_t uidAidl)
-{
-    uid_t uid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_uid_t(uidAidl));
-    Mutex::Autolock _l(mLock);
-    mUidPolicy->setAssistantUid(uid);
+Status convertInt32VectorToUidVectorWithLimit(
+        const std::vector<int32_t>& uidsAidl, std::vector<uid_t>& uids) {
+    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
+        convertRangeWithLimit(uidsAidl.begin(),
+            uidsAidl.end(),
+            std::back_inserter(uids),
+            aidl2legacy_int32_t_uid_t,
+            MAX_ITEMS_PER_LIST)));
+
     return Status::ok();
 }
 
-Status AudioPolicyService::setHotwordDetectionServiceUid(int32_t uidAidl)
+Status AudioPolicyService::setAssistantServicesUids(const std::vector<int32_t>& uidsAidl)
 {
-    uid_t uid = VALUE_OR_RETURN_BINDER_STATUS(aidl2legacy_int32_t_uid_t(uidAidl));
+    std::vector<uid_t> uids;
+    RETURN_IF_BINDER_ERROR(convertInt32VectorToUidVectorWithLimit(uidsAidl, uids));
+
     Mutex::Autolock _l(mLock);
-    mUidPolicy->setHotwordDetectionServiceUid(uid);
+    mUidPolicy->setAssistantUids(uids);
+    return Status::ok();
+}
+
+Status AudioPolicyService::setActiveAssistantServicesUids(
+        const std::vector<int32_t>& activeUidsAidl) {
+    std::vector<uid_t> activeUids;
+    RETURN_IF_BINDER_ERROR(convertInt32VectorToUidVectorWithLimit(activeUidsAidl, activeUids));
+
+    Mutex::Autolock _l(mLock);
+    mUidPolicy->setActiveAssistantUids(activeUids);
     return Status::ok();
 }
 
 Status AudioPolicyService::setA11yServicesUids(const std::vector<int32_t>& uidsAidl)
 {
-    size_t size = uidsAidl.size();
-    if (size > MAX_ITEMS_PER_LIST) {
-        size = MAX_ITEMS_PER_LIST;
-    }
     std::vector<uid_t> uids;
-    RETURN_IF_BINDER_ERROR(binderStatusFromStatusT(
-            convertRange(uidsAidl.begin(),
-                         uidsAidl.begin() + size,
-                         std::back_inserter(uids),
-                         aidl2legacy_int32_t_uid_t)));
+    RETURN_IF_BINDER_ERROR(convertInt32VectorToUidVectorWithLimit(uidsAidl, uids));
+
     Mutex::Autolock _l(mLock);
     mUidPolicy->setA11yUids(uids);
     return Status::ok();

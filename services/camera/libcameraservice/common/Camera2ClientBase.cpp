@@ -34,6 +34,7 @@
 #include "api2/CameraDeviceClient.h"
 
 #include "device3/Camera3Device.h"
+#include "device3/aidl/AidlCamera3Device.h"
 #include "device3/hidl/HidlCamera3Device.h"
 #include "utils/CameraThreadState.h"
 #include "utils/CameraServiceProxyWrapper.h"
@@ -48,6 +49,7 @@ Camera2ClientBase<TClientBase>::Camera2ClientBase(
         const sp<CameraService>& cameraService,
         const sp<TCamCallbacks>& remoteCallback,
         const String16& clientPackageName,
+        bool systemNativeClient,
         const std::optional<String16>& clientFeatureId,
         const String8& cameraId,
         int api1CameraId,
@@ -58,9 +60,9 @@ Camera2ClientBase<TClientBase>::Camera2ClientBase(
         int servicePid,
         bool overrideForPerfClass,
         bool legacyClient):
-        TClientBase(cameraService, remoteCallback, clientPackageName, clientFeatureId,
-                cameraId, api1CameraId, cameraFacing, sensorOrientation, clientPid, clientUid,
-                servicePid),
+        TClientBase(cameraService, remoteCallback, clientPackageName, systemNativeClient,
+                clientFeatureId, cameraId, api1CameraId, cameraFacing, sensorOrientation, clientPid,
+                clientUid, servicePid),
         mSharedCameraCallbacks(remoteCallback),
         mDeviceVersion(cameraService->getDeviceVersion(TClientBase::mCameraIdStr)),
         mDeviceActive(false), mApi1CameraId(api1CameraId)
@@ -118,8 +120,10 @@ status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr
                             mLegacyClient);
             break;
         case IPCTransport::AIDL:
-            ALOGE("%s: AIDL camera3Devices not available yet", __FUNCTION__);
-            return NO_INIT;
+            mDevice =
+                    new AidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
+                            mLegacyClient);
+             break;
         default:
             ALOGE("%s Invalid transport for camera id %s", __FUNCTION__,
                     TClientBase::mCameraIdStr.string());
@@ -311,7 +315,7 @@ void Camera2ClientBase<TClientBase>::notifyError(
 }
 
 template <typename TClientBase>
-status_t Camera2ClientBase<TClientBase>::notifyActive() {
+status_t Camera2ClientBase<TClientBase>::notifyActive(float maxPreviewFps) {
     if (!mDeviceActive) {
         status_t res = TClientBase::startCameraStreamingOps();
         if (res != OK) {
@@ -319,7 +323,7 @@ status_t Camera2ClientBase<TClientBase>::notifyActive() {
                     TClientBase::mCameraIdStr.string(), res);
             return res;
         }
-        CameraServiceProxyWrapper::logActive(TClientBase::mCameraIdStr);
+        CameraServiceProxyWrapper::logActive(TClientBase::mCameraIdStr, maxPreviewFps);
     }
     mDeviceActive = true;
 

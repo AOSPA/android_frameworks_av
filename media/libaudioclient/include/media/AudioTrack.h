@@ -95,34 +95,36 @@ public:
 
     class Buffer
     {
+    friend AudioTrack;
     public:
-        // FIXME use m prefix
+       size_t size() const { return mSize; }
+       size_t getFrameCount() const { return frameCount; }
+       uint8_t * data() const { return ui8; }
+       // Leaving public for now to ease refactoring. This class will be
+       // replaced
         size_t      frameCount;   // number of sample frames corresponding to size;
                                   // on input to obtainBuffer() it is the number of frames desired,
                                   // on output from obtainBuffer() it is the number of available
                                   //    [empty slots for] frames to be filled
                                   // on input to releaseBuffer() it is currently ignored
-
-        size_t      size;         // input/output in bytes == frameCount * frameSize
+    private:
+        size_t      mSize;        // input/output in bytes == frameCount * frameSize
                                   // on input to obtainBuffer() it is ignored
                                   // on output from obtainBuffer() it is the number of available
                                   //    [empty slots for] bytes to be filled,
                                   //    which is frameCount * frameSize
                                   // on input to releaseBuffer() it is the number of bytes to
                                   //    release
-                                  // FIXME This is redundant with respect to frameCount.  Consider
-                                  //    removing size and making frameCount the primary field.
 
         union {
             void*       raw;
             int16_t*    i16;      // signed 16-bit
-            int8_t*     i8;       // unsigned 8-bit, offset by 0x80
+            uint8_t*    ui8;      // unsigned 8-bit, offset by 0x80
         };                        // input to obtainBuffer(): unused, output: pointer to buffer
 
         uint32_t    sequence;       // IAudioTrack instance sequence number, as of obtainBuffer().
                                     // It is set by obtainBuffer() and confirmed by releaseBuffer().
                                     // Not "user-serviceable".
-                                    // TODO Consider sp<IMemory> instead, or in addition to this.
     };
 
     /* As a convenience, if a callback is supplied, a handler thread
@@ -456,6 +458,38 @@ public:
                             float maxRequiredSpeed = 1.0f,
                             audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE);
 
+            struct SetParams {
+                audio_stream_type_t streamType;
+                uint32_t sampleRate;
+                audio_format_t format;
+                audio_channel_mask_t channelMask;
+                size_t frameCount;
+                audio_output_flags_t flags;
+                wp<IAudioTrackCallback> callback;
+                int32_t notificationFrames;
+                sp<IMemory> sharedBuffer;
+                bool threadCanCallJava;
+                audio_session_t sessionId;
+                transfer_type transferType;
+                // TODO don't take pointers here
+                const audio_offload_info_t *offloadInfo;
+                AttributionSourceState attributionSource;
+                const audio_attributes_t* pAttributes;
+                bool doNotReconnect;
+                float maxRequiredSpeed;
+                audio_port_handle_t selectedDeviceId;
+            };
+        private:
+            // Note: Consumes parameters
+            void        set(SetParams& s) {
+                (void)set(s.streamType, s.sampleRate, s.format, s.channelMask, s.frameCount,
+                          s.flags, std::move(s.callback), s.notificationFrames,
+                          std::move(s.sharedBuffer), s.threadCanCallJava, s.sessionId,
+                          s.transferType, s.offloadInfo, std::move(s.attributionSource),
+                          s.pAttributes, s.doNotReconnect, s.maxRequiredSpeed, s.selectedDeviceId);
+                        }
+            void       onFirstRef() override;
+        public:
             status_t    set(audio_stream_type_t streamType,
                             uint32_t sampleRate,
                             audio_format_t format,
@@ -1350,7 +1384,10 @@ public:
     wp<IAudioTrackCallback> mCallback;                   // callback handler for events, or NULL
     sp<IAudioTrackCallback> mLegacyCallbackWrapper;      // wrapper for legacy callback interface
     // for notification APIs
+    std::unique_ptr<SetParams> mSetParams;          // Temporary copy of ctor params to allow for
+                                                    // deferred set after first reference.
 
+    bool                    mInitialized = false;   // Set after track is initialized
     // next 2 fields are const after constructor or set()
     uint32_t                mNotificationFramesReq; // requested number of frames between each
                                                     // notification callback,

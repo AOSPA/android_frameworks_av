@@ -88,7 +88,8 @@ void RecordClientDescriptor::trackEffectEnabled(const sp<EffectDescriptor> &effe
 void RecordClientDescriptor::dump(String8 *dst, int spaces) const
 {
     ClientDescriptor::dump(dst, spaces);
-    dst->appendFormat("%*sSource: %d; Flags: %08x\n", spaces, "", mSource, mFlags);
+    dst->appendFormat("%*sSource: %d; Flags: %08x; is soundtrigger: %d\n",
+            spaces, "", mSource, mFlags, mIsSoundTrigger);
     mEnabledEffects.dump(dst, spaces + 2 /*spaces*/, false /*verbose*/);
 }
 
@@ -99,7 +100,8 @@ SourceClientDescriptor::SourceClientDescriptor(audio_port_handle_t portId, uid_t
     TrackClientDescriptor::TrackClientDescriptor(portId, uid, AUDIO_SESSION_NONE, attributes,
         {config.sample_rate, config.channel_mask, config.format}, AUDIO_PORT_HANDLE_NONE,
         stream, strategy, volumeSource, AUDIO_OUTPUT_FLAG_NONE, false,
-        {} /* Sources do not support secondary outputs*/, nullptr), mSrcDevice(srcDevice)
+        {} /* Sources do not support secondary outputs*/, nullptr),
+    mSrcDevice(srcDevice)
 {
 }
 

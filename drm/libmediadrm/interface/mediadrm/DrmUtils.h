@@ -31,6 +31,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <deque>
 #include <endian.h>
@@ -40,7 +41,7 @@
 #include <vector>
 #include <aidl/android/hardware/drm/LogMessage.h>
 #include <aidl/android/hardware/drm/Status.h>
-
+#include <aidl/android/hardware/drm/IDrmFactory.h>
 
 using namespace ::android::hardware::drm;
 using ::android::hardware::hidl_vec;
@@ -48,7 +49,9 @@ using ::android::hardware::Return;
 
 using ::aidl::android::hardware::drm::LogPriority;
 using ::aidl::android::hardware::drm::LogMessage;
+using ::aidl::android::hardware::drm::Uuid;
 using StatusAidl = ::aidl::android::hardware::drm::Status;
+using IDrmFactoryAidl = ::aidl::android::hardware::drm::IDrmFactory;
 
 namespace android {
 
@@ -98,7 +101,8 @@ void LogToBuffer(android_LogPriority level, const char *fmt, Args... args) {
 
 template <typename... Args>
 void LogToBuffer(android_LogPriority level, const uint8_t uuid[16], const char *fmt, Args... args) {
-    const uint64_t* uuid2 = reinterpret_cast<const uint64_t*>(uuid);
+    uint64_t uuid2[2] = {};
+    std::memcpy(uuid2, uuid, sizeof(uuid2));
     std::string uuidFmt("uuid=[%lx %lx] ");
     uuidFmt += fmt;
     LogToBuffer(level, uuidFmt.c_str(), htobe64(uuid2[0]), htobe64(uuid2[1]), args...);
@@ -160,6 +164,14 @@ void WriteKeysChange(
     }
     obj.writeInt32(hasNewUsableKey);
 }
+
+inline Uuid toAidlUuid(const uint8_t uuid[16]) {
+    Uuid uuidAidl;
+    for (int i = 0; i < 16; ++i) uuidAidl.uuid[i] = uuid[i];
+    return uuidAidl;
+}
+
+std::vector<std::shared_ptr<IDrmFactoryAidl>> makeDrmFactoriesAidl();
 
 std::vector<sp<::V1_0::IDrmFactory>> MakeDrmFactories(const uint8_t uuid[16] = nullptr);
 

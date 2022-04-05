@@ -2665,7 +2665,7 @@ size_t MediaPlayerService::AudioOutput::CallbackData::onMoreData(const AudioTrac
         return 0;
     }
     size_t actualSize = (*me->mCallback)(
-            me.get(), buffer.raw, buffer.size, me->mCallbackCookie,
+            me.get(), buffer.data(), buffer.size(), me->mCallbackCookie,
             CB_EVENT_FILL_BUFFER);
 
     // Log when no data is returned from the callback.
@@ -2677,7 +2677,7 @@ size_t MediaPlayerService::AudioOutput::CallbackData::onMoreData(const AudioTrac
     // This is a benign busy-wait, with the next data request generated 10 ms or more later;
     // nevertheless for power reasons, we don't want to see too many of these.
 
-    ALOGV_IF(actualSize == 0 && buffer->size > 0, "callbackwrapper: empty buffer returned");
+    ALOGV_IF(actualSize == 0 && buffer.size > 0, "callbackwrapper: empty buffer returned");
     unlock();
     return actualSize;
 }

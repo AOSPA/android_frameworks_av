@@ -48,6 +48,7 @@ public:
     Camera2ClientBase(const sp<CameraService>& cameraService,
                       const sp<TCamCallbacks>& remoteCallback,
                       const String16& clientPackageName,
+                      bool systemNativeClient,
                       const std::optional<String16>& clientFeatureId,
                       const String8& cameraId,
                       int api1CameraId,
@@ -72,7 +73,8 @@ public:
 
     virtual void          notifyError(int32_t errorCode,
                                       const CaptureResultExtras& resultExtras);
-    virtual status_t      notifyActive();  // Returns errors on app ops permission failures
+    // Returns errors on app ops permission failures
+    virtual status_t      notifyActive(float maxPreviewFps);
     virtual void          notifyIdle(int64_t requestCount, int64_t resultErrorCount,
                                      bool deviceError,
                                      const std::vector<hardware::CameraStreamStats>& streamStats);

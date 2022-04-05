@@ -28,6 +28,7 @@
 #include "DrmPlugin.h"
 #include "Session.h"
 #include "Utils.h"
+#include "AidlClearKeryProperties.h"
 
 namespace {
 const std::string kKeySetIdPrefix("ckid");
@@ -81,12 +82,13 @@ DrmPlugin::DrmPlugin(SessionLibrary* sessionLibrary)
 
 void DrmPlugin::initProperties() {
     mStringProperties.clear();
-    mStringProperties[kVendorKey] = kVendorValue;
+    mStringProperties[kVendorKey] = kAidlVendorValue;
     mStringProperties[kVersionKey] = kVersionValue;
-    mStringProperties[kPluginDescriptionKey] = kPluginDescriptionValue;
-    mStringProperties[kAlgorithmsKey] = kAlgorithmsValue;
-    mStringProperties[kListenerTestSupportKey] = kListenerTestSupportValue;
-    mStringProperties[kDrmErrorTestKey] = kDrmErrorTestValue;
+    mStringProperties[kPluginDescriptionKey] = kAidlPluginDescriptionValue;
+    mStringProperties[kAlgorithmsKey] = kAidlAlgorithmsValue;
+    mStringProperties[kListenerTestSupportKey] = kAidlListenerTestSupportValue;
+    mStringProperties[kDrmErrorTestKey] = kAidlDrmErrorTestValue;
+    mStringProperties[kAidlVersionKey] = kAidlVersionValue;
 
     std::vector<uint8_t> valueVector;
     valueVector.clear();
@@ -377,6 +379,8 @@ void DrmPlugin::installSecureStop(const std::vector<uint8_t>& sessionId) {
         value = mStringProperties[kListenerTestSupportKey];
     } else if (name == kDrmErrorTestKey) {
         value = mStringProperties[kDrmErrorTestKey];
+    } else if (name == kAidlVersionKey) {
+        value = mStringProperties[kAidlVersionValue];
     } else {
         ALOGE("App requested unknown string property %s", name.c_str());
         status = Status::ERROR_DRM_CANNOT_HANDLE;
@@ -583,7 +587,7 @@ void DrmPlugin::installSecureStop(const std::vector<uint8_t>& sessionId) {
 
         std::vector<uint8_t> keyId3 = {0x0, 0x1, 0x2};
         keyStatus.keyId = keyId3;
-        keyStatus.type = KeyStatusType::USABLEINFUTURE;
+        keyStatus.type = KeyStatusType::USABLE_IN_FUTURE;
         keysStatus.push_back(keyStatus);
 
         sendKeysChange(sessionId, keysStatus, true);
@@ -760,15 +764,6 @@ void DrmPlugin::installSecureStop(const std::vector<uint8_t>& sessionId) {
         bool* _aidl_return) {
     UNUSED(in_mime);
     UNUSED(in_level);
-    *_aidl_return = false;
-    return ::ndk::ScopedAStatus::ok();
-}
-
-::ndk::ScopedAStatus DrmPlugin::requiresSecureDecoderDefault(const std::string& in_mime,
-                                                             bool* _aidl_return) {
-    UNUSED(in_mime);
-    // Clearkey only supports SW_SECURE_CRYPTO, so we always returns false
-    // regardless of mime type.
     *_aidl_return = false;
     return ::ndk::ScopedAStatus::ok();
 }

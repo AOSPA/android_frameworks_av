@@ -268,7 +268,7 @@ class LegacyCallbackWrapper : public AudioRecord::IAudioRecordCallback {
     size_t onMoreData(const AudioRecord::Buffer& buffer) override {
         AudioRecord::Buffer copy = buffer;
         mCallback(AudioRecord::EVENT_MORE_DATA, mData, &copy);
-        return copy.size;
+        return copy.size();
     }
 
     void onOverrun() override { mCallback(AudioRecord::EVENT_OVERRUN, mData, nullptr); }
@@ -308,7 +308,8 @@ status_t AudioRecord::set(
         int32_t maxSharedAudioHistoryMs)
 {
     status_t status = NO_ERROR;
-    const sp<IAudioRecordCallback> callbackHandle = callback.promote();
+    LOG_ALWAYS_FATAL_IF(mInitialized, "%s: should not be called twice", __func__);
+    mInitialized = true;
     // Note mPortId is not valid until the track is created, so omit mPortId in ALOG for set.
     ALOGV("%s(): inputSource %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
           "notificationFrames %u, sessionId %d, transferType %d, flags %#x, attributionSource %s"
@@ -374,14 +375,14 @@ status_t AudioRecord::set(
     mTransfer = transferType;
     switch (mTransfer) {
     case TRANSFER_DEFAULT:
-        if (callbackHandle == nullptr || threadCanCallJava) {
+        if (callback == nullptr || threadCanCallJava) {
             mTransfer = TRANSFER_SYNC;
         } else {
             mTransfer = TRANSFER_CALLBACK;
         }
         break;
     case TRANSFER_CALLBACK:
-        if (callbackHandle == nullptr) {
+        if (callback == nullptr) {
             errorMessage = StringPrintf(
                     "%s: Transfer type TRANSFER_CALLBACK but callback == nullptr", __func__);
             status = BAD_VALUE;
@@ -430,7 +431,7 @@ status_t AudioRecord::set(
     mNotificationFramesReq = notificationFrames;
     // mNotificationFramesAct is initialized in createRecord_l
 
-    mCallback = callbackHandle;
+    mCallback = callback;
     if (mCallback != nullptr) {
         mAudioRecordThread = new AudioRecordThread(*this);
         mAudioRecordThread->run("AudioRecord", ANDROID_PRIORITY_AUDIO);
@@ -647,7 +648,7 @@ status_t AudioRecord::setMarkerPosition(uint32_t marker)
 {
     AutoMutex lock(mLock);
     // The only purpose of setting marker position is to get a callback
-    if (mCallback.promote() == nullptr) {
+    if (mCallback == nullptr) {
         return INVALID_OPERATION;
     }
 
@@ -677,7 +678,7 @@ status_t AudioRecord::setPositionUpdatePeriod(uint32_t updatePeriod)
 {
     AutoMutex lock(mLock);
     // The only purpose of setting position update period is to get a callback
-    if (mCallback.promote() == nullptr) {
+    if (mCallback == nullptr) {
         return INVALID_OPERATION;
     }
 
@@ -1044,7 +1045,7 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch)
                 mNotificationFramesReq, output.notificationFrameCount, output.frameCount);
     }
     mNotificationFramesAct = (uint32_t)output.notificationFrameCount;
-    if (mServerConfig.format != mFormat && mCallback.promote() != nullptr) {
+    if (mServerConfig.format != mFormat && mCallback != nullptr) {
         mFormatConversionBufRaw = std::make_unique<uint8_t[]>(mNotificationFramesAct * mFrameSize);
         mFormatConversionBuffer.raw = mFormatConversionBufRaw.get();
     }
@@ -1149,7 +1150,7 @@ status_t AudioRecord::obtainBuffer(Buffer* audioBuffer, int32_t waitCount, size_
     }
     if (mTransfer != TRANSFER_OBTAIN) {
         audioBuffer->frameCount = 0;
-        audioBuffer->size = 0;
+        audioBuffer->mSize = 0;
         audioBuffer->raw = NULL;
         if (nonContig != NULL) {
             *nonContig = 0;
@@ -1238,7 +1239,7 @@ status_t AudioRecord::obtainBuffer(Buffer* audioBuffer, const struct timespec *r
     } while ((status == DEAD_OBJECT) && (tryCounter-- > 0));
 
     audioBuffer->frameCount = buffer.mFrameCount;
-    audioBuffer->size = buffer.mFrameCount * mServerFrameSize;
+    audioBuffer->mSize = buffer.mFrameCount * mServerFrameSize;
     audioBuffer->raw = buffer.mRaw;
     audioBuffer->sequence = oldSequence;
     if (nonContig != NULL) {
@@ -1315,7 +1316,7 @@ ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
 
         size_t bytesRead = audioBuffer.frameCount * mFrameSize;
         memcpy_by_audio_format(buffer, mFormat, audioBuffer.raw, mServerConfig.format,
-                               audioBuffer.size / mServerSampleSize);
+                               audioBuffer.mSize / mServerSampleSize);
         buffer = ((char *) buffer) + bytesRead;
         userSize -= bytesRead;
         read += bytesRead;
@@ -1521,15 +1522,15 @@ nsecs_t AudioRecord::processAudioBuffer()
         if (mServerConfig.format != mFormat) {
             buffer = &mFormatConversionBuffer;
             buffer->frameCount = audioBuffer.frameCount;
-            buffer->size = buffer->frameCount * mFrameSize;
+            buffer->mSize = buffer->frameCount * mFrameSize;
             buffer->sequence = audioBuffer.sequence;
             memcpy_by_audio_format(buffer->raw, mFormat, audioBuffer.raw,
-                                   mServerConfig.format, audioBuffer.size / mServerSampleSize);
+                                   mServerConfig.format, audioBuffer.size() / mServerSampleSize);
         }
 
-        const size_t reqSize = buffer->size;
+        const size_t reqSize = buffer->size();
         const size_t readSize = callback->onMoreData(*buffer);
-        buffer->size = readSize;
+        buffer->mSize = readSize;
 
         // Validate on returned size
         if (ssize_t(readSize) < 0 || readSize > reqSize) {
