@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f418ddc4_62db3268",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000779
+      },
+      "writtenOn": "2022-04-09T17:18:54Z",
+      "side": 1,
+      "message": "This code should not run on all device.\n\n// TODO: Maybe make this a soong config?",
+      "revId": "e5e1d3fe4f7adf8e22a093b7770a2bc1e12e88dc",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
