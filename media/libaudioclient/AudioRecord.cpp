@@ -977,9 +977,14 @@ status_t AudioRecord::createRecord_l(const Modulo<uint32_t> &epoch)
     mSessionId = output.sessionId;
     mSampleRate = output.sampleRate;
     mServerConfig = output.serverConfig;
-    mServerFrameSize = audio_bytes_per_frame(
-            audio_channel_count_from_in_mask(mServerConfig.channel_mask), mServerConfig.format);
-    mServerSampleSize = audio_bytes_per_sample(mServerConfig.format);
+    if (audio_is_linear_pcm(mServerConfig.format)) {
+        mServerFrameSize = audio_bytes_per_frame(
+            audio_channel_count_from_in_mask(mServerConfig.channel_mask),
+            mServerConfig.format);
+        mServerSampleSize = audio_bytes_per_sample(mServerConfig.format);
+    } else {
+        mServerFrameSize = mServerSampleSize = sizeof(uint8_t);
+    }
 
     if (output.cblk == 0) {
         errorMessage = StringPrintf("%s(%d): Could not get control block", __func__, mPortId);
