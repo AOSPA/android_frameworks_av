@@ -872,7 +872,7 @@ binder::Status CameraDeviceClient::createStream(
     bool deferredConsumerOnly = deferredConsumer && numBufferProducers == 0;
     bool isMultiResolution = outputConfiguration.isMultiResolution();
     int64_t dynamicRangeProfile = outputConfiguration.getDynamicRangeProfile();
-    int streamUseCase = outputConfiguration.getStreamUseCase();
+    int64_t streamUseCase = outputConfiguration.getStreamUseCase();
     int timestampBase = outputConfiguration.getTimestampBase();
     int mirrorMode = outputConfiguration.getMirrorMode();
 
@@ -1271,7 +1271,7 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
     }
     const std::vector<int32_t> &sensorPixelModesUsed =
             outputConfiguration.getSensorPixelModesUsed();
-    int streamUseCase = outputConfiguration.getStreamUseCase();
+    int64_t streamUseCase = outputConfiguration.getStreamUseCase();
     int timestampBase = outputConfiguration.getTimestampBase();
     int64_t dynamicRangeProfile = outputConfiguration.getDynamicRangeProfile();
     int mirrorMode = outputConfiguration.getMirrorMode();
@@ -1643,7 +1643,7 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
     const std::vector<int32_t> &sensorPixelModesUsed =
             outputConfiguration.getSensorPixelModesUsed();
     int64_t dynamicRangeProfile = outputConfiguration.getDynamicRangeProfile();
-    int streamUseCase= outputConfiguration.getStreamUseCase();
+    int64_t streamUseCase= outputConfiguration.getStreamUseCase();
     int timestampBase = outputConfiguration.getTimestampBase();
     int mirrorMode = outputConfiguration.getMirrorMode();
     for (auto& bufferProducer : bufferProducers) {

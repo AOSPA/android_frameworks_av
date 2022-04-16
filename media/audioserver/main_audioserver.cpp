@@ -82,9 +82,9 @@ int main(int argc __unused, char **argv)
     bool doLog = (bool) property_get_bool("ro.test_harness", 0);
 #endif
 
-    uint32_t timeOutMs = (uint32_t)property_get_int32("vendor.audio.hal.boot.timeout.ms", TimeCheck::kDefaultTimeOutMs);
+    uint32_t timeOutMs = (uint32_t)property_get_int32("vendor.audio.hal.boot.timeout.ms", mediautils::TimeCheck::kDefaultTimeOutMs);
 
-    TimeCheck::setSystemReadyTimeoutMs(timeOutMs);
+    mediautils::TimeCheck::setSystemReadyTimeoutMs(timeOutMs);
 
     pid_t childPid;
     // FIXME The advantage of making the process containing media.log service the parent process of
