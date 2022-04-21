@@ -161,6 +161,7 @@ NuPlayer::Renderer::Renderer(
       mUseAudioCallback(false),
       mWakeLock(new AWakeLock()),
       mNeedVideoClearAnchor(false),
+      mIsSeekonPause(false),
       mVideoRenderFps(0.0f) {
     CHECK(mediaClock != NULL);
     mPlaybackRate = mPlaybackSettings.mSpeed;
@@ -646,7 +647,7 @@ void NuPlayer::Renderer::onMessageReceived(const sp<AMessage> &msg) {
 
             int64_t mediaTimeUs = -1;
             if (mAnchorTimeMediaUs < 0 && msg->findInt64("mediaTimeUs", &mediaTimeUs)
-                    && mediaTimeUs != -1 && offloadingAudio()) {
+                    && mediaTimeUs != -1 && (offloadingAudio() || !mIsSeekonPause)) {
                 ALOGI("NOTE: audio still doesn't update anchor yet after wait, video has to update "
                         "anchor and start rendering");
                 int64_t nowUs = ALooper::GetNowUs();
@@ -1377,7 +1378,8 @@ void NuPlayer::Renderer::postDrainVideoQueue() {
             if (mPaused && !mVideoSampleReceived && mHasAudio) {
                 mDrainVideoQueuePending = true;
                 AudioTimestamp ts;
-                if (!offloadingAudio() && mAudioSink->getTimestamp(ts) == WOULD_BLOCK) {
+                if (!offloadingAudio() && mIsSeekonPause
+                       && mAudioSink->getTimestamp(ts) == WOULD_BLOCK) {
                     msg->post();
                     return;
                 }
@@ -1958,7 +1960,7 @@ void NuPlayer::Renderer::onResume() {
         }
     }
 
-    if (audioSinkStart && !offloadingAudio() && mAnchorTimeMediaUs < 0) {
+    if (mIsSeekonPause && audioSinkStart && !offloadingAudio() && mAnchorTimeMediaUs < 0) {
         //In NON-offload playback post seek, delay posting drain video queue
         // till audio start latency, to allow audio update the anchor time
         // also alleviates A/V sync issue
@@ -1968,6 +1970,7 @@ void NuPlayer::Renderer::onResume() {
         msg->setInt32("drainGeneration", getDrainGeneration(false /* audio */));
         msg->post(audioStartLatency);
         mDrainVideoQueuePending = true;
+        mIsSeekonPause = false;
         return;
     }
 
@@ -2294,6 +2297,10 @@ bool NuPlayer::Renderer::isVideoPrerollCompleted() const {
 
 bool NuPlayer::Renderer::isVideoSampleReceived() const {
     return mVideoSampleReceived;
+}
+
+void NuPlayer::Renderer::setIsSeekonPause() {
+    mIsSeekonPause = true;
 }
 
 }  // namespace android
