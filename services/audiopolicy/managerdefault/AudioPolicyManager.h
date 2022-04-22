@@ -122,7 +122,8 @@ public:
                                   audio_port_handle_t *selectedDeviceId,
                                   audio_port_handle_t *portId,
                                   std::vector<audio_io_handle_t> *secondaryOutputs,
-                                  output_type_t *outputType) override;
+                                  output_type_t *outputType,
+                                  bool *isSpatialized) override;
         virtual status_t startOutput(audio_port_handle_t portId);
         virtual status_t stopOutput(audio_port_handle_t portId);
         virtual bool releaseOutput(audio_port_handle_t portId);
@@ -1047,7 +1048,8 @@ protected:
                 audio_port_handle_t *selectedDeviceId,
                 bool *isRequestedDeviceForExclusiveUse,
                 std::vector<sp<AudioPolicyMix>> *secondaryMixes,
-                output_type_t *outputType);
+                output_type_t *outputType,
+                bool *isSpatialized);
         // internal method to return the output handle for the given device and format
         virtual audio_io_handle_t getOutputForDevices(
                 const DeviceVector &devices,
@@ -1055,6 +1057,7 @@ protected:
                 const audio_attributes_t *attr,
                 const audio_config_t *config,
                 audio_output_flags_t *flags,
+                bool *isSpatialized,
                 bool forceMutingHaptic = false);
 
         // Internal method checking if a direct output can be opened matching the requested

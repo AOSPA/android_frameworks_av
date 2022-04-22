@@ -1205,7 +1205,8 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         audio_port_handle_t *selectedDeviceId,
         bool *isRequestedDeviceForExclusiveUse,
         std::vector<sp<AudioPolicyMix>> *secondaryMixes,
-        output_type_t *outputType)
+        output_type_t *outputType,
+        bool *isSpatialized)
 {
     DeviceVector outputDevices;
     const audio_port_handle_t requestedPortId = *selectedDeviceId;
@@ -1214,6 +1215,8 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         mAvailableOutputDevices.getDeviceFromId(requestedPortId);
 
     *outputType = API_OUTPUT_INVALID;
+    *isSpatialized = false;
+
     status_t status = getAudioAttributes(resultAttr, attr, *stream);
     if (status != NO_ERROR) {
         return status;
@@ -1313,7 +1316,7 @@ status_t AudioPolicyManager::getOutputForAttrInt(
 
     *output = AUDIO_IO_HANDLE_NONE;
     if (!msdDevices.isEmpty()) {
-        *output = getOutputForDevices(msdDevices, session, resultAttr, config, flags);
+        *output = getOutputForDevices(msdDevices, session, resultAttr, config, flags, isSpatialized);
         if (*output != AUDIO_IO_HANDLE_NONE && setMsdOutputPatches(&outputDevices) == NO_ERROR) {
             ALOGV("%s() Using MSD devices %s instead of devices %s",
                   __func__, msdDevices.toString().c_str(), outputDevices.toString().c_str());
@@ -1323,7 +1326,7 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     }
     if (*output == AUDIO_IO_HANDLE_NONE) {
         *output = getOutputForDevices(outputDevices, session, resultAttr, config,
-                flags, resultAttr->flags & AUDIO_FLAG_MUTE_HAPTIC);
+                flags, isSpatialized, resultAttr->flags & AUDIO_FLAG_MUTE_HAPTIC);
     }
     if (*output == AUDIO_IO_HANDLE_NONE) {
         return INVALID_OPERATION;
@@ -1382,7 +1385,8 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
                                               audio_port_handle_t *selectedDeviceId,
                                               audio_port_handle_t *portId,
                                               std::vector<audio_io_handle_t> *secondaryOutputs,
-                                              output_type_t *outputType)
+                                              output_type_t *outputType,
+                                              bool *isSpatialized)
 {
     // The supplied portId must be AUDIO_PORT_HANDLE_NONE
     if (*portId != AUDIO_PORT_HANDLE_NONE) {
@@ -1407,7 +1411,7 @@ status_t AudioPolicyManager::getOutputForAttr(const audio_attributes_t *attr,
 
     status_t status = getOutputForAttrInt(&resultAttr, output, session, attr, stream, uid,
             &directConfig, flags, selectedDeviceId, &isRequestedDeviceForExclusiveUse,
-            secondaryOutputs != nullptr ? &secondaryMixes : nullptr, outputType);
+            secondaryOutputs != nullptr ? &secondaryMixes : nullptr, outputType, isSpatialized);
     if (status != NO_ERROR) {
         return status;
     }
@@ -1585,6 +1589,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         const audio_attributes_t *attr,
         const audio_config_t *config,
         audio_output_flags_t *flags,
+        bool *isSpatialized,
         bool forceMutingHaptic)
 {
     audio_io_handle_t output = AUDIO_IO_HANDLE_NONE;
@@ -1684,9 +1689,11 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_ULTRASOUND);
     }
 
+    *isSpatialized = false;
     if (mSpatializerOutput != nullptr
             && canBeSpatializedInt(attr, config,
                     devices.toTypeAddrVector(), false /* allowCurrentOutputReconfig */)) {
+        *isSpatialized = true;
         return mSpatializerOutput->mIoHandle;
     }
 
@@ -4748,10 +4755,11 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
                     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
                     bool isRequestedDeviceForExclusiveUse = false;
                     output_type_t outputType;
+                    bool isSpatialized;
                     getOutputForAttrInt(&resultAttr, &output, AUDIO_SESSION_NONE, &attributes,
                                         &stream, sourceDesc->uid(), &config, &flags,
                                         &selectedDeviceId, &isRequestedDeviceForExclusiveUse,
-                                        nullptr, &outputType);
+                                        nullptr, &outputType, &isSpatialized);
                     if (output == AUDIO_IO_HANDLE_NONE) {
                         ALOGV("%s no output for device %s",
                               __FUNCTION__, sinkDevice->toString().c_str());
