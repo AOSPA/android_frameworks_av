@@ -2234,7 +2234,8 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         pid_t tid,
         status_t *status,
         audio_port_handle_t portId,
-        const sp<media::IAudioTrackCallback>& callback)
+        const sp<media::IAudioTrackCallback>& callback,
+        bool isSpatialized)
 {
     size_t frameCount = *pFrameCount;
     size_t notificationFrameCount = *pNotificationFrameCount;
@@ -2526,7 +2527,8 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
                           channelMask, frameCount,
                           nullptr /* buffer */, (size_t)0 /* bufferSize */, sharedBuffer,
                           sessionId, creatorPid, attributionSource, trackFlags,
-                          TrackBase::TYPE_DEFAULT, portId, SIZE_MAX /*frameCountToBeReady*/, speed);
+                          TrackBase::TYPE_DEFAULT, portId, SIZE_MAX /*frameCountToBeReady*/,
+                          speed, isSpatialized);
 
         lStatus = track != 0 ? track->initCheck() : (status_t) NO_MEMORY;
         if (lStatus != NO_ERROR) {
@@ -3905,14 +3907,14 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                             && effectChain->containsHapticGeneratingEffect_l()) {
                         activeHapticSessionId = track->sessionId();
                         isHapticSessionSpatialized =
-                                mType == SPATIALIZER && track->canBeSpatialized();
+                                mType == SPATIALIZER && track->isSpatialized();
                         break;
                     }
                     if (activeHapticSessionId == AUDIO_SESSION_NONE
                             && track->getHapticPlaybackEnabled()) {
                         activeHapticSessionId = track->sessionId();
                         isHapticSessionSpatialized =
-                                mType == SPATIALIZER && track->canBeSpatialized();
+                                mType == SPATIALIZER && track->isSpatialized();
                     }
                 }
             }
@@ -5604,7 +5606,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 AudioMixer::TRACK,
                 AudioMixer::CHANNEL_MASK, (void *)(uintptr_t)track->channelMask());
 
-            if (mType == SPATIALIZER && !track->canBeSpatialized()) {
+            if (mType == SPATIALIZER && !track->isSpatialized()) {
                 mAudioMixer->setParameter(
                     trackId,
                     AudioMixer::TRACK,
@@ -5654,7 +5656,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
             if (mMixerBufferEnabled
                     && (track->mainBuffer() == mSinkBuffer
                             || track->mainBuffer() == mMixerBuffer)) {
-                if (mType == SPATIALIZER && !track->canBeSpatialized()) {
+                if (mType == SPATIALIZER && !track->isSpatialized()) {
                     mAudioMixer->setParameter(
                             trackId,
                             AudioMixer::TRACK,
@@ -9611,6 +9613,7 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
                 (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_MMAP_NOIRQ | AUDIO_OUTPUT_FLAG_DIRECT);
         audio_port_handle_t deviceId = mDeviceId;
         std::vector<audio_io_handle_t> secondaryOutputs;
+        bool isSpatialized;
         ret = AudioSystem::getOutputForAttr(&mAttr, &io,
                                             mSessionId,
                                             &stream,
@@ -9619,7 +9622,8 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
                                             flags,
                                             &deviceId,
                                             &portId,
-                                            &secondaryOutputs);
+                                            &secondaryOutputs,
+                                            &isSpatialized);
         ALOGD_IF(!secondaryOutputs.empty(),
                  "MmapThread::start does not support secondary outputs, ignoring them");
     } else {
