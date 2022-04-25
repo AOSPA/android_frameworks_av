@@ -1113,8 +1113,7 @@ status_t CCodecConfig::subscribeToConfigUpdate(
         const std::vector<C2Param::Index> &indices,
         c2_blocking_t blocking) {
     mSubscribedIndices.insert(indices.begin(), indices.end());
-    // TODO: enable this when components no longer crash on this config
-    if (mSubscribedIndices.size() != mSubscribedIndicesSize && false) {
+    if (mSubscribedIndices.size() != mSubscribedIndicesSize) {
         std::vector<uint32_t> indices;
         for (C2Param::Index ix : mSubscribedIndices) {
             indices.push_back(ix);
