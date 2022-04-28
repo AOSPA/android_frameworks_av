@@ -154,6 +154,7 @@ CCodecBufferChannel::CCodecBufferChannel(
       mMetaMode(MODE_NONE),
       mInputMetEos(false),
       mLastInputBufferAvailableTs(0u),
+      mIsHWDecoder(false),
       mSendEncryptedInfoBuffer(false) {
     mOutputSurface.lock()->maxDequeueBuffers = kSmoothnessFactor + kRenderingDepth;
     {
@@ -188,6 +189,8 @@ void CCodecBufferChannel::setComponent(
     mComponent = component;
     mComponentName = component->getName() + StringPrintf("#%d", int(uintptr_t(component.get()) % 997));
     mName = mComponentName.c_str();
+    std::regex pattern{"c2\\.qti\\..*\\.decoder.*"};
+    mIsHWDecoder = std::regex_match(mComponentName, pattern);
 }
 
 status_t CCodecBufferChannel::setInputSurface(
@@ -724,8 +727,7 @@ void CCodecBufferChannel::feedInputBufferIfAvailable() {
     // limit this WA to qc hw decoder only
     // if feedInputBufferIfAvailableInternal() successfully (has available input buffer),
     // mLastInputBufferAvailableTs would be updated. otherwise, not input buffer available
-    std::regex pattern{"c2\\.qti\\..*\\.decoder.*"};
-    if (std::regex_match(mComponentName, pattern)) {
+    if (mIsHWDecoder) {
         std::lock_guard<std::mutex> tsLock(mTsLock);
         uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
                 PipelineWatcher::Clock::now().time_since_epoch()).count();
@@ -760,6 +762,11 @@ void CCodecBufferChannel::feedInputBufferIfAvailableInternal() {
             numActiveSlots = input->buffers->numActiveSlots();
             if (numActiveSlots >= input->numSlots) {
                 break;
+            }
+
+            // Control the inputs based on pipelineRoom only for HW decoder
+            if (!mIsHWDecoder) {
+                pipelineRoom = SIZE_MAX;
             }
             if (pipelineRoom <= input->buffers->numClientBuffers()) {
                 ALOGV("pipelineRoom(%zu) is <= numClientBuffers(%zu). "
