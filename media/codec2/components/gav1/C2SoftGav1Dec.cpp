@@ -190,11 +190,18 @@ class C2SoftGav1Dec::IntfImpl : public SimpleInterface<void>::BaseParams {
               .withSetter(ColorAspectsSetter, mDefaultColorAspects, mCodedColorAspects)
               .build());
 
+    std::vector<uint32_t> pixelFormats = {HAL_PIXEL_FORMAT_YCBCR_420_888};
+    if (isAtLeastT()) {
+        pixelFormats.push_back(HAL_PIXEL_FORMAT_YCBCR_P010);
+    }
     // TODO: support more formats?
-    addParameter(DefineParam(mPixelFormat, C2_PARAMKEY_PIXEL_FORMAT)
-                     .withConstValue(new C2StreamPixelFormatInfo::output(
-                         0u, HAL_PIXEL_FORMAT_YCBCR_420_888))
-                     .build());
+    addParameter(
+            DefineParam(mPixelFormat, C2_PARAMKEY_PIXEL_FORMAT)
+            .withDefault(new C2StreamPixelFormatInfo::output(
+                              0u, HAL_PIXEL_FORMAT_YCBCR_420_888))
+            .withFields({C2F(mPixelFormat, value).oneOf(pixelFormats)})
+            .withSetter((Setter<decltype(*mPixelFormat)>::StrictValueWithNoDeps))
+            .build());
   }
 
   static C2R SizeSetter(bool mayBlock,
@@ -335,8 +342,7 @@ C2SoftGav1Dec::C2SoftGav1Dec(const char *name, c2_node_id_t id,
           std::make_shared<SimpleInterface<IntfImpl>>(name, id, intfImpl)),
       mIntf(intfImpl),
       mCodecCtx(nullptr) {
-  gettimeofday(&mTimeStart, nullptr);
-  gettimeofday(&mTimeEnd, nullptr);
+  mTimeStart = mTimeEnd = systemTime();
 }
 
 C2SoftGav1Dec::~C2SoftGav1Dec() { onRelease(); }
@@ -403,6 +409,7 @@ static int GetCPUCoreCount() {
 bool C2SoftGav1Dec::initDecoder() {
   mSignalledError = false;
   mSignalledOutputEos = false;
+  mHalPixelFormat = HAL_PIXEL_FORMAT_YV12;
   mCodecCtx.reset(new libgav1::Decoder());
 
   if (mCodecCtx == nullptr) {
@@ -506,19 +513,17 @@ void C2SoftGav1Dec::process(const std::unique_ptr<C2Work> &work,
   int64_t frameIndex = work->input.ordinal.frameIndex.peekll();
   if (inSize) {
     uint8_t *bitstream = const_cast<uint8_t *>(rView.data() + inOffset);
-    int32_t decodeTime = 0;
-    int32_t delay = 0;
 
-    GETTIME(&mTimeStart, nullptr);
-    TIME_DIFF(mTimeEnd, mTimeStart, delay);
+    mTimeStart = systemTime();
+    nsecs_t delay = mTimeStart - mTimeEnd;
 
     const Libgav1StatusCode status =
         mCodecCtx->EnqueueFrame(bitstream, inSize, frameIndex,
                                 /*buffer_private_data=*/nullptr);
 
-    GETTIME(&mTimeEnd, nullptr);
-    TIME_DIFF(mTimeStart, mTimeEnd, decodeTime);
-    ALOGV("decodeTime=%4d delay=%4d\n", decodeTime, delay);
+    mTimeEnd = systemTime();
+    nsecs_t decodeTime = mTimeEnd - mTimeStart;
+    ALOGV("decodeTime=%4" PRId64 " delay=%4" PRId64 "\n", decodeTime, delay);
 
     if (status != kLibgav1StatusOk) {
       ALOGE("av1 decoder failed to decode frame. status: %d.", status);
@@ -648,6 +653,24 @@ bool C2SoftGav1Dec::outputBuffer(const std::shared_ptr<C2BlockPool> &pool,
       return false;
     }
   }
+
+  if (mHalPixelFormat != format) {
+    C2StreamPixelFormatInfo::output pixelFormat(0u, format);
+    std::vector<std::unique_ptr<C2SettingResult>> failures;
+    c2_status_t err = mIntf->config({&pixelFormat }, C2_MAY_BLOCK, &failures);
+    if (err == C2_OK) {
+      work->worklets.front()->output.configUpdate.push_back(
+          C2Param::Copy(pixelFormat));
+    } else {
+      ALOGE("Config update pixelFormat failed");
+      mSignalledError = true;
+      work->workletsProcessed = 1u;
+      work->result = C2_CORRUPTED;
+      return UNKNOWN_ERROR;
+    }
+    mHalPixelFormat = format;
+  }
+
   C2MemoryUsage usage = {C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE};
 
   // We always create a graphic block that is width aligned to 16 and height

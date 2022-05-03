@@ -48,8 +48,6 @@ cc_library_shared {
         "-Wall",
     ],
 
-    clang: true,
-
     sanitize: {
         misc_undefined: [
             "unsigned-integer-overflow",
