@@ -109,8 +109,6 @@ cc_defaults {
         },
     },
 
-    clang: true,
-
     sanitize: {
         misc_undefined: [
             "unsigned-integer-overflow",
@@ -194,7 +192,7 @@ cc_library_static {
 
     shared_libs: [
         "liblog",
-        "libutils",             // for sp<>
+        "libutils", // for sp<>
         // actually invokes this, but called from folks who already load it
         // "libmediandk",
     ],
@@ -222,8 +220,6 @@ cc_library_static {
         "ColorUtils_fill.cpp",
     ],
 
-    clang: true,
-
     sanitize: {
         misc_undefined: [
             "unsigned-integer-overflow",
@@ -240,4 +236,3 @@ cc_library_static {
     ],
 
 }
-
