@@ -505,6 +505,8 @@ void AudioPolicyService::doOnCheckSpatializer()
 {
     Mutex::Autolock _l(mLock);
 
+    ALOGI("%s mSpatializer %p level %d", __func__, mSpatializer.get(), (int)mSpatializer->getLevel());
+
     if (mSpatializer != nullptr) {
         // Note: mSpatializer != nullptr =>  mAudioPolicyManager != nullptr
         if (mSpatializer->getLevel() != media::SpatializationLevel::NONE) {
@@ -544,11 +546,13 @@ void AudioPolicyService::doOnCheckSpatializer()
     }
 }
 
-size_t AudioPolicyService::countActiveClientsOnOutput_l(audio_io_handle_t output) REQUIRES(mLock) {
+size_t AudioPolicyService::countActiveClientsOnOutput_l(
+        audio_io_handle_t output, bool spatializedOnly) {
     size_t count = 0;
     for (size_t i = 0; i < mAudioPlaybackClients.size(); i++) {
         auto client = mAudioPlaybackClients.valueAt(i);
-        if (client->io == output && client->active) {
+        if (client->io == output && client->active
+                && (!spatializedOnly || client->isSpatialized)) {
             count++;
         }
     }
@@ -564,13 +568,20 @@ void AudioPolicyService::onUpdateActiveSpatializerTracks_l() {
 
 void AudioPolicyService::doOnUpdateActiveSpatializerTracks()
 {
-    Mutex::Autolock _l(mLock);
-    if (mSpatializer == nullptr) {
-        return;
+    sp<Spatializer> spatializer;
+    size_t activeClients;
+    {
+        Mutex::Autolock _l(mLock);
+        if (mSpatializer == nullptr) {
+            return;
+        }
+        spatializer = mSpatializer;
+        activeClients = countActiveClientsOnOutput_l(mSpatializer->getOutput());
     }
-    mSpatializer->updateActiveTracks(countActiveClientsOnOutput_l(mSpatializer->getOutput()));
+    if (spatializer != nullptr) {
+        spatializer->updateActiveTracks(activeClients);
+    }
 }
-
 
 status_t AudioPolicyService::clientCreateAudioPatch(const struct audio_patch *patch,
                                                 audio_patch_handle_t *handle,
@@ -1627,6 +1638,9 @@ void AudioPolicyService::UidPolicy::onUidStateChanged(uid_t uid,
     if (procState != ActivityManager::PROCESS_STATE_UNKNOWN) {
         updateUid(&mCachedUids, uid, true, procState, true);
     }
+}
+
+void AudioPolicyService::UidPolicy::onUidProcAdjChanged(uid_t uid __unused) {
 }
 
 void AudioPolicyService::UidPolicy::updateOverrideUid(uid_t uid, bool active, bool insert) {
