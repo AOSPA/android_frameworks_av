@@ -225,6 +225,9 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
         // save a copy of the opened output descriptors before any output is opened or closed
         // by checkOutputsForDevice(). This will be needed by checkOutputForAllStrategies()
         mPreviousOutputs = mOutputs;
+
+        bool wasLeUnicastActive = isLeUnicastActive();
+
         switch (state)
         {
         // handle output device connection
@@ -391,6 +394,8 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
         if (state == AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE) {
             cleanUpForDevice(device);
         }
+
+        checkLeBroadcastRoutes(wasLeUnicastActive, nullptr, 0);
 
         mpClientInterface->onAudioPortListUpdate();
         return NO_ERROR;
@@ -862,6 +867,7 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
     ALOGV("setPhoneState() state %d", state);
     // store previous phone state for management of sonification strategy below
     int oldState = mEngine->getPhoneState();
+    bool wasLeUnicastActive = isLeUnicastActive();
 
     if (mEngine->setPhoneState(state) != NO_ERROR) {
         ALOGW("setPhoneState() invalid or same state %d", state);
@@ -955,6 +961,8 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
                              true /*requiresMuteCheck*/, !forceRouting /*requiresVolumeCheck*/);
         }
     }
+
+    checkLeBroadcastRoutes(wasLeUnicastActive, nullptr, delayMs);
 
     if (isStateInCall(state)) {
         ALOGV("setPhoneState() in call state management: new state is %d", state);
@@ -2191,6 +2199,22 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
     return status;
 }
 
+bool AudioPolicyManager::isLeUnicastActive() const {
+    if (isInCall()) {
+        return true;
+    }
+    return isAnyDeviceTypeActive(getAudioDeviceOutLeAudioUnicastSet());
+}
+
+bool AudioPolicyManager::isAnyDeviceTypeActive(const DeviceTypeSet& deviceTypes) const {
+    if (mAvailableOutputDevices.getDevicesFromTypes(deviceTypes).isEmpty()) {
+        return false;
+    }
+    bool active = mOutputs.isAnyDeviceTypeActive(deviceTypes);
+    ALOGV("%s active %d", __func__, active);
+    return active;
+}
+
 status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outputDesc,
                                          const sp<TrackClientDescriptor>& client,
                                          uint32_t *delayMs)
@@ -2242,6 +2266,7 @@ status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outp
     // and muting would result in unnecessary delay and dropped audio.
     const uint32_t outputLatencyMs = outputDesc->latency();
     bool requiresMuteCheck = outputDesc->isActive(outputLatencyMs * 2);  // account for drain
+    bool wasLeUnicastActive = isLeUnicastActive();
 
     // increment usage count for this stream on the requested output:
     // NOTE that the usage count is the same for duplicated output and hardware output which is
@@ -2320,11 +2345,15 @@ status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outp
 
         // apply volume rules for current stream and device if necessary
         auto &curves = getVolumeCurves(client->attributes());
-        checkAndSetVolume(curves, client->volumeSource(),
+        if (NO_ERROR != checkAndSetVolume(curves, client->volumeSource(),
                           curves.getVolumeIndex(outputDesc->devices().types()),
                           outputDesc,
                           outputDesc->devices().types(), 0 /*delay*/,
-                          outputDesc->useHwGain() /*force*/);
+                          outputDesc->useHwGain() /*force*/)) {
+            // request AudioService to reinitialize the volume curves asynchronously
+            ALOGE("checkAndSetVolume failed, requesting volume range init");
+            mpClientInterface->onVolumeRangeInitRequest();
+        };
 
         // update the outputs if starting an output with a stream that can affect notification
         // routing
@@ -2365,7 +2394,36 @@ status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outp
                                     AUDIO_FORMAT_DEFAULT);
     }
 
+    checkLeBroadcastRoutes(wasLeUnicastActive, outputDesc, *delayMs);
+
     return NO_ERROR;
+}
+
+void AudioPolicyManager::checkLeBroadcastRoutes(bool wasUnicastActive,
+        sp<SwAudioOutputDescriptor> ignoredOutput, uint32_t delayMs) {
+    bool isUnicastActive = isLeUnicastActive();
+
+    if (wasUnicastActive != isUnicastActive) {
+        //reroute all outputs routed to LE broadcast if LE unicast activy changed on any output
+        for (size_t i = 0; i < mOutputs.size(); i++) {
+            sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+            if (desc != ignoredOutput && desc->isActive()
+                    && ((isUnicastActive &&
+                            !desc->devices().
+                                    getDevicesFromType(AUDIO_DEVICE_OUT_BLE_BROADCAST).isEmpty())
+                        || (wasUnicastActive &&
+                            !desc->devices().getDevicesFromTypes(
+                                    getAudioDeviceOutLeAudioUnicastSet()).isEmpty()))) {
+                DeviceVector newDevices = getNewOutputDevices(desc, false /*fromCache*/);
+                bool force = desc->devices() != newDevices;
+                setOutputDevices(desc, newDevices, force, delayMs);
+                // re-apply device specific volume if not done by setOutputDevice()
+                if (!force) {
+                    applyStreamVolumes(desc, newDevices.types(), delayMs);
+                }
+            }
+        }
+    }
 }
 
 status_t AudioPolicyManager::stopOutput(audio_port_handle_t portId)
@@ -2396,6 +2454,7 @@ status_t AudioPolicyManager::stopSource(const sp<SwAudioOutputDescriptor>& outpu
     // always handle stream stop, check which stream type is stopping
     audio_stream_type_t stream = client->stream();
     auto clientVolSrc = client->volumeSource();
+    bool wasLeUnicastActive = isLeUnicastActive();
 
     handleEventForBeacon(stream == AUDIO_STREAM_TTS ? STOPPING_BEACON : STOPPING_OUTPUT);
 
@@ -2474,6 +2533,9 @@ status_t AudioPolicyManager::stopSource(const sp<SwAudioOutputDescriptor>& outpu
         if (followsSameRouting(client->attributes(), attributes_initializer(AUDIO_USAGE_MEDIA))) {
             selectOutputForMusicEffects();
         }
+
+        checkLeBroadcastRoutes(wasLeUnicastActive, outputDesc, outputDesc->latency()*2);
+
         return NO_ERROR;
     } else {
         ALOGW("stopOutput() refcount is already 0");
@@ -2549,7 +2611,6 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
           session, flags, toString(*attr).c_str(), *selectedDeviceId);
 
     status_t status = NO_ERROR;
-    audio_source_t halInputSource;
     audio_attributes_t attributes = *attr;
     sp<AudioPolicyMix> policyMix;
     sp<DeviceDescriptor> device;
@@ -2628,8 +2689,6 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
 
     *input = AUDIO_IO_HANDLE_NONE;
     *inputType = API_INPUT_INVALID;
-
-    halInputSource = attributes.source;
 
     if (attributes.source == AUDIO_SOURCE_REMOTE_SUBMIX &&
             strncmp(attributes.tags, "addr=", strlen("addr=")) == 0) {
@@ -3802,6 +3861,7 @@ status_t AudioPolicyManager::setDevicesRoleForStrategy(product_strategy_t strate
 void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint32_t delayMs)
 {
     uint32_t waitMs = 0;
+    bool wasLeUnicastActive = isLeUnicastActive();
     if (updateCallRouting(true /*fromCache*/, delayMs, &waitMs) == NO_ERROR) {
         // Only apply special touch sound delay once
         delayMs = 0;
@@ -3825,6 +3885,7 @@ void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint
             applyStreamVolumes(outputDesc, newDevices.types(), waitMs, true);
         }
     }
+    checkLeBroadcastRoutes(wasLeUnicastActive, nullptr, delayMs);
 }
 
 void AudioPolicyManager::updateInputRouting() {
@@ -7641,6 +7702,11 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
         deviceTypes = outputDesc->devices().types();
     }
 
+    if (curves.getVolumeIndexMin() < 0 || curves.getVolumeIndexMax() < 0) {
+        ALOGE("invalid volume index range");
+        return BAD_VALUE;
+    }
+
     float volumeDb = computeVolume(curves, volumeSource, index, deviceTypes);
     if (outputDesc->isFixedVolume(deviceTypes) ||
             // Force VoIP volume to max for bluetooth SCO device except if muted
@@ -7785,13 +7851,11 @@ audio_policy_forced_cfg_t AudioPolicyManager::getForceUse(audio_policy_force_use
     return mEngine->getForceUse(usage);
 }
 
-bool AudioPolicyManager::isInCall()
-{
+bool AudioPolicyManager::isInCall() const {
     return isStateInCall(mEngine->getPhoneState());
 }
 
-bool AudioPolicyManager::isStateInCall(int state)
-{
+bool AudioPolicyManager::isStateInCall(int state) const {
     return is_state_in_call(state);
 }
 

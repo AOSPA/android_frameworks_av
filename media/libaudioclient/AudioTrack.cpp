@@ -2544,6 +2544,7 @@ nsecs_t AudioTrack::processAudioBuffer()
     sp<IAudioTrackCallback> callback = mCallback.promote();
     if (!callback) {
         mCallback = nullptr;
+        mLock.unlock();
         return NS_NEVER;
     }
     if (mAwaitBoost) {

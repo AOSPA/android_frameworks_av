@@ -1343,6 +1343,7 @@ nsecs_t AudioRecord::processAudioBuffer()
     const sp<IAudioRecordCallback> callback = mCallback.promote();
     if (!callback) {
         mCallback = nullptr;
+        mLock.unlock();
         return NS_NEVER;
     }
     if (mAwaitBoost) {
