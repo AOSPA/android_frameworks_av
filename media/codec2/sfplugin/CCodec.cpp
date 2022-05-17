@@ -1074,6 +1074,17 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 }
             } else {
                 if ((config->mDomain & Config::IS_ENCODER) || !surface) {
+                    if (vendorSdkVersion < __ANDROID_API_S__ &&
+                            (format == COLOR_FormatYUV420Flexible ||
+                             format == COLOR_FormatYUV420Planar ||
+                             format == COLOR_FormatYUV420PackedPlanar ||
+                             format == COLOR_FormatYUV420SemiPlanar ||
+                             format == COLOR_FormatYUV420PackedSemiPlanar)) {
+                        // pre-S framework used to map these color formats into YV12.
+                        // Codecs from older vendor partition may be relying on
+                        // this assumption.
+                        format = HAL_PIXEL_FORMAT_YV12;
+                    }
                     switch (format) {
                         case COLOR_FormatYUV420Flexible:
                             format = COLOR_FormatYUV420Planar;
@@ -1815,15 +1826,13 @@ void CCodec::start() {
         return;
     }
 
-    err2 = mChannel->requestInitialInputBuffers();
-
-    if (err2 != OK) {
-        ALOGE("Initial request for Input Buffers failed");
-        mCallback->onError(err2,ACTION_CODE_FATAL);
-        return;
-    }
     mCallback->onStartCompleted();
 
+    err2 = mChannel->requestInitialInputBuffers();
+    if (err2 != OK) {
+        ALOGE("Initial request for Input Buffers failed");
+        mCallback->onError(err2, ACTION_CODE_FATAL);
+    }
 }
 
 void CCodec::initiateShutdown(bool keepComponentAllocated) {
@@ -2117,7 +2126,11 @@ void CCodec::signalResume() {
         state->set(RUNNING);
     }
 
-    (void)mChannel->requestInitialInputBuffers();
+    status_t err = mChannel->requestInitialInputBuffers();
+    if (err != OK) {
+        ALOGE("Resume request for Input Buffers failed");
+        mCallback->onError(err, ACTION_CODE_FATAL);
+    }
 }
 
 void CCodec::signalSetParameters(const sp<AMessage> &msg) {
