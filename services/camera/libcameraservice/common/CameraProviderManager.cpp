@@ -40,7 +40,6 @@
 #include <android-base/logging.h>
 #include <cutils/properties.h>
 #include <hwbinder/IPCThreadState.h>
-#include <utils/SessionConfigurationUtils.h>
 #include <utils/Trace.h>
 
 #include "api2/HeicCompositeStream.h"
@@ -338,14 +337,15 @@ status_t CameraProviderManager::getCameraInfo(const std::string &id,
 
 status_t CameraProviderManager::isSessionConfigurationSupported(const std::string& id,
         const SessionConfiguration &configuration, bool overrideForPerfClass,
-        bool *status /*out*/) const {
+        metadataGetter getMetadata, bool *status /*out*/) const {
     std::lock_guard<std::mutex> lock(mInterfaceMutex);
     auto deviceInfo = findDeviceInfoLocked(id);
     if (deviceInfo == nullptr) {
         return NAME_NOT_FOUND;
     }
 
-    return deviceInfo->isSessionConfigurationSupported(configuration, overrideForPerfClass, status);
+    return deviceInfo->isSessionConfigurationSupported(configuration,
+            overrideForPerfClass, getMetadata, status);
 }
 
 status_t CameraProviderManager::getCameraIdIPCTransport(const std::string &id,
@@ -1241,6 +1241,34 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::addDynamicDepthTags(
             supportedChTags.size());
 
     return OK;
+}
+
+status_t CameraProviderManager::ProviderInfo::DeviceInfo3::fixupTorchStrengthTags() {
+    status_t res = OK;
+    auto& c = mCameraCharacteristics;
+    auto flashInfoStrengthDefaultLevelEntry = c.find(ANDROID_FLASH_INFO_STRENGTH_DEFAULT_LEVEL);
+    if (flashInfoStrengthDefaultLevelEntry.count == 0) {
+        int32_t flashInfoStrengthDefaultLevel = 1;
+        res = c.update(ANDROID_FLASH_INFO_STRENGTH_DEFAULT_LEVEL,
+                &flashInfoStrengthDefaultLevel, 1);
+        if (res != OK) {
+            ALOGE("%s: Failed to update ANDROID_FLASH_INFO_STRENGTH_DEFAULT_LEVEL: %s (%d)",
+                    __FUNCTION__,strerror(-res), res);
+            return res;
+        }
+    }
+    auto flashInfoStrengthMaximumLevelEntry = c.find(ANDROID_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL);
+    if (flashInfoStrengthMaximumLevelEntry.count == 0) {
+        int32_t flashInfoStrengthMaximumLevel = 1;
+        res = c.update(ANDROID_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL,
+                &flashInfoStrengthMaximumLevel, 1);
+        if (res != OK) {
+            ALOGE("%s: Failed to update ANDROID_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL: %s (%d)",
+                    __FUNCTION__,strerror(-res), res);
+            return res;
+        }
+    }
+    return res;
 }
 
 status_t CameraProviderManager::ProviderInfo::DeviceInfo3::fixupMonochromeTags() {

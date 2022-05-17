@@ -538,6 +538,13 @@ AidlProviderInfo::AidlDeviceInfo3::AidlDeviceInfo3(
     if (flashAvailable.count == 1 &&
             flashAvailable.data.u8[0] == ANDROID_FLASH_INFO_AVAILABLE_TRUE) {
         mHasFlashUnit = true;
+        // Fix up flash strength tags for devices without these keys.
+        res = fixupTorchStrengthTags();
+        if (OK != res) {
+            ALOGE("%s: Unable to add default ANDROID_FLASH_INFO_STRENGTH_DEFAULT_LEVEL and"
+                    "ANDROID_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL tags: %s (%d)", __FUNCTION__,
+                    strerror(-res), res);
+        }
     } else {
         mHasFlashUnit = false;
     }
@@ -693,15 +700,11 @@ status_t AidlProviderInfo::AidlDeviceInfo3::dumpState(int fd) {
 }
 
 status_t AidlProviderInfo::AidlDeviceInfo3::isSessionConfigurationSupported(
-        const SessionConfiguration &configuration, bool overrideForPerfClass, bool *status) {
+        const SessionConfiguration &configuration, bool overrideForPerfClass,
+        camera3::metadataGetter getMetadata, bool *status) {
 
     camera::device::StreamConfiguration streamConfiguration;
     bool earlyExit = false;
-    camera3::metadataGetter getMetadata = [this](const String8 &id, bool /*overrideForPerfClass*/) {
-          CameraMetadata physicalChars;
-          getPhysicalCameraCharacteristics(id.c_str(), &physicalChars);
-          return physicalChars;
-    };
     auto bRes = SessionConfigurationUtils::convertToHALStreamCombination(configuration,
             String8(mId.c_str()), mCameraCharacteristics, getMetadata, mPhysicalIds,
             streamConfiguration, overrideForPerfClass, &earlyExit);
