@@ -386,7 +386,7 @@ void CCodecConfig::initializeStandardParams() {
             // read back always as int
             float value;
             if (v.get(&value)) {
-                return (int32_t)value;
+                return (int32_t) (value + 0.5);
             }
             return C2Value();
         }));
@@ -926,7 +926,7 @@ void CCodecConfig::initializeStandardParams() {
         .limitTo(D::ENCODER & (D::CONFIG | D::PARAM)));
     add(ConfigMapper(KEY_FLAC_COMPRESSION_LEVEL, C2_PARAMKEY_COMPLEXITY, "value")
         .limitTo(D::AUDIO & D::ENCODER));
-    add(ConfigMapper("complexity", C2_PARAMKEY_COMPLEXITY, "value")
+    add(ConfigMapper(KEY_COMPLEXITY, C2_PARAMKEY_COMPLEXITY, "value")
         .limitTo(D::ENCODER & (D::CONFIG | D::PARAM)));
 
     add(ConfigMapper(KEY_GRID_COLUMNS, C2_PARAMKEY_TILE_LAYOUT, "columns")
@@ -1072,6 +1072,13 @@ status_t CCodecConfig::initialize(
                     C2_PARAMKEY_SURFACE_SCALING_MODE);
         } else {
             addLocalParam(new C2StreamColorAspectsInfo::input(0u), C2_PARAMKEY_COLOR_ASPECTS);
+
+            if (domain.value == C2Component::DOMAIN_VIDEO) {
+                addLocalParam(new C2AndroidStreamAverageBlockQuantizationInfo::output(0u, 0),
+                              C2_PARAMKEY_AVERAGE_QP);
+                addLocalParam(new C2StreamPictureTypeMaskInfo::output(0u, 0),
+                              C2_PARAMKEY_PICTURE_TYPE);
+            }
         }
     }
 

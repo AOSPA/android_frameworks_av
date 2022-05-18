@@ -735,9 +735,9 @@ uint32_t HeifDecoderImpl::getColorDepth() {
     HeifFrameInfo* info = &mImageInfo;
     if (info != nullptr) {
         return mImageInfo.mBitDepth;
+    } else {
+        return 0;
     }
-
-    return 0;
 }
 
 } // namespace android

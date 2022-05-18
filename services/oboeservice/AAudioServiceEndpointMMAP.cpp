@@ -228,9 +228,6 @@ void AAudioServiceEndpointMMAP::close() {
     if (mMmapStream != nullptr) {
         // Needs to be explicitly cleared or CTS will fail but it is not clear why.
         mMmapStream.clear();
-        // Apparently the above close is asynchronous. An attempt to open a new device
-        // right after a close can fail. Also some callbacks may still be in flight!
-        // FIXME Make closing synchronous.
         AudioClock::sleepForNanos(100 * AAUDIO_NANOS_PER_MILLISECOND);
     }
 }
@@ -362,12 +359,8 @@ void AAudioServiceEndpointMMAP::onTearDown(audio_port_handle_t portHandle) {
     asyncTask.detach();
 }
 
-void AAudioServiceEndpointMMAP::onVolumeChanged(audio_channel_mask_t channels,
-                                              android::Vector<float> values) {
-    // TODO Do we really need a different volume for each channel?
-    // We get called with an array filled with a single value!
-    float volume = values[0];
-    ALOGD("%s() volume[0] = %f", __func__, volume);
+void AAudioServiceEndpointMMAP::onVolumeChanged(float volume) {
+    ALOGD("%s() volume = %f", __func__, volume);
     std::lock_guard<std::mutex> lock(mLockStreams);
     for(const auto& stream : mRegisteredStreams) {
         stream->onVolumeChanged(volume);
