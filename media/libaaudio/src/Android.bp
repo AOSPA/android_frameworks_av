@@ -93,7 +93,6 @@ cc_library {
         "-Wno-unused-parameter",
         "-Wall",
         "-Werror",
-
         // By default, all symbols are hidden.
         // "-fvisibility=hidden",
         // AAUDIO_API is used to explicitly export a function or a variable as a visible symbol.
@@ -261,7 +260,7 @@ aidl_interface {
         "binding/aidl/aaudio/IAAudioService.aidl",
     ],
     imports: [
-        "android.media.audio.common.types",
+        "android.media.audio.common.types-V1",
         "audioclient-types-aidl",
         "shared-file-region-aidl",
         "framework-permission-aidl",

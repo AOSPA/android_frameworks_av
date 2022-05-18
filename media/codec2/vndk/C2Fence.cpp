@@ -16,13 +16,21 @@
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "C2FenceFactory"
+#include <cutils/native_handle.h>
 #include <utils/Log.h>
+#include <ui/Fence.h>
 
 #include <C2FenceFactory.h>
 #include <C2SurfaceSyncObj.h>
 
 class C2Fence::Impl {
 public:
+    enum type_t : uint32_t {
+        NULL_FENCE,
+        SURFACE_FENCE,
+        ANDROID_FENCE,
+    };
+
     virtual c2_status_t wait(c2_nsecs_t timeoutNs) = 0;
 
     virtual bool valid() const = 0;
@@ -32,6 +40,8 @@ public:
     virtual int fd() const = 0;
 
     virtual bool isHW() const = 0;
+
+    virtual type_t type() const = 0;
 
     virtual ~Impl() = default;
 
@@ -77,6 +87,38 @@ bool C2Fence::isHW() const {
     return false;
 }
 
+C2Handle *C2Fence::handle() const {
+    native_handle_t* h = nullptr;
+
+    Impl::type_t type = mImpl ? mImpl->type() : Impl::NULL_FENCE;
+    switch (type) {
+        case Impl::NULL_FENCE:
+            h = native_handle_create(0, 1);
+            if (!h) {
+                ALOGE("Failed to allocate native handle for Null fence");
+                return nullptr;
+            }
+            h->data[0] = type;
+            break;
+        case Impl::SURFACE_FENCE:
+            ALOGE("Cannot create native handle from surface fence");
+            break;
+        case Impl::ANDROID_FENCE:
+            h = native_handle_create(1, 1);
+            if (!h) {
+                ALOGE("Failed to allocate native handle for Android fence");
+                return nullptr;
+            }
+            h->data[0] = mImpl->fd();
+            h->data[1] = type;
+            break;
+        default:
+            ALOGE("Unsupported fence type");
+            break;
+    }
+    return reinterpret_cast<C2Handle*>(h);
+}
+
 /**
  * Fence implementation for C2BufferQueueBlockPool based block allocation.
  * The implementation supports all C2Fence interface except fd().
@@ -115,6 +157,10 @@ public:
         return false;
     }
 
+    virtual type_t type() const {
+        return SURFACE_FENCE;
+    }
+
     virtual ~SurfaceFenceImpl() {};
 
     SurfaceFenceImpl(std::shared_ptr<C2SurfaceSyncMemory> syncMem, uint32_t waitId) :
@@ -142,4 +188,99 @@ C2Fence _C2FenceFactory::CreateSurfaceFence(
         }
     }
     return C2Fence();
+}
+
+using namespace android;
+
+class _C2FenceFactory::AndroidFenceImpl : public C2Fence::Impl {
+public:
+    virtual c2_status_t wait(c2_nsecs_t timeoutNs) {
+        c2_nsecs_t timeoutMs = timeoutNs / 1000;
+        if (timeoutMs > INT_MAX) {
+            return C2_CORRUPTED;
+        }
+
+        switch (mFence->wait((int)timeoutMs)) {
+            case NO_ERROR:
+                return C2_OK;
+            case -ETIME:
+                return C2_TIMED_OUT;
+            default:
+                return C2_CORRUPTED;
+        }
+    }
+
+    virtual bool valid() const {
+        return mFence->getStatus() != Fence::Status::Invalid;
+    }
+
+    virtual bool ready() const {
+        return mFence->getStatus() == Fence::Status::Signaled;
+    }
+
+    virtual int fd() const {
+        return mFence->dup();
+    }
+
+    virtual bool isHW() const {
+        return true;
+    }
+
+    virtual type_t type() const {
+        return ANDROID_FENCE;
+    }
+
+    virtual ~AndroidFenceImpl() {};
+
+    AndroidFenceImpl(int fenceFd) :
+            mFence(sp<Fence>::make(fenceFd)) {}
+private:
+    const sp<Fence> mFence;
+};
+
+C2Fence _C2FenceFactory::CreateAndroidFence(int fenceFd) {
+    if (fenceFd >= 0) {
+        C2Fence::Impl *p
+                = new _C2FenceFactory::AndroidFenceImpl(fenceFd);
+        if (p->valid()) {
+            return C2Fence(std::shared_ptr<C2Fence::Impl>(p));
+        } else {
+            delete p;
+        }
+    }
+    return C2Fence();
+}
+
+C2Fence _C2FenceFactory::CreateFromNativeHandle(const C2Handle* handle) {
+    const native_handle_t *nh = reinterpret_cast<const native_handle_t *>(handle);
+    C2Fence::Impl::type_t type = C2Fence::Impl::NULL_FENCE;
+    int fd = -1;
+
+    if (!nh || nh->numInts != 1) {
+        ALOGE("Invalid native handle for fence representation");
+        return C2Fence();
+    }
+    if (nh->numFds != 1 && nh->numFds != 0) {
+        ALOGE("Invalid native handle fds for fence representation");
+        return C2Fence();
+    }
+    if (nh->numFds == 0) {
+        type = static_cast<C2Fence::Impl::type_t>(nh->data[0]);
+    } else {
+        fd = nh->data[0];
+        type = static_cast<C2Fence::Impl::type_t>(nh->data[1]);
+    }
+
+    switch (type) {
+        case C2Fence::Impl::NULL_FENCE:
+            return C2Fence();
+        case C2Fence::Impl::SURFACE_FENCE:
+            ALOGE("Cannot create surface fence from native handle");
+            return C2Fence();
+        case C2Fence::Impl::ANDROID_FENCE:
+            return CreateAndroidFence(dup(fd));
+        default:
+            ALOGE("Unsupported fence type %d", type);
+            return C2Fence();
+    }
 }

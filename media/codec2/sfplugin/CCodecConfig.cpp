@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-//#define LOG_NDEBUG 0
+#define LOG_NDEBUG 0
 #define LOG_TAG "CCodecConfig"
 #include <cutils/properties.h>
 #include <log/log.h>
@@ -324,7 +324,8 @@ CCodecConfig::CCodecConfig()
     : mInputFormat(new AMessage),
       mOutputFormat(new AMessage),
       mUsingSurface(false),
-      mTunneled(false) { }
+      mTunneled(false),
+      mPushBlankBuffersOnStop(false) { }
 
 void CCodecConfig::initializeStandardParams() {
     typedef Domain D;
@@ -963,8 +964,6 @@ void CCodecConfig::initializeStandardParams() {
         .limitTo(D::ENCODER & D::VIDEO & D::READ));
 
     /* still to do
-    constexpr char KEY_PUSH_BLANK_BUFFERS_ON_STOP[] = "push-blank-buffers-on-shutdown";
-
        not yet used by MediaCodec, but defined as MediaFormat
     KEY_AUDIO_SESSION_ID // we use "audio-hw-sync"
     KEY_OUTPUT_REORDER_DEPTH
@@ -1113,8 +1112,7 @@ status_t CCodecConfig::subscribeToConfigUpdate(
         const std::vector<C2Param::Index> &indices,
         c2_blocking_t blocking) {
     mSubscribedIndices.insert(indices.begin(), indices.end());
-    // TODO: enable this when components no longer crash on this config
-    if (mSubscribedIndices.size() != mSubscribedIndicesSize && false) {
+    if (mSubscribedIndices.size() != mSubscribedIndicesSize) {
         std::vector<uint32_t> indices;
         for (C2Param::Index ix : mSubscribedIndices) {
             indices.push_back(ix);
