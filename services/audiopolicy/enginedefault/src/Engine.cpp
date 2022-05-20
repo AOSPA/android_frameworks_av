@@ -546,7 +546,7 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
             if (device != nullptr) break;
         }
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                AUDIO_DEVICE_IN_WIRED_HEADSET,
                 AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
                 AUDIO_DEVICE_IN_BLUETOOTH_BLE, AUDIO_DEVICE_IN_BUILTIN_MIC});
         break;
@@ -605,7 +605,7 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
         // because sometimes user want to do voice search by bt remote
         // even if BUILDIN_MIC is available.
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                AUDIO_DEVICE_IN_WIRED_HEADSET,
                 AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
                 AUDIO_DEVICE_IN_BLUETOOTH_BLE, AUDIO_DEVICE_IN_BUILTIN_MIC});
 
@@ -627,7 +627,7 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
         }
 
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                AUDIO_DEVICE_IN_WIRED_HEADSET,
                 AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
                 AUDIO_DEVICE_IN_BUILTIN_MIC});
         break;
