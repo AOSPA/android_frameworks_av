@@ -1000,6 +1000,11 @@ const detail::AudioFormatPairs& getAudioFormatPairs() {
         },
         {
             // Note: not in the IANA registry.
+            VX_AUDIO_FORMAT_APTX_ADAPTIVE_QLEA,
+            make_AudioFormatDescription("audio/vnd.qcom.aptx.adaptive.r3")
+        },
+        {
+            // Note: not in the IANA registry.
             AUDIO_FORMAT_LHDC, make_AudioFormatDescription("audio/vnd.savitech.lhdc")
         },
         {
