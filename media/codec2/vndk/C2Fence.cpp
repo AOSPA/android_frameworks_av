@@ -23,6 +23,8 @@
 #include <C2FenceFactory.h>
 #include <C2SurfaceSyncObj.h>
 
+#define MAX_FENCE_FDS 1
+
 class C2Fence::Impl {
 public:
     enum type_t : uint32_t {
