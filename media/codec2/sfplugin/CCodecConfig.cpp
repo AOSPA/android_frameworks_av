@@ -1180,7 +1180,7 @@ status_t CCodecConfig::subscribeToConfigUpdate(
         (kBoardApiLevel != 0) ? kBoardApiLevel : kProductFirstApiLevel;
     mSubscribedIndices.insert(indices.begin(), indices.end());
     if (mSubscribedIndices.size() != mSubscribedIndicesSize
-            && kFirstApiLevel >= __ANDROID_API_T__) {
+            && kFirstApiLevel >= __ANDROID_API_T__ && false) {
         std::vector<uint32_t> indicesVector;
         for (C2Param::Index ix : mSubscribedIndices) {
             indicesVector.push_back(ix);
