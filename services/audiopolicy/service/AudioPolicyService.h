@@ -345,6 +345,9 @@ public:
     void onRoutingUpdated();
     void doOnRoutingUpdated();
 
+    void onVolumeRangeInitRequest();
+    void doOnVolumeRangeInitRequest();
+
     /**
      * Spatializer SpatializerPolicyCallback implementation.
      * onCheckSpatializer() sends an event on mOutputCommandThread which executes
@@ -533,7 +536,8 @@ private:
             ROUTING_UPDATED,
             UPDATE_UID_STATES,
             CHECK_SPATIALIZER_OUTPUT, // verify if spatializer effect should be created or moved
-            UPDATE_ACTIVE_SPATIALIZER_TRACKS // Update active track counts on spalializer output
+            UPDATE_ACTIVE_SPATIALIZER_TRACKS, // Update active track counts on spalializer output
+            VOL_RANGE_INIT_REQUEST, // request to reset the volume range indices
         };
 
         AudioCommandThread (String8 name, const wp<AudioPolicyService>& service);
@@ -585,6 +589,7 @@ private:
                     void        updateUidStatesCommand();
                     void        checkSpatializerCommand();
                     void        updateActiveSpatializerTracksCommand();
+                    void        volRangeInitReqCommand();
 
                     void        insertCommand_l(AudioCommand *command, int delayMs = 0);
     private:
@@ -812,6 +817,8 @@ private:
 
         virtual void onRoutingUpdated();
 
+        virtual void onVolumeRangeInitRequest();
+
         virtual audio_unique_id_t newAudioUniqueId(audio_unique_id_use_t use);
 
         void setSoundTriggerCaptureState(bool active) override;
@@ -851,6 +858,7 @@ private:
                                                     audio_patch_handle_t patchHandle,
                                                     audio_source_t source);
                             void      onRoutingUpdated();
+                            void      onVolumeRangeInitRequest();
                             void      setAudioPortCallbacksEnabled(bool enabled);
                             void setAudioVolumeGroupCallbacksEnabled(bool enabled);
 

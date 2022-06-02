@@ -70,8 +70,6 @@
 
 using namespace android::camera3;
 using namespace android::hardware::camera;
-using namespace android::hardware::camera::device::V3_2;
-using android::hardware::camera::metadata::V3_6::CameraMetadataEnumAndroidSensorPixelMode;
 
 namespace android {
 
@@ -114,6 +112,10 @@ const String8& Camera3Device::getId() const {
 }
 
 status_t Camera3Device::initializeCommonLocked() {
+
+    /** Start watchdog thread */
+    mCameraServiceWatchdog = new CameraServiceWatchdog();
+    mCameraServiceWatchdog->run("CameraServiceWatchdog");
 
     /** Start up status tracker thread */
     mStatusTracker = new StatusTracker(this);
@@ -316,7 +318,7 @@ status_t Camera3Device::disconnectImpl() {
 
         // Call close without internal mutex held, as the HAL close may need to
         // wait on assorted callbacks,etc, to complete before it can return.
-        interface->close();
+        mCameraServiceWatchdog->WATCH(interface->close());
 
         flushInflightRequests();
 
@@ -339,6 +341,12 @@ status_t Camera3Device::disconnectImpl() {
         }
     }
     ALOGI("%s: X", __FUNCTION__);
+
+    if (mCameraServiceWatchdog != NULL) {
+        mCameraServiceWatchdog->requestExit();
+        mCameraServiceWatchdog.clear();
+    }
+
     return res;
 }
 
@@ -523,10 +531,9 @@ status_t Camera3Device::dump(int fd, const Vector<String16> &args) {
     }
     lines.appendFormat("    Stream configuration:\n");
     const char *mode =
-            mOperatingMode == static_cast<int>(StreamConfigurationMode::NORMAL_MODE) ? "NORMAL" :
-            mOperatingMode == static_cast<int>(
-                StreamConfigurationMode::CONSTRAINED_HIGH_SPEED_MODE) ? "CONSTRAINED_HIGH_SPEED" :
-            "CUSTOM";
+            mOperatingMode == CAMERA_STREAM_CONFIGURATION_NORMAL_MODE ? "NORMAL" :
+            mOperatingMode == CAMERA_STREAM_CONFIGURATION_CONSTRAINED_HIGH_SPEED_MODE ?
+                    "CONSTRAINED_HIGH_SPEED" : "CUSTOM";
     lines.appendFormat("    Operation mode: %s (%d) \n", mode, mOperatingMode);
 
     if (mInputStream != NULL) {
@@ -1070,6 +1077,7 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         ALOGE("%s: RAW opaque stream cannot be used with > 1 sensor pixel modes", __FUNCTION__);
         return BAD_VALUE;
     }
+    IPCTransport transport = getTransportType();
     if (format == HAL_PIXEL_FORMAT_BLOB) {
         ssize_t blobBufferSize;
         if (dataSpace == HAL_DATASPACE_DEPTH) {
@@ -1089,7 +1097,7 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         }
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, blobBufferSize, format, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else if (format == HAL_PIXEL_FORMAT_RAW_OPAQUE) {
@@ -1104,25 +1112,25 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         }
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, rawOpaqueBufferSize, format, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else if (isShared) {
         newStream = new Camera3SharedOutputStream(mNextStreamId, consumers,
                 width, height, format, consumerUsage, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 mUseHalBufManager, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else if (consumers.size() == 0 && hasDeferredConsumer) {
         newStream = new Camera3OutputStream(mNextStreamId,
                 width, height, format, consumerUsage, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else {
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, format, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     }
@@ -1553,13 +1561,22 @@ status_t Camera3Device::waitUntilStateThenRelock(bool active, nsecs_t timeout) {
     }
 
     bool stateSeen = false;
+    nsecs_t startTime = systemTime();
     do {
         if (active == (mStatus == STATUS_ACTIVE)) {
             // Desired state is current
             break;
         }
 
-        res = mStatusChanged.waitRelative(mLock, timeout);
+        nsecs_t timeElapsed = systemTime() - startTime;
+        nsecs_t timeToWait = timeout - timeElapsed;
+        if (timeToWait <= 0) {
+            // Thread woke up spuriously but has timed out since.
+            // Force out of loop with TIMED_OUT result.
+            res = TIMED_OUT;
+            break;
+        }
+        res = mStatusChanged.waitRelative(mLock, timeToWait);
         if (res != OK) break;
 
         // This is impossible, but if not, could result in subtle deadlocks and invalid state
@@ -1723,7 +1740,12 @@ status_t Camera3Device::flush(int64_t *frameNumber) {
         mSessionStatsBuilder.stopCounter();
     }
 
-    return mRequestThread->flush();
+    // Calculate expected duration for flush with additional buffer time in ms for watchdog
+    uint64_t maxExpectedDuration = (getExpectedInFlightDuration() + kBaseGetBufferWait) / 1e6;
+    status_t res = mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(mRequestThread->flush(),
+            maxExpectedDuration / kCycleLengthMs, kCycleLengthMs);
+
+    return res;
 }
 
 status_t Camera3Device::prepare(int streamId) {
@@ -2265,8 +2287,7 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
     }
 
     bool isConstrainedHighSpeed =
-            static_cast<int>(StreamConfigurationMode::CONSTRAINED_HIGH_SPEED_MODE) ==
-            operatingMode;
+            CAMERA_STREAM_CONFIGURATION_CONSTRAINED_HIGH_SPEED_MODE == operatingMode;
 
     if (mOperatingMode != operatingMode) {
         mNeedConfig = true;

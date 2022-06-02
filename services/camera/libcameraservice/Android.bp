@@ -42,6 +42,7 @@ cc_library_shared {
 
     srcs: [
         "CameraService.cpp",
+        "CameraServiceWatchdog.cpp",
         "CameraFlashlight.cpp",
         "common/Camera2ClientBase.cpp",
         "common/CameraDeviceBase.cpp",
@@ -81,6 +82,7 @@ cc_library_shared {
         "device3/Camera3OutputUtils.cpp",
         "device3/Camera3DeviceInjectionMethods.cpp",
         "device3/UHRCropAndMeteringRegionMapper.cpp",
+        "device3/PreviewFrameSpacer.cpp",
         "device3/hidl/HidlCamera3Device.cpp",
         "device3/hidl/HidlCamera3OfflineSession.cpp",
         "device3/hidl/HidlCamera3OutputUtils.cpp",
@@ -98,6 +100,7 @@ cc_library_shared {
         "utils/CameraTraces.cpp",
         "utils/AutoConditionLock.cpp",
         "utils/SessionConfigurationUtils.cpp",
+        "utils/SessionConfigurationUtilsHidl.cpp",
         "utils/SessionStatsBuilder.cpp",
         "utils/TagMonitor.cpp",
         "utils/LatencyHistogram.cpp",

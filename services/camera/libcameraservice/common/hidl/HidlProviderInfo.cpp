@@ -23,7 +23,7 @@
 #include <camera_metadata_hidden.h>
 
 #include "device3/ZoomRatioMapper.h"
-#include <utils/SessionConfigurationUtils.h>
+#include <utils/SessionConfigurationUtilsHidl.h>
 #include <utils/Trace.h>
 
 #include <android/hardware/camera/device/3.7/ICameraDevice.h>
@@ -662,6 +662,13 @@ HidlProviderInfo::HidlDeviceInfo3::HidlDeviceInfo3(
     if (flashAvailable.count == 1 &&
             flashAvailable.data.u8[0] == ANDROID_FLASH_INFO_AVAILABLE_TRUE) {
         mHasFlashUnit = true;
+        // Fix up flash strength tags for devices without these keys.
+        res = fixupTorchStrengthTags();
+        if (OK != res) {
+            ALOGE("%s: Unable to add default ANDROID_FLASH_INFO_STRENGTH_DEFAULT_LEVEL and"
+                    "ANDROID_FLASH_INFO_STRENGTH_MAXIMUM_LEVEL tags: %s (%d)", __FUNCTION__,
+                    strerror(-res), res);
+        }
     } else {
         mHasFlashUnit = false;
     }
@@ -878,15 +885,11 @@ status_t HidlProviderInfo::HidlDeviceInfo3::dumpState(int fd) {
 }
 
 status_t HidlProviderInfo::HidlDeviceInfo3::isSessionConfigurationSupported(
-        const SessionConfiguration &configuration, bool overrideForPerfClass, bool *status) {
+        const SessionConfiguration &configuration, bool overrideForPerfClass,
+        metadataGetter getMetadata, bool *status) {
 
     hardware::camera::device::V3_8::StreamConfiguration streamConfiguration;
     bool earlyExit = false;
-    camera3::metadataGetter getMetadata = [this](const String8 &id, bool /*overrideForPerfClass*/) {
-          CameraMetadata physicalChars;
-          getPhysicalCameraCharacteristics(id.c_str(), &physicalChars);
-          return physicalChars;
-    };
     auto bRes = SessionConfigurationUtils::convertToHALStreamCombination(configuration,
             String8(mId.c_str()), mCameraCharacteristics, getMetadata, mPhysicalIds,
             streamConfiguration, overrideForPerfClass, &earlyExit);

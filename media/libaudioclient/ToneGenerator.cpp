@@ -17,6 +17,7 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "ToneGenerator"
 
+#include <inttypes.h>
 #include <utility>
 
 #include <math.h>
@@ -1229,7 +1230,8 @@ void ToneGenerator::stopTone() {
                     sec = sec * 1000 + nsec / 1000000; // duration in milliseconds
                     mMaxSmp = (unsigned int)(((int64_t)sec * mSamplingRate) / 1000);
                 }
-                ALOGV("stopTone() forcing mMaxSmp to %d, total for far %d", mMaxSmp,  mTotalSmp);
+                ALOGV("stopTone() forcing mMaxSmp to %d, total for far %" PRIu64, mMaxSmp,
+                      mTotalSmp);
             } else {
                 mState = TONE_STOPPING;
             }
@@ -1399,7 +1401,7 @@ size_t ToneGenerator::onMoreData(const AudioTrack::Buffer& buffer) {
             mNextSegSmp = TONEGEN_INF; // forced to skip state machine management below
         }
 
-        if (mTotalSmp > mNextSegSmp) {
+        if (mTotalSmp > mNextSegSmp && mNextSegSmp != TONEGEN_INF) {
             // Time to go to next sequence segment
 
             ALOGV("End Segment, time: %d", (unsigned int)(systemTime()/1000000));
@@ -1483,8 +1485,11 @@ size_t ToneGenerator::onMoreData(const AudioTrack::Buffer& buffer) {
             }
 
             // Update next segment transition position. No harm to do it also for last segment as
-            // mNextSegSmp won't be used any more
-            mNextSegSmp += (mpToneDesc->segments[mCurSegment].duration * mSamplingRate) / 1000;
+            // mNextSegSmp won't be used any more.
+            // Handle 32 bit wraparound gracefully.
+            const uint64_t res = static_cast<uint64_t>(mNextSegSmp) +
+                    (mpToneDesc->segments[mCurSegment].duration * mSamplingRate) / 1000;
+            mNextSegSmp = static_cast<uint32_t>(std::min<uint64_t>(TONEGEN_INF, res));
 
         } else {
             // Inside a segment keep tone ON or OFF
