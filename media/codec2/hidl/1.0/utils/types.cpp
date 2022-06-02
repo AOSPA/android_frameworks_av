@@ -761,12 +761,14 @@ bool addBaseBlock(
 // not be closed before the transaction is complete.
 bool objcpy(hidl_handle* d, const C2Fence& s) {
     d->setTo(nullptr);
-    C2Handle* handle = s.handle();
-    if (!handle) {
-        LOG(ERROR) << "Failed to create a native handle from the c2 fence.";
-        return false;
+    native_handle_t* handle = _C2FenceFactory::CreateNativeHandle(s);
+    if (handle) {
+        d->setTo(handle, true /* owns */);
+//  } else if (!s.ready()) {
+//      // TODO: we should wait for unmarshallable fences but this may not be
+//      // the best place for it. We can safely ignore here as at this time
+//      // all fences used here are marshallable.
     }
-    d->setTo(reinterpret_cast<native_handle_t*>(handle), true /* owns */);
     return true;
 }
 
@@ -1181,7 +1183,7 @@ struct C2BaseBlock {
 // not be closed before the transaction is complete.
 bool objcpy(C2Fence* d, const hidl_handle& s) {
     const native_handle_t* handle = s.getNativeHandle();
-    *d = _C2FenceFactory::CreateFromNativeHandle(reinterpret_cast<const C2Handle*>(handle));
+    *d = _C2FenceFactory::CreateFromNativeHandle(handle);
     return true;
 }
 
