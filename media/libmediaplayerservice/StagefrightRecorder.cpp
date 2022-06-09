@@ -2310,8 +2310,9 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     // disable audio for time lapse recording
     const bool disableAudio = mCaptureFpsEnable && mCaptureFps < mFrameRate;
 
-    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
-        mAudioEncoder == AUDIO_ENCODER_AAC ) {
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_UNPROCESSED &&
+        mAudioSource != AUDIO_SOURCE_CNT &&
+        mAudioEncoder == AUDIO_ENCODER_AAC) {
         mAudioSourceNode = setAACCompressRecording();
         if (mAudioSourceNode == NULL) {
             ALOGW("%s: unable to create compress recording", __func__);
