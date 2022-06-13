@@ -25,6 +25,7 @@
 #include <C2Debug.h>
 #include <C2PlatformSupport.h>
 #include <Codec2BufferUtils.h>
+#include <Codec2CommonUtils.h>
 #include <SimpleC2Interface.h>
 
 #include "C2SoftVpxDec.h"
@@ -219,7 +220,7 @@ public:
         // TODO: support more formats?
         std::vector<uint32_t> pixelFormats = {HAL_PIXEL_FORMAT_YCBCR_420_888};
 #ifdef VP9
-        if (isAtLeastT()) {
+        if (isHalPixelFormatSupported((AHardwareBuffer_Format)HAL_PIXEL_FORMAT_YCBCR_P010)) {
             pixelFormats.push_back(HAL_PIXEL_FORMAT_YCBCR_P010);
         }
 #endif
@@ -687,9 +688,10 @@ status_t C2SoftVpxDec::outputBuffer(
 
     std::shared_ptr<C2GraphicBlock> block;
     uint32_t format = HAL_PIXEL_FORMAT_YV12;
+    std::shared_ptr<C2StreamColorAspectsTuning::output> defaultColorAspects;
     if (img->fmt == VPX_IMG_FMT_I42016) {
         IntfImpl::Lock lock = mIntf->lock();
-        std::shared_ptr<C2StreamColorAspectsTuning::output> defaultColorAspects = mIntf->getDefaultColorAspects_l();
+        defaultColorAspects = mIntf->getDefaultColorAspects_l();
         bool allowRGBA1010102 = false;
         if (defaultColorAspects->primaries == C2Color::PRIMARIES_BT2020 &&
             defaultColorAspects->matrix == C2Color::MATRIX_BT2020 &&
@@ -759,11 +761,14 @@ status_t C2SoftVpxDec::outputBuffer(
                 queue->entries.push_back(
                         [dstY, srcY, srcU, srcV,
                          srcYStride, srcUStride, srcVStride, dstYStride,
-                         width = mWidth, height = std::min(mHeight - i, kHeight)] {
+                         width = mWidth, height = std::min(mHeight - i, kHeight),
+                         defaultColorAspects] {
                             convertYUV420Planar16ToY410OrRGBA1010102(
                                     (uint32_t *)dstY, srcY, srcU, srcV, srcYStride / 2,
                                     srcUStride / 2, srcVStride / 2, dstYStride / sizeof(uint32_t),
-                                    width, height);
+                                    width, height,
+                                    std::static_pointer_cast<const C2ColorAspectsStruct>(
+                                            defaultColorAspects));
                         });
                 srcY += srcYStride / 2 * kHeight;
                 srcU += srcUStride / 2 * (kHeight / 2);
