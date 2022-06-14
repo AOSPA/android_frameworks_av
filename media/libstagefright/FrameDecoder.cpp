@@ -972,7 +972,7 @@ status_t MediaImageDecoder::onOutputReceived(
         return ERROR_MALFORMED;
     }
 
-    int32_t width, height, stride, slice_height, srcFormat;
+    int32_t width, height, stride, slice_height;
     if (outputFormat->findInt32("width", &width) == false) {
         ALOGE("MediaImageDecoder::onOutputReceived:width is missing in outputFormat");
         return ERROR_MALFORMED;
@@ -985,10 +985,9 @@ status_t MediaImageDecoder::onOutputReceived(
         ALOGE("MediaImageDecoder::onOutputReceived:stride is missing in outputFormat");
         return ERROR_MALFORMED;
     }
-    if (outputFormat->findInt32("color-format", &srcFormat) == false) {
-        ALOGE("MediaImageDecoder::onOutputReceived: color format is missing in outputFormat");
-        return ERROR_MALFORMED;
-    }
+
+    int32_t srcFormat;
+    CHECK(outputFormat->findInt32("color-format", &srcFormat));
 
     uint32_t bitDepth = 8;
     if (COLOR_FormatYUVP010 == srcFormat) {

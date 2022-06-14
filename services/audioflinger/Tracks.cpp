@@ -1905,6 +1905,7 @@ binder::Status AudioFlinger::PlaybackThread::Track::AudioVibrationController::mu
         PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
         if ((mTrack->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
                 && playbackThread->mHapticChannelCount > 0) {
+            ALOGD("%s, haptic playback was muted for track %d", __func__, mTrack->id());
             mTrack->setHapticPlaybackEnabled(false);
             *ret = true;
         }
@@ -1922,6 +1923,7 @@ binder::Status AudioFlinger::PlaybackThread::Track::AudioVibrationController::un
         PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
         if ((mTrack->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
                 && playbackThread->mHapticChannelCount > 0) {
+            ALOGD("%s, haptic playback was unmuted for track %d", __func__, mTrack->id());
             mTrack->setHapticPlaybackEnabled(true);
             *ret = true;
         }
