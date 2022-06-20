@@ -64,7 +64,6 @@ Camera2ClientBase<TClientBase>::Camera2ClientBase(
                 clientFeatureId, cameraId, api1CameraId, cameraFacing, sensorOrientation, clientPid,
                 clientUid, servicePid),
         mSharedCameraCallbacks(remoteCallback),
-        mDeviceVersion(cameraService->getDeviceVersion(TClientBase::mCameraIdStr)),
         mDeviceActive(false), mApi1CameraId(api1CameraId)
 {
     ALOGI("Camera %s: Opened. Client: %s (PID %d, UID %d)", cameraId.string(),
@@ -338,7 +337,7 @@ template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         int64_t requestCount, int64_t resultErrorCount, bool deviceError,
         const std::vector<hardware::CameraStreamStats>& streamStats,
-        const std::string& userTag) {
+        const std::string& userTag, int videoStabilizationMode) {
     if (mDeviceActive) {
         status_t res = TClientBase::finishCameraStreamingOps();
         if (res != OK) {
@@ -346,7 +345,8 @@ void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
                     TClientBase::mCameraIdStr.string(), res);
         }
         CameraServiceProxyWrapper::logIdle(TClientBase::mCameraIdStr,
-                requestCount, resultErrorCount, deviceError, userTag, streamStats);
+                requestCount, resultErrorCount, deviceError, userTag, videoStabilizationMode,
+                streamStats);
     }
     mDeviceActive = false;
 
@@ -419,11 +419,6 @@ void Camera2ClientBase<TClientBase>::notifyRepeatingRequestError(long lastFrameN
 template <typename TClientBase>
 int Camera2ClientBase<TClientBase>::getCameraId() const {
     return mApi1CameraId;
-}
-
-template <typename TClientBase>
-int Camera2ClientBase<TClientBase>::getCameraDeviceVersion() const {
-    return mDeviceVersion;
 }
 
 template <typename TClientBase>

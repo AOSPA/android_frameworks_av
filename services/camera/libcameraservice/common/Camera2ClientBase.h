@@ -91,7 +91,7 @@ public:
     void                  notifyIdleWithUserTag(int64_t requestCount, int64_t resultErrorCount,
                                      bool deviceError,
                                      const std::vector<hardware::CameraStreamStats>& streamStats,
-                                     const std::string& userTag);
+                                     const std::string& userTag, int videoStabilizationMode);
 
     int                   getCameraId() const;
     const sp<CameraDeviceBase>&
@@ -151,8 +151,6 @@ protected:
     mutable Mutex         mBinderSerializationLock;
 
     /** CameraDeviceBase instance wrapping HAL3+ entry */
-
-    const int mDeviceVersion;
 
     // Note: This was previously set to const to avoid mDevice being updated -
     // b/112639939 (update of sp<> is racy) during dumpDevice (which is important to be lock free

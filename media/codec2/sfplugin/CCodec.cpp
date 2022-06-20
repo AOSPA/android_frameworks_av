@@ -1435,7 +1435,7 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 int64_t blockUsage =
                     usage.value | C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE;
                 std::shared_ptr<C2GraphicBlock> block = FetchGraphicBlock(
-                        width, height, pixelFormat, blockUsage, {comp->getName()});
+                        width, height, componentColorFormat, blockUsage, {comp->getName()});
                 sp<GraphicBlockBuffer> buffer;
                 if (block) {
                     buffer = GraphicBlockBuffer::Allocate(
@@ -1826,13 +1826,20 @@ void CCodec::start() {
         return;
     }
 
+    // preparation of input buffers may not succeed due to the lack of
+    // memory; returning correct error code (NO_MEMORY) as an error allows
+    // MediaCodec to try reclaim and restart codec gracefully.
+    std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
+    err2 = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
+    if (err2 != OK) {
+        ALOGE("Initial preparation for Input Buffers failed");
+        mCallback->onError(err2, ACTION_CODE_FATAL);
+        return;
+    }
+
     mCallback->onStartCompleted();
 
-    err2 = mChannel->requestInitialInputBuffers();
-    if (err2 != OK) {
-        ALOGE("Initial request for Input Buffers failed");
-        mCallback->onError(err2, ACTION_CODE_FATAL);
-    }
+    mChannel->requestInitialInputBuffers(std::move(clientInputBuffers));
 }
 
 void CCodec::initiateShutdown(bool keepComponentAllocated) {
@@ -2126,11 +2133,14 @@ void CCodec::signalResume() {
         state->set(RUNNING);
     }
 
-    status_t err = mChannel->requestInitialInputBuffers();
+    std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
+    status_t err = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
     if (err != OK) {
         ALOGE("Resume request for Input Buffers failed");
         mCallback->onError(err, ACTION_CODE_FATAL);
+        return;
     }
+    mChannel->requestInitialInputBuffers(std::move(clientInputBuffers));
 }
 
 void CCodec::signalSetParameters(const sp<AMessage> &msg) {
@@ -2415,7 +2425,8 @@ void CCodec::onMessageReceived(const sp<AMessage> &msg) {
                         C2StreamColorAspectsInfo::output::PARAM_TYPE,
                         C2StreamDataSpaceInfo::output::PARAM_TYPE,
                         C2StreamHdrStaticInfo::output::PARAM_TYPE,
-                        C2StreamHdr10PlusInfo::output::PARAM_TYPE,
+                        C2StreamHdr10PlusInfo::output::PARAM_TYPE,  // will be deprecated
+                        C2StreamHdrDynamicMetadataInfo::output::PARAM_TYPE,
                         C2StreamPixelAspectRatioInfo::output::PARAM_TYPE,
                         C2StreamSurfaceScalingInfo::output::PARAM_TYPE
                     };

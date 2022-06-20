@@ -400,10 +400,10 @@ void CCodecConfig::initializeStandardParams() {
     // Rotation
     // Note: SDK rotation is clock-wise, while C2 rotation is counter-clock-wise
     add(ConfigMapper(KEY_ROTATION, C2_PARAMKEY_VUI_ROTATION, "value")
-        .limitTo(D::VIDEO & D::CODED)
+        .limitTo((D::VIDEO | D::IMAGE) & D::CODED)
         .withMappers(negate, negate));
     add(ConfigMapper(KEY_ROTATION, C2_PARAMKEY_ROTATION, "value")
-        .limitTo(D::VIDEO & D::RAW)
+        .limitTo((D::VIDEO | D::IMAGE) & D::RAW)
         .withMappers(negate, negate));
 
     // android 'video-scaling'
@@ -512,6 +512,9 @@ void CCodecConfig::initializeStandardParams() {
         .limitTo((D::VIDEO | D::IMAGE) & D::RAW));
     add(ConfigMapper("cta861.max-fall", C2_PARAMKEY_HDR_STATIC_INFO, "max-fall")
         .limitTo((D::VIDEO | D::IMAGE) & D::RAW));
+
+    add(ConfigMapper(C2_PARAMKEY_HDR_FORMAT, C2_PARAMKEY_HDR_FORMAT, "value")
+        .limitTo((D::VIDEO | D::IMAGE) & D::CODED & D::CONFIG));
 
     add(ConfigMapper(std::string(KEY_FEATURE_) + FEATURE_SecurePlayback,
                      C2_PARAMKEY_SECURE_MODE, "value"));
@@ -905,6 +908,9 @@ void CCodecConfig::initializeStandardParams() {
     add(ConfigMapper(KEY_MAX_OUTPUT_CHANNEL_COUNT, C2_PARAMKEY_MAX_CHANNEL_COUNT, "value")
         .limitTo(D::AUDIO & (D::CONFIG | D::PARAM | D::READ)));
 
+    add(ConfigMapper(KEY_CHANNEL_MASK, C2_PARAMKEY_CHANNEL_MASK, "value")
+        .limitTo(D::AUDIO & D::DECODER & D::READ));
+
     add(ConfigMapper(KEY_AAC_SBR_MODE, C2_PARAMKEY_AAC_SBR_MODE, "value")
         .limitTo(D::AUDIO & D::ENCODER & (D::CONFIG | D::PARAM | D::READ))
         .withMapper([](C2Value v) -> C2Value {
@@ -963,7 +969,23 @@ void CCodecConfig::initializeStandardParams() {
         .limitTo(D::ENCODER & D::VIDEO & D::READ));
 
     add(ConfigMapper(KEY_PICTURE_TYPE, C2_PARAMKEY_PICTURE_TYPE, "value")
-        .limitTo(D::ENCODER & D::VIDEO & D::READ));
+        .limitTo(D::ENCODER & D::VIDEO & D::READ)
+        .withMappers([](C2Value v) -> C2Value {
+            int32_t sdk;
+            C2Config::picture_type_t c2;
+            if (v.get(&sdk) && C2Mapper::map(sdk, &c2)) {
+                return C2Value(c2);
+            }
+            return C2Value();
+        }, [](C2Value v) -> C2Value {
+            C2Config::picture_type_t c2;
+            int32_t sdk = PICTURE_TYPE_UNKNOWN;
+            using C2ValueType=typename _c2_reduce_enum_to_underlying_type<decltype(c2)>::type;
+            if (v.get((C2ValueType*)&c2) && C2Mapper::map(c2, &sdk)) {
+                return sdk;
+            }
+            return C2Value();
+        }));
 
     /* still to do
        not yet used by MediaCodec, but defined as MediaFormat
@@ -1641,6 +1663,27 @@ ReflectedParamUpdater::Dict CCodecConfig::getReflectedFormat(
             }
             if (captureRate > 0 && frameRate > 0) {
                 params->setFloat(C2_PARAMKEY_INPUT_TIME_STRETCH, captureRate / frameRate);
+            }
+        }
+
+        // add HDR format for video encoding
+        if (configDomain == IS_CONFIG) {
+            // don't assume here that transfer is set for HDR, only require it for HLG
+            int transfer = 0;
+            params->findInt32(KEY_COLOR_TRANSFER, &transfer);
+
+            int profile;
+            if (params->findInt32(KEY_PROFILE, &profile)) {
+                std::shared_ptr<C2Mapper::ProfileLevelMapper> mapper =
+                    C2Mapper::GetProfileLevelMapper(mCodingMediaType);
+                C2Config::hdr_format_t c2 = C2Config::hdr_format_t::UNKNOWN;
+                if (mapper && mapper->mapHdrFormat(profile, &c2)) {
+                    if (c2 == C2Config::hdr_format_t::HLG &&
+                        transfer != COLOR_TRANSFER_HLG) {
+                        c2 = C2Config::hdr_format_t::UNKNOWN;
+                    }
+                    params->setInt32(C2_PARAMKEY_HDR_FORMAT, c2);
+                }
             }
         }
     }
