@@ -6971,9 +6971,7 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
         uid = 0;
     }
 
-    if ((attributes.source == AUDIO_SOURCE_DEFAULT ||
-        attributes.source != AUDIO_SOURCE_ECHO_REFERENCE)
-        && isInCall()) {
+    if (attributes.source == AUDIO_SOURCE_DEFAULT && isInCall()) {
         attributes.source = AUDIO_SOURCE_VOICE_COMMUNICATION;
     }
     if (attributes.source != AUDIO_SOURCE_DEFAULT) {
