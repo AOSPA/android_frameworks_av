@@ -67,6 +67,7 @@ using android::media::audio::common::AudioMMapPolicyType;
 
 int main(int argc __unused, char **argv)
 {
+    auto startTime = std::chrono::steady_clock::now();
     // TODO: update with refined parameters
     limitProcessMemory(
         "audio.maxmem", /* "ro.audio.maxmem", property that defines limit */
@@ -170,7 +171,9 @@ int main(int argc __unused, char **argv)
         sp<IServiceManager> sm = defaultServiceManager();
         ALOGI("ServiceManager: %p", sm.get());
         AudioFlinger::instantiate();
+        ALOGI("ServiceManager: AudioFlinger instantiate done %p", sm.get());
         AudioPolicyService::instantiate();
+        ALOGI("ServiceManager: AudioPolicyService instantiate done %p", sm.get());
         instantiateVRAudioServer();
 
         // AAudioService should only be used in OC-MR1 and later.
@@ -195,7 +198,10 @@ int main(int argc __unused, char **argv)
             ALOGD("Do not init aaudio service, status %d, policy info size %zu",
                   status, policyInfos.size());
         }
-
+        auto endTime = std::chrono::steady_clock::now();
+        float timeTaken = std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(
+                        endTime - startTime).count();
+        ALOGI("ServiceManager: %p took %.2f seconds ", sm.get(), timeTaken/1000);
         ProcessState::self()->startThreadPool();
         IPCThreadState::self()->joinThreadPool();
     }
