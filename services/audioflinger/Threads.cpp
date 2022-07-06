@@ -4301,16 +4301,9 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                     // update sleep time (which is >= 0)
                     mSleepTimeUs = deltaNs / 1000;
                 }
-                if (!mStandby && mHwSupportsSuspend) {
-                    mOutput->stream->setParameters(String8("suspend_playback=true"));
-                }
 
                 if (!mSignalPending && mConfigEvents.isEmpty() && !exitPending()) {
                     mWaitWorkCV.waitRelative(mLock, microseconds((nsecs_t)mSleepTimeUs));
-                }
-
-                if (!mStandby && mHwSupportsSuspend) {
-                    mOutput->stream->setParameters(String8("suspend_playback=false"));
                 }
 
                 ATRACE_END();
