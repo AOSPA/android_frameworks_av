@@ -786,6 +786,11 @@ protected:
                      */
                     bool            readAndClearHasChanged();
 
+                    /** Force updating track metadata to audio HAL stream next time
+                     * readAndClearHasChanged() is called.
+                     */
+                    void            setHasChanged() { mHasChanged = true; }
+
                 private:
                     void            logTrack(const char *funcName, const sp<T> &track) const;
 
@@ -2023,7 +2028,7 @@ class MmapThread : public ThreadBase
     virtual     void        threadLoop_exit();
     virtual     void        threadLoop_standby();
     virtual     bool        shouldStandby_l() { return false; }
-    virtual     status_t    exitStandby();
+    virtual     status_t    exitStandby_l() REQUIRES(mLock);
 
     virtual     status_t    initCheck() const { return (mHalStream == 0) ? NO_INIT : NO_ERROR; }
     virtual     size_t      frameCount() const { return mFrameCount; }
@@ -2153,7 +2158,7 @@ public:
 
                 AudioStreamIn* clearInput();
 
-                status_t       exitStandby() override;
+                status_t       exitStandby_l() REQUIRES(mLock) override;
 
                 void           updateMetadata_l() override;
                 void           processVolume_l() override;
