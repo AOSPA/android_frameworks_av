@@ -37,6 +37,9 @@ license {
 
 cc_library_shared {
     name: "libcameraservice",
+    defaults: [
+        "camera_package_name_defaults",
+    ],
 
     // Camera service source
 
