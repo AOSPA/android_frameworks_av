@@ -324,6 +324,8 @@ public:
     // Shared utilities
     static binder::Status filterGetInfoErrorCode(status_t err);
 
+    static std::string getCurrPackageName();
+
     /**
      * Returns true if the device is an automotive device and cameraId is system
      * only camera which has characteristic AUTOMOTIVE_LOCATION value as either
