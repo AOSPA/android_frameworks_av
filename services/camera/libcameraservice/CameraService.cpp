@@ -171,6 +171,9 @@ constexpr int32_t kInvalidDeviceId = -1;
 // Set to keep track of logged service error events.
 static std::set<std::string> sServiceErrorEventSet;
 
+// Current camera package name
+static std::string sCurrPackageName;
+
 CameraService::CameraService(
         std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
         std::shared_ptr<AttributionAndPermissionUtils> attributionAndPermissionUtils) :
@@ -1467,6 +1470,10 @@ Status CameraService::filterGetInfoErrorCode(status_t err) {
     }
 }
 
+std::string CameraService::getCurrPackageName() {
+    return sCurrPackageName;
+}
+
 Status CameraService::makeClient(const sp<CameraService>& cameraService,
         const sp<IInterface>& cameraCb, const std::string& packageName, bool systemNativeClient,
         const std::optional<std::string>& featureId,  const std::string& cameraId,
@@ -2442,6 +2449,8 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const std::str
     ALOGI("CameraService::connect call (PID %d \"%s\", camera ID %s) and "
             "Camera API version %d", packagePid, clientPackageName.c_str(), cameraId.c_str(),
             static_cast<int>(effectiveApiLevel));
+
+    sCurrPackageName = clientName8.string();
 
     nsecs_t openTimeNs = systemTime();
 

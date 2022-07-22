@@ -122,6 +122,9 @@ cc_defaults {
 
 cc_library {
     name: "libcameraservice",
+    defaults: [
+        "camera_package_name_defaults",
+    ],
 
     defaults: [
         "libcameraservice_deps",
