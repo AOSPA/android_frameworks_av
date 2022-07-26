@@ -104,6 +104,7 @@ struct NuPlayer::Renderer : public AHandler {
         kWhatMediaRenderingStart      = 'mdrd',
         kWhatAudioTearDown            = 'adTD',
         kWhatAudioOffloadPauseTimeout = 'aOPT',
+        kWhatReleaseWakeLock          = 'adRL',
         kWhatVideoPrerollComplete     = 'vdpC',
     };
 
