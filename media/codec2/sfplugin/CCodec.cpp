@@ -2141,6 +2141,9 @@ void CCodec::signalResume() {
 
     std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
     status_t err = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
+    if (err == WOULD_BLOCK) {
+        return;
+    }
     // FIXME(b/237656746)
     if (err != OK && err != NO_MEMORY) {
         ALOGE("Resume request for Input Buffers failed");
