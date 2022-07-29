@@ -29,6 +29,7 @@
 
 namespace android::mediautils {
 
+uint32_t TimeCheck::sTimeOutMs = 0;
 /**
  * Returns the std::string "HH:MM:SS.MSc" from a system_clock time_point.
  */
@@ -132,11 +133,10 @@ TimerThread& TimeCheck::getTimeCheckThread() {
     return sTimeCheckThread;
 }
 
-static uint32_t timeOutMs = TimeCheck::kDefaultTimeOutMs;
 
-void TimeCheck::setSystemReadyTimeoutMs(uint32_t timeout_ms)
+void TimeCheck::setSystemReadyTimeoutMs(uint32_t timeoutMs)
 {
-    timeOutMs = timeout_ms;
+    sTimeOutMs = timeoutMs;
 }
 
 /* static */
@@ -147,12 +147,12 @@ std::string TimeCheck::toString() {
 }
 
 // BUG(b/214424164)
-TimeCheck::TimeCheck(std::string tag, OnTimerFunc&& onTimer,
+TimeCheck::TimeCheck(std::string tag, OnTimerFunc&& onTimer, uint32_t timeoutMs,
         bool crashOnTimeout)
     : mTimeCheckHandler(new TimeCheckHandler{
             std::move(tag), std::move(onTimer), crashOnTimeout,
             std::chrono::system_clock::now(), gettid()})
-    , mTimerHandle(timeOutMs == 0
+    , mTimerHandle(timeoutMs == 0
               ? getTimeCheckThread().trackTask(mTimeCheckHandler->tag)
               : getTimeCheckThread().scheduleTask(
                       mTimeCheckHandler->tag,
@@ -162,7 +162,7 @@ TimeCheck::TimeCheck(std::string tag, OnTimerFunc&& onTimer,
                       [ timeCheckHandler = mTimeCheckHandler ] {
                           timeCheckHandler->onTimeout();
                       },
-                      std::chrono::milliseconds(timeOutMs))) {}
+                      std::chrono::milliseconds(timeoutMs))) {}
 
 TimeCheck::~TimeCheck() {
     if (mTimeCheckHandler) {
