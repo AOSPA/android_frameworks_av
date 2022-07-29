@@ -467,10 +467,12 @@ AudioTrack::~AudioTrack()
     // for split a2dp solution via offload path, create dummy Low latency session
     // which will ensure session is active
     if(isOffloadedOrDirect_l() &&
-       (AudioSystem::getDeviceConnectionState((audio_devices_t)
-        AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE)) {
-        ALOGD("Creating Dummy track for A2DP offload session");
-        createDummyAudioSessionForA2DP();
+       ((AudioSystem::getDeviceConnectionState((audio_devices_t)
+         AUDIO_DEVICE_OUT_BLE_HEADSET,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) ||
+        (AudioSystem::getDeviceConnectionState((audio_devices_t)
+        AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,"") == AUDIO_POLICY_DEVICE_STATE_AVAILABLE))) {
+        ALOGD("Creating Dummy track for A2DP/BLE offload session");
+        createDummyAudioSessionForBluetooth();
     }
 
     stopAndJoinCallbacks(); // checks mStatus
@@ -489,7 +491,7 @@ AudioTrack::~AudioTrack()
     }
 }
 
-void AudioTrack::createDummyAudioSessionForA2DP() {
+void AudioTrack::createDummyAudioSessionForBluetooth() {
    sp<AudioTrack> dummyTrack;
 
    // Do not create dummy session if session is paused more than 3 secs
