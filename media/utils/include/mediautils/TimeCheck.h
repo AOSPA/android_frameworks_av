@@ -31,6 +31,7 @@ class TimeCheck {
 
     // The default timeout is chosen to be less than system server watchdog timeout
     static constexpr uint32_t kDefaultTimeOutMs = 5000;
+    static uint32_t sTimeOutMs;
 
     /**
      * TimeCheck is a RAII object which will notify a callback
@@ -61,7 +62,7 @@ class TimeCheck {
      * \param crashOnTimeout true if the object issues an abort on timeout.
      */
     explicit TimeCheck(std::string tag, OnTimerFunc&& onTimer = {},
-            bool crashOnTimeout = true);
+            uint32_t timeoutMs = sTimeOutMs, bool crashOnTimeout = true);
 
     TimeCheck() = default;
     // Remove copy constructors as there should only be one call to the destructor.
