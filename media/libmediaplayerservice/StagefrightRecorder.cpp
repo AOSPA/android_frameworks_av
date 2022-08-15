@@ -147,7 +147,6 @@ StagefrightRecorder::StagefrightRecorder(const AttributionSourceState& client)
       mSelectedMicFieldDimension(MIC_FIELD_DIMENSION_NORMAL) {
 
     ALOGV("Constructor");
-    mEnabledCompressAACRecording = false;
     mMetricsItem = NULL;
     mAnalyticsDirty = false;
     reset();
@@ -2201,84 +2200,6 @@ status_t StagefrightRecorder::setupAudioEncoder() {
     return OK;
 }
 
-bool StagefrightRecorder::isCompressAACRecordingSupported() {
-    status_t status = OK;
-    uint32_t numMixSinkPorts = 0;
-    uint32_t generation = 0;
-    struct audio_port_v7 *mixSinkPorts = nullptr;
-    bool isCompressCaptureSupported = false;
-
-    status =
-        AudioSystem::listAudioPorts(AUDIO_PORT_ROLE_SINK, AUDIO_PORT_TYPE_MIX,
-                                    &numMixSinkPorts, nullptr, &generation);
-    if (status != OK || numMixSinkPorts <= 0) {
-        ALOGE(
-            "%s: listports of role %zu and type %zu failed or 0 mix sink "
-            "ports available",
-            __func__, AUDIO_PORT_ROLE_SINK, AUDIO_PORT_TYPE_MIX);
-        return isCompressCaptureSupported;
-    }
-
-    mixSinkPorts = (struct audio_port_v7 *)realloc(
-        mixSinkPorts, numMixSinkPorts * sizeof(struct audio_port_v7));
-    status = AudioSystem::listAudioPorts(AUDIO_PORT_ROLE_SINK,
-                                         AUDIO_PORT_TYPE_MIX, &numMixSinkPorts,
-                                         mixSinkPorts, &generation);
-    if (status != OK || numMixSinkPorts <= 0) {
-        ALOGE("%s: listports of role %zu and type %zu is failed", __func__,
-              AUDIO_PORT_ROLE_SINK, AUDIO_PORT_TYPE_MIX);
-        free(mixSinkPorts);
-        mixSinkPorts = nullptr;
-        return isCompressCaptureSupported;
-    }
-
-    /**
-     * AudioRecord supports compress capture
-     * with input direct flag check for a source
-     * mixport which has input direct flag and has
-     * audio profile AAC-LC
-     **/
-
-    auto hasInputDirectFlag = [](struct audio_port_v7 &ap) {
-        return AUDIO_INPUT_FLAG_DIRECT == ap.active_config.flags.input;
-    };
-    auto compressMixSinkPort = std::find_if(
-        mixSinkPorts, mixSinkPorts + numMixSinkPorts, hasInputDirectFlag);
-
-    if (compressMixSinkPort) {
-        auto hasAudioFormatAac = [](struct audio_profile &profile) {
-            return profile.format == AUDIO_FORMAT_AAC_LC;
-        };
-        auto compressAACprofile =
-            std::find_if(compressMixSinkPort->audio_profiles,
-                         (compressMixSinkPort->audio_profiles) +
-                             (compressMixSinkPort->num_audio_profiles),
-                         hasAudioFormatAac);
-        if (compressAACprofile) {
-            auto sampleRates = compressAACprofile->sample_rates;
-            auto numSampleRates = compressAACprofile->num_sample_rates;
-            auto channelMasks = compressAACprofile->channel_masks;
-            auto numChannelMasks = compressAACprofile->num_channel_masks;
-            if (std::find(sampleRates, sampleRates + numSampleRates,
-                          mSampleRate) &&
-                std::find(channelMasks, channelMasks + numChannelMasks,
-                          audio_channel_in_mask_from_count(mAudioChannels))) {
-                isCompressCaptureSupported = true;
-                ALOGV(
-                    "%s: found compress mix sink port, name: %s with AAC LC "
-                    "format with sample rate %zu and channel count %zu",
-                    __func__, compressMixSinkPort->name, mSampleRate,
-                    mAudioChannels);
-            }
-        }
-    }
-
-    free(mixSinkPorts);
-    mixSinkPorts = nullptr;
-
-    return isCompressCaptureSupported;
-}
-
 status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     mWriter.clear();
     mTotalBitRate = 0;
@@ -2314,25 +2235,19 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     // disable audio for time lapse recording
     const bool disableAudio = mCaptureFpsEnable && mCaptureFps < mFrameRate;
 
-    audio_mode_t phoneState = AudioSystem::getPhoneState();
-    ALOGI("%s: audio mode is :%d", __func__, phoneState);
-
-    if (!disableAudio && mAudioSource != AUDIO_SOURCE_UNPROCESSED &&
-        mAudioSource != AUDIO_SOURCE_CNT && phoneState <= AUDIO_MODE_NORMAL &&
-        mAudioEncoder == AUDIO_ENCODER_AAC) {
-        mAudioSourceNode = setAACCompressRecording();
-        if (mAudioSourceNode == NULL) {
-            ALOGW("%s: unable to create compress recording", __func__);
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        isCompressAudioRecordingSupported()) {
+        mAudioSourceNode = setCompressAudioRecording();
+        if (mAudioSourceNode == nullptr) {
+            ALOGE("%s: unable to create compress audio recording", __func__);
         } else {
             writer->addSource(mAudioSourceNode);
-            mAudioBitRate = kDspSupportedBitRate;
-            mTotalBitRate += mAudioBitRate;
-            mEnabledCompressAACRecording = true;
-            ALOGI("%s:  created compress recording", __func__);
+            ALOGI("%s:  created compress audio recording", __func__);
         }
     }
 
-    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT && !mEnabledCompressAACRecording) {
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        !mEnabledCompressAudioRecording) {
         err = setupAudioEncoder();
     }
     if (mVideoSource < VIDEO_SOURCE_LIST_END) {
@@ -2342,7 +2257,8 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
         mVideoEncoderSource = videoSource;
         mTotalBitRate += mVideoBitRate;
     }
-    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT && !mEnabledCompressAACRecording) {
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
+        !mEnabledCompressAudioRecording) {
         if (err != OK) return err;
         writer->addSource(mAudioEncoderSource);
         mTotalBitRate += mAudioBitRate;
@@ -2431,7 +2347,7 @@ status_t StagefrightRecorder::pause() {
     }
 
     /* compress recording pause*/
-    if (mAudioSourceNode != NULL && mEnabledCompressAACRecording) {
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
         mAudioSourceNode->pause();
     }
 
@@ -2459,7 +2375,7 @@ status_t StagefrightRecorder::resume() {
     bool allSourcesStarted = true;
 
     /* compress recording resume*/
-    if (mAudioSourceNode != NULL && mEnabledCompressAACRecording) {
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
         int64_t timeUs = mAudioSourceNode->getFirstSampleSystemTimeUs();
         if (timeUs < 0) {
             allSourcesStarted = false;
@@ -2505,7 +2421,7 @@ status_t StagefrightRecorder::resume() {
     }
 
      /* compress audio recording resume*/
-    if (mAudioSourceNode != NULL && mEnabledCompressAACRecording) {
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
         mAudioSourceNode->start(meta.get());
     }
 
@@ -2634,6 +2550,8 @@ status_t StagefrightRecorder::reset() {
     mAudioBitRate  = 12200;
     mInterleaveDurationUs = 0;
     mIFramesIntervalSec = 1;
+    mEnabledCompressAudioRecording = false;
+    mAudioSourceNode.clear();
     mAudioSourceNode = 0;
     mUse64BitFileOffset = false;
     mMovieTimeScale  = -1;
