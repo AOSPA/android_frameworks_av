@@ -1141,7 +1141,7 @@ void GraphicBufferSource::releaseAllAvailableBuffers_l() {
 
 // BufferQueue::ConsumerListener callback
 void GraphicBufferSource::onSidebandStreamChanged() {
-    ALOGW("GraphicBufferSource can't consume sideband streams");
+    ALOG_ASSERT(false, "GraphicBufferSource can't consume sideband streams");
 }
 
 status_t GraphicBufferSource::configure(
