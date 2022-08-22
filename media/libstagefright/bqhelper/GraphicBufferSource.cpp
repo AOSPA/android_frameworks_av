@@ -17,7 +17,7 @@
 #include <inttypes.h>
 
 #define LOG_TAG "GraphicBufferSource"
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #include <utils/Log.h>
 
 #define STRINGIFY_ENUMS // for asString in HardwareAPI.h/VideoAPI.h
@@ -1141,7 +1141,7 @@ void GraphicBufferSource::releaseAllAvailableBuffers_l() {
 
 // BufferQueue::ConsumerListener callback
 void GraphicBufferSource::onSidebandStreamChanged() {
-    ALOGW("GraphicBufferSource can't consume sideband streams");
+    ALOG_ASSERT(false, "GraphicBufferSource can't consume sideband streams");
 }
 
 status_t GraphicBufferSource::configure(

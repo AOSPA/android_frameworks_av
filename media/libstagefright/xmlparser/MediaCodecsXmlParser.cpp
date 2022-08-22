@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define PROP_VALUE_MAX 92
 #define LOG_TAG "MediaCodecsXmlParser"
 
