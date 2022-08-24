@@ -70,8 +70,6 @@
 
 using namespace android::camera3;
 using namespace android::hardware::camera;
-using namespace android::hardware::camera::device::V3_2;
-using android::hardware::camera::metadata::V3_6::CameraMetadataEnumAndroidSensorPixelMode;
 
 namespace android {
 
@@ -533,10 +531,9 @@ status_t Camera3Device::dump(int fd, const Vector<String16> &args) {
     }
     lines.appendFormat("    Stream configuration:\n");
     const char *mode =
-            mOperatingMode == static_cast<int>(StreamConfigurationMode::NORMAL_MODE) ? "NORMAL" :
-            mOperatingMode == static_cast<int>(
-                StreamConfigurationMode::CONSTRAINED_HIGH_SPEED_MODE) ? "CONSTRAINED_HIGH_SPEED" :
-            "CUSTOM";
+            mOperatingMode == CAMERA_STREAM_CONFIGURATION_NORMAL_MODE ? "NORMAL" :
+            mOperatingMode == CAMERA_STREAM_CONFIGURATION_CONSTRAINED_HIGH_SPEED_MODE ?
+                    "CONSTRAINED_HIGH_SPEED" : "CUSTOM";
     lines.appendFormat("    Operation mode: %s (%d) \n", mode, mOperatingMode);
 
     if (mInputStream != NULL) {
@@ -1080,6 +1077,7 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         ALOGE("%s: RAW opaque stream cannot be used with > 1 sensor pixel modes", __FUNCTION__);
         return BAD_VALUE;
     }
+    IPCTransport transport = getTransportType();
     if (format == HAL_PIXEL_FORMAT_BLOB) {
         ssize_t blobBufferSize;
         if (dataSpace == HAL_DATASPACE_DEPTH) {
@@ -1099,7 +1097,7 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         }
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, blobBufferSize, format, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else if (format == HAL_PIXEL_FORMAT_RAW_OPAQUE) {
@@ -1114,25 +1112,25 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         }
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, rawOpaqueBufferSize, format, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else if (isShared) {
         newStream = new Camera3SharedOutputStream(mNextStreamId, consumers,
                 width, height, format, consumerUsage, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 mUseHalBufManager, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else if (consumers.size() == 0 && hasDeferredConsumer) {
         newStream = new Camera3OutputStream(mNextStreamId,
                 width, height, format, consumerUsage, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     } else {
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, format, dataSpace, rotation,
-                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, streamSetId,
+                mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
                 timestampBase, mirrorMode);
     }
@@ -2289,8 +2287,7 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
     }
 
     bool isConstrainedHighSpeed =
-            static_cast<int>(StreamConfigurationMode::CONSTRAINED_HIGH_SPEED_MODE) ==
-            operatingMode;
+            CAMERA_STREAM_CONFIGURATION_CONSTRAINED_HIGH_SPEED_MODE == operatingMode;
 
     if (mOperatingMode != operatingMode) {
         mNeedConfig = true;
@@ -4289,8 +4286,8 @@ sp<Camera3Device::CaptureRequest>
                 if (parent != nullptr) {
                     parent->mRequestBufferSM.onRequestThreadPaused();
                 }
-                mRequestClearing = false;
             }
+            mRequestClearing = false;
             // Stop waiting for now and let thread management happen
             return NULL;
         }

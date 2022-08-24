@@ -110,6 +110,7 @@ void notify(CaptureOutputStates& states,
             m.type = CAMERA_MSG_SHUTTER;
             m.message.shutter.frame_number = msg.get<Tag::shutter>().frameNumber;
             m.message.shutter.timestamp = msg.get<Tag::shutter>().timestamp;
+            m.message.shutter.readout_timestamp_valid = true;
             m.message.shutter.readout_timestamp = msg.get<Tag::shutter>().readoutTimestamp;
             break;
     }
@@ -244,6 +245,8 @@ void requestStreamBuffers(RequestBufferStates& states,
                             __FUNCTION__, streamId, strerror(-res), res);
                     if (res == TIMED_OUT || res == NO_MEMORY) {
                         bufRet.val.set<Tag::error>(StreamBufferRequestError::NO_BUFFER_AVAILABLE);
+                    } else if (res == INVALID_OPERATION) {
+                        bufRet.val.set<Tag::error>(StreamBufferRequestError::MAX_BUFFER_EXCEEDED);
                     } else {
                         bufRet.val.set<Tag::error>(StreamBufferRequestError::UNKNOWN_ERROR);
                     }

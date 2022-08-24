@@ -45,22 +45,6 @@ status_t OnAudioDeviceUpdateNotifier::waitForAudioDeviceCb() {
     return OK;
 }
 
-// AudioTrack callback function.
-static void AudioTrackCallBackFunction(int event, void* user, void* info __unused) {
-    switch (event) {
-        case AudioTrack::EVENT_BUFFER_END: {
-            AudioPlayback* ap = (AudioPlayback*)user;
-            std::unique_lock<std::mutex> lock{ap->mMutex};
-            ap->mStopPlaying = true;
-            ap->mCondition.notify_all();
-            break;
-        }
-        default:
-            ALOGV("received audiotrack callback %d", event);
-            break;
-    }
-}
-
 AudioPlayback::AudioPlayback(uint32_t sampleRate, audio_format_t format,
                              audio_channel_mask_t channelMask, audio_output_flags_t flags,
                              audio_session_t sessionId, AudioTrack::transfer_type transferType,
@@ -94,13 +78,14 @@ status_t AudioPlayback::create() {
     attributionSource.token = sp<BBinder>::make();
     if (mTransferType == AudioTrack::TRANSFER_OBTAIN) {
         mTrack = new AudioTrack(attributionSource);
-        mTrack->set(AUDIO_STREAM_MUSIC, mSampleRate, mFormat, mChannelMask, 0, mFlags, nullptr,
-                    nullptr, 0, 0, false, mSessionId, mTransferType, nullptr, attributionSource,
-                    mAttributes);
+        mTrack->set(AUDIO_STREAM_MUSIC, mSampleRate, mFormat, mChannelMask, 0 /* frameCount */,
+                    mFlags, nullptr /* callback */, 0 /* notificationFrames */,
+                    nullptr /* sharedBuffer */, false /*canCallJava */, mSessionId, mTransferType,
+                    nullptr /* offloadInfo */, attributionSource, mAttributes);
     } else if (mTransferType == AudioTrack::TRANSFER_SHARED) {
         mTrack = new AudioTrack(AUDIO_STREAM_MUSIC, mSampleRate, mFormat, mChannelMask, mMemory,
-                                mFlags, AudioTrackCallBackFunction, this, 0, mSessionId,
-                                mTransferType, nullptr, attributionSource, mAttributes);
+                                mFlags, wp<AudioTrack::IAudioTrackCallback>::fromExisting(this), 0,
+                                mSessionId, mTransferType, nullptr, attributionSource, mAttributes);
     } else {
         ALOGE("Required Transfer type not existed");
         return INVALID_OPERATION;
@@ -155,6 +140,12 @@ status_t AudioPlayback::start() {
         }
     }
     return status;
+}
+
+void AudioPlayback::onBufferEnd() {
+    std::unique_lock<std::mutex> lock{mMutex};
+    mStopPlaying = true;
+    mCondition.notify_all();
 }
 
 status_t AudioPlayback::fillBuffer() {
@@ -402,11 +393,8 @@ status_t AudioCapture::create() {
     }
     if (mFlags & AUDIO_INPUT_FLAG_FAST) {
         ALOGW("Overriding all previous computations");
-        const uint32_t kMinNormalCaptureBufferSizeMs = 12;
-        size_t maxFrameCount = kMinNormalCaptureBufferSizeMs * mSampleRate / 1000;
-        mMaxBytesPerCallback = maxFrameCount * samplesPerFrame * bytesPerSample / 2;
-        mNotificationFrames = maxFrameCount / 2;
-        mFrameCount = 2 * mNotificationFrames;
+        mFrameCount = 0;
+        mNotificationFrames = 0;
     }
     mNumFramesToRecord = (mSampleRate * 0.25);  // record .25 sec
     std::string packageName{"AudioCapture"};
@@ -416,10 +404,17 @@ status_t AudioCapture::create() {
     attributionSource.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(getpid()));
     attributionSource.token = sp<BBinder>::make();
     if (mTransferType == AudioRecord::TRANSFER_OBTAIN) {
-        mRecord = new AudioRecord(attributionSource);
-        status = mRecord->set(mInputSource, mSampleRate, mFormat, mChannelMask, mFrameCount,
-                              nullptr, nullptr, 0, false, mSessionId, mTransferType, mFlags,
-                              attributionSource.uid, attributionSource.pid);
+        if (mSampleRate == 48000) {  // test all available constructors
+            mRecord = new AudioRecord(mInputSource, mSampleRate, mFormat, mChannelMask,
+                                      attributionSource, mFrameCount, nullptr /* callback */,
+                                      mNotificationFrames, mSessionId, mTransferType, mFlags);
+        } else {
+            mRecord = new AudioRecord(attributionSource);
+            status = mRecord->set(mInputSource, mSampleRate, mFormat, mChannelMask, mFrameCount,
+                                  nullptr /* callback */, 0 /* notificationFrames */,
+                                  false /* canCallJava */, mSessionId, mTransferType, mFlags,
+                                  attributionSource.uid, attributionSource.pid);
+        }
         if (NO_ERROR != status) return status;
     } else if (mTransferType == AudioRecord::TRANSFER_CALLBACK) {
         mRecord = new AudioRecord(mInputSource, mSampleRate, mFormat, mChannelMask,
@@ -433,6 +428,11 @@ status_t AudioCapture::create() {
     mRecord->setCallerName(packageName);
     status = mRecord->initCheck();
     if (NO_ERROR == status) mState = REC_READY;
+    if (mFlags & AUDIO_INPUT_FLAG_FAST) {
+        mFrameCount = mRecord->frameCount();
+        mNotificationFrames = mRecord->getNotificationPeriodInFrames();
+        mMaxBytesPerCallback = mNotificationFrames * samplesPerFrame * bytesPerSample;
+    }
     return status;
 }
 
@@ -458,12 +458,6 @@ status_t AudioCapture::stop() {
     status_t status = OK;
     mStopRecording = true;
     if (mState != REC_STOPPED) {
-        uint32_t position;
-        status = mRecord->getPosition(&position);
-        if (OK == status && mTransferType == AudioRecord::TRANSFER_CALLBACK) {
-            if (position - mNumFramesToRecord > mFrameCount)
-                if (mBufferOverrun == false) status = BAD_VALUE;
-        }
         mRecord->stopAndJoinCallbacks();
         mState = REC_STOPPED;
         LOG_FATAL_IF(true != mRecord->stopped());
