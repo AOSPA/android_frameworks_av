@@ -1074,6 +1074,17 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 }
             } else {
                 if ((config->mDomain & Config::IS_ENCODER) || !surface) {
+                    if (vendorSdkVersion < __ANDROID_API_S__ &&
+                            (format == COLOR_FormatYUV420Flexible ||
+                             format == COLOR_FormatYUV420Planar ||
+                             format == COLOR_FormatYUV420PackedPlanar ||
+                             format == COLOR_FormatYUV420SemiPlanar ||
+                             format == COLOR_FormatYUV420PackedSemiPlanar)) {
+                        // pre-S framework used to map these color formats into YV12.
+                        // Codecs from older vendor partition may be relying on
+                        // this assumption.
+                        format = HAL_PIXEL_FORMAT_YV12;
+                    }
                     switch (format) {
                         case COLOR_FormatYUV420Flexible:
                             format = COLOR_FormatYUV420Planar;
@@ -1424,7 +1435,7 @@ void CCodec::configure(const sp<AMessage> &msg) {
                 int64_t blockUsage =
                     usage.value | C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE;
                 std::shared_ptr<C2GraphicBlock> block = FetchGraphicBlock(
-                        width, height, pixelFormat, blockUsage, {comp->getName()});
+                        width, height, componentColorFormat, blockUsage, {comp->getName()});
                 sp<GraphicBlockBuffer> buffer;
                 if (block) {
                     buffer = GraphicBlockBuffer::Allocate(
@@ -1815,15 +1826,20 @@ void CCodec::start() {
         return;
     }
 
-    err2 = mChannel->requestInitialInputBuffers();
-
+    // preparation of input buffers may not succeed due to the lack of
+    // memory; returning correct error code (NO_MEMORY) as an error allows
+    // MediaCodec to try reclaim and restart codec gracefully.
+    std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
+    err2 = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
     if (err2 != OK) {
-        ALOGE("Initial request for Input Buffers failed");
-        mCallback->onError(err2,ACTION_CODE_FATAL);
+        ALOGE("Initial preparation for Input Buffers failed");
+        mCallback->onError(err2, ACTION_CODE_FATAL);
         return;
     }
+
     mCallback->onStartCompleted();
 
+    mChannel->requestInitialInputBuffers(std::move(clientInputBuffers));
 }
 
 void CCodec::initiateShutdown(bool keepComponentAllocated) {
@@ -2117,7 +2133,14 @@ void CCodec::signalResume() {
         state->set(RUNNING);
     }
 
-    (void)mChannel->requestInitialInputBuffers();
+    std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
+    status_t err = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
+    if (err != OK) {
+        ALOGE("Resume request for Input Buffers failed");
+        mCallback->onError(err, ACTION_CODE_FATAL);
+        return;
+    }
+    mChannel->requestInitialInputBuffers(std::move(clientInputBuffers));
 }
 
 void CCodec::signalSetParameters(const sp<AMessage> &msg) {

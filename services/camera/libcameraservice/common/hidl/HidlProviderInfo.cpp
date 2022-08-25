@@ -23,7 +23,7 @@
 #include <camera_metadata_hidden.h>
 
 #include "device3/ZoomRatioMapper.h"
-#include <utils/SessionConfigurationUtils.h>
+#include <utils/SessionConfigurationUtilsHidl.h>
 #include <utils/Trace.h>
 
 #include <android/hardware/camera/device/3.7/ICameraDevice.h>
@@ -654,6 +654,11 @@ HidlProviderInfo::HidlDeviceInfo3::HidlDeviceInfo3(
             &mCameraCharacteristics, &mSupportNativeZoomRatio);
     if (OK != res) {
         ALOGE("%s: Unable to override zoomRatio related tags: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+    }
+    res = addReadoutTimestampTag();
+    if (OK != res) {
+        ALOGE("%s: Unable to add sensorReadoutTimestamp tag: %s (%d)",
                 __FUNCTION__, strerror(-res), res);
     }
 

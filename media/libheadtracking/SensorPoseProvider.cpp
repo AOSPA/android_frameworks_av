@@ -26,7 +26,6 @@
 
 #include <android-base/thread_annotations.h>
 #include <log/log_main.h>
-#include <sensor/Sensor.h>
 #include <sensor/SensorEventQueue.h>
 #include <sensor/SensorManager.h>
 #include <utils/Looper.h>
@@ -158,7 +157,6 @@ class SensorPoseProviderImpl : public SensorPoseProvider {
     enum DataFormat {
         kUnknown,
         kQuaternion,
-        kRotationVectorsAndFlags,
         kRotationVectorsAndDiscontinuityCount,
     };
 
@@ -283,14 +281,10 @@ class SensorPoseProviderImpl : public SensorPoseProvider {
             return DataFormat::kRotationVectorsAndDiscontinuityCount;
         }
 
-        if (sensor->getStringType() == "com.google.hardware.sensor.hid_dynamic.headtracker") {
-            return DataFormat::kRotationVectorsAndFlags;
-        }
-
         return DataFormat::kUnknown;
     }
 
-    std::optional<const Sensor> getSensorByHandle(int32_t handle) {
+    std::optional<const Sensor> getSensorByHandle(int32_t handle) override {
         const Sensor* const* list;
         ssize_t size;
 
@@ -330,21 +324,6 @@ class SensorPoseProviderImpl : public SensorPoseProvider {
                 // Adapt to different frame convention.
                 quat *= rotateX(-M_PI_2);
                 return PoseEvent{Pose3f(quat), std::optional<Twist3f>(), false};
-            }
-
-            case DataFormat::kRotationVectorsAndFlags: {
-                // Custom sensor, assumed to contain:
-                // 3 floats representing orientation as a rotation vector (in rad).
-                // 3 floats representing angular velocity as a rotation vector (in rad/s).
-                // 1 uint32_t of flags, where:
-                // - LSb is '1' iff the given sample is the first one in a new frame of reference.
-                // - The rest of the bits are reserved for future use.
-                Eigen::Vector3f rotation = {event.data[0], event.data[1], event.data[2]};
-                Eigen::Vector3f twist = {event.data[3], event.data[4], event.data[5]};
-                Eigen::Quaternionf quat = rotationVectorToQuaternion(rotation);
-                uint32_t flags = *reinterpret_cast<const uint32_t*>(&event.data[6]);
-                return PoseEvent{Pose3f(quat), Twist3f(Eigen::Vector3f::Zero(), twist),
-                                 (flags & (1 << 0)) != 0};
             }
 
             case DataFormat::kRotationVectorsAndDiscontinuityCount: {

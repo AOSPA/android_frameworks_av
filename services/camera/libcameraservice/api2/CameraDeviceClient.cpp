@@ -176,9 +176,8 @@ status_t CameraDeviceClient::initializeImpl(TProviderPtr providerPtr, const Stri
                                 __FUNCTION__, mCameraIdStr.c_str(), entry.data.i64[i]);
                     }
                 }
-                mDynamicProfileMap.emplace(
-                        ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD,
-                        standardBitmap);
+                mDynamicProfileMap[ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD] =
+                        standardBitmap;
             } else {
                 ALOGE("%s: Device %s supports 10-bit output but doesn't include a dynamic range"
                         " profile map!", __FUNCTION__, mCameraIdStr.c_str());
@@ -527,8 +526,15 @@ binder::Status CameraDeviceClient::submitRequestList(
         metadataRequestList.push_back(physicalSettingsList);
         surfaceMapList.push_back(surfaceMap);
 
+        // Save certain CaptureRequest settings
         if (!request.mUserTag.empty()) {
             mUserTag = request.mUserTag;
+        }
+        camera_metadata_entry entry =
+                physicalSettingsList.begin()->metadata.find(
+                        ANDROID_CONTROL_VIDEO_STABILIZATION_MODE);
+        if (entry.count == 1) {
+            mVideoStabilizationMode = entry.data.u8[0];
         }
     }
     mRequestIdCounter++;
@@ -1992,7 +1998,7 @@ void CameraDeviceClient::notifyIdle(
         remoteCb->onDeviceIdle();
     }
     Camera2ClientBase::notifyIdleWithUserTag(requestCount, resultErrorCount, deviceError,
-            streamStats, mUserTag);
+            streamStats, mUserTag, mVideoStabilizationMode);
 }
 
 void CameraDeviceClient::notifyShutter(const CaptureResultExtras& resultExtras,
