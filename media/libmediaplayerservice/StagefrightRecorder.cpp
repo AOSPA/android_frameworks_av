@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "StagefrightRecorder"
 #define ATRACE_TAG ATRACE_TAG_VIDEO
 #include <utils/Trace.h>
