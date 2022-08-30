@@ -181,7 +181,7 @@ public:
     }
 
     virtual native_handle_t *createNativeHandle() const {
-        ALOG_ASSERT(false, "Cannot create native handle from surface fence");
+        ALOGD("Cannot create native handle from surface fence");
         return nullptr;
     }
 
@@ -320,7 +320,8 @@ C2Fence _C2FenceFactory::CreateFromNativeHandle(const native_handle_t* handle) {
             p = SyncFenceImpl::CreateFromNativeHandle(handle);
             break;
         default:
-            ALOG_ASSERT(false, "Unsupported fence type %d", type);
+            ALOGD("Unsupported fence type %d", type);
+            // return a null-fence in this case
             break;
     }
     if (p && !p->valid()) {

@@ -98,6 +98,7 @@ public:
 
     Camera2Client(const sp<CameraService>& cameraService,
             const sp<hardware::ICameraClient>& cameraClient,
+            std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
             const String16& clientPackageName,
             const std::optional<String16>& clientFeatureId,
             const String8& cameraDeviceId,
@@ -242,6 +243,8 @@ private:
     bool isZslEnabledInStillTemplate();
     // The current rotate & crop mode passed by camera service
     uint8_t mRotateAndCropMode;
+    // Synchronize access to 'mRotateAndCropMode'
+    mutable Mutex mRotateAndCropLock;
     // Contains the preview stream transformation that would normally be applied
     // when the display rotation is 0
     int mRotateAndCropPreviewTransform;

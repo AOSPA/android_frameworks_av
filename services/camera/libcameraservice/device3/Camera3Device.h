@@ -49,6 +49,7 @@
 #include "utils/TagMonitor.h"
 #include "utils/IPCTransport.h"
 #include "utils/LatencyHistogram.h"
+#include "utils/CameraServiceProxyWrapper.h"
 #include <camera_metadata_hidden.h>
 
 using android::camera3::camera_capture_request_t;
@@ -82,7 +83,8 @@ class Camera3Device :
   friend class AidlCamera3Device;
   public:
 
-    explicit Camera3Device(const String8& id, bool overrideForPerfClass, bool legacyClient = false);
+    explicit Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraServiceProxyWrapper,
+            const String8& id, bool overrideForPerfClass, bool legacyClient = false);
 
     virtual ~Camera3Device();
     // Delete and optionally close native handles and clear the input vector afterward
@@ -325,6 +327,8 @@ class Camera3Device :
     // Constant to use for stream ID when one doesn't exist
     static const int           NO_STREAM = -1;
 
+    std::shared_ptr<CameraServiceProxyWrapper> mCameraServiceProxyWrapper;
+
     // A lock to enforce serialization on the input/configure side
     // of the public interface.
     // Not locked by methods guarded by mOutputLock, since they may act
@@ -458,6 +462,28 @@ class Camera3Device :
                 // Verify buffer caches
                 std::vector<uint64_t> bufIds(offlineStream.circulatingBufferIds.begin(),
                         offlineStream.circulatingBufferIds.end());
+                {
+                    // Due to timing it is possible that we may not have any remaining pending
+                    // capture requests that can update the caches on Hal side. This can result in
+                    // buffer cache mismatch between the service and the Hal and must be accounted
+                    // for.
+                    std::lock_guard<std::mutex> l(mFreedBuffersLock);
+                    for (const auto& it : mFreedBuffers) {
+                        if (it.first == id) {
+                            ALOGV("%s: stream ID %d buffer id %" PRIu64 " cache removal still "
+                                    "pending", __FUNCTION__, id, it.second);
+                            const auto& cachedEntry = std::find(bufIds.begin(), bufIds.end(),
+                                    it.second);
+                            if (cachedEntry != bufIds.end()) {
+                                bufIds.erase(cachedEntry);
+                            } else {
+                                ALOGE("%s: stream ID %d buffer id %" PRIu64 " cache removal still "
+                                        "pending however buffer is no longer in the offline stream "
+                                        "info!", __FUNCTION__, id, it.second);
+                            }
+                        }
+                    }
+                }
                 if (!verifyBufferIds(id, bufIds)) {
                     ALOGE("%s: stream ID %d buffer cache records mismatch!", __FUNCTION__, id);
                     return UNKNOWN_ERROR;
