@@ -175,8 +175,6 @@ void AudioPolicyManager::broadcastDeviceConnectionState(const sp<DeviceDescripto
 status_t AudioPolicyManager::setDeviceConnectionStateInt(
         audio_policy_dev_state_t state, const android::media::audio::common::AudioPort& port,
         audio_format_t encodedFormat) {
-    // TODO: b/211601178 Forward 'port' to Audio HAL via mHwModules. For now, only device_type,
-    // device_address and device_name are forwarded.
     if (port.ext.getTag() != AudioPortExt::device) {
         return BAD_VALUE;
     }
@@ -195,7 +193,13 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(
     sp<DeviceDescriptor> device = mHwModules.getDeviceDescriptor(
             device_type, device_address.c_str(), device_name, encodedFormat,
             state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
-    return device ? setDeviceConnectionStateInt(device, state) : INVALID_OPERATION;
+    if (device == nullptr) {
+        return INVALID_OPERATION;
+    }
+    if (state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) {
+        device->setExtraAudioDescriptors(port.extraAudioDescriptors);
+    }
+    return setDeviceConnectionStateInt(device, state);
 }
 
 status_t AudioPolicyManager::setDeviceConnectionStateInt(audio_devices_t deviceType,
@@ -3343,7 +3347,7 @@ status_t AudioPolicyManager::getVolumeIndexForAttributes(const audio_attributes_
     // stream by the engine.
     DeviceTypeSet deviceTypes = {device};
     if (device == AUDIO_DEVICE_OUT_DEFAULT_FOR_VOLUME) {
-        DeviceTypeSet deviceTypes = mEngine->getOutputDevicesForAttributes(
+        deviceTypes = mEngine->getOutputDevicesForAttributes(
                 attr, nullptr, true /*fromCache*/).types();
     }
     return getVolumeIndex(getVolumeCurves(attr), index, deviceTypes);
@@ -3353,7 +3357,7 @@ status_t AudioPolicyManager::getVolumeIndex(const IVolumeCurves &curves,
                                             int &index,
                                             const DeviceTypeSet& deviceTypes) const
 {
-    if (isSingleDeviceType(deviceTypes, audio_is_output_device)) {
+    if (!isSingleDeviceType(deviceTypes, audio_is_output_device)) {
         return BAD_VALUE;
     }
     index = curves.getVolumeIndex(deviceTypes);
