@@ -21,6 +21,7 @@
 #include <C2Debug.h>
 #include <C2PlatformSupport.h>
 #include <Codec2BufferUtils.h>
+#include <Codec2CommonUtils.h>
 #include <Codec2Mapper.h>
 #include <SimpleC2Interface.h>
 #include <log/log.h>
@@ -191,9 +192,14 @@ class C2SoftGav1Dec::IntfImpl : public SimpleInterface<void>::BaseParams {
               .build());
 
     std::vector<uint32_t> pixelFormats = {HAL_PIXEL_FORMAT_YCBCR_420_888};
-    if (isAtLeastT()) {
+    if (isHalPixelFormatSupported((AHardwareBuffer_Format)HAL_PIXEL_FORMAT_YCBCR_P010)) {
         pixelFormats.push_back(HAL_PIXEL_FORMAT_YCBCR_P010);
     }
+    // If color format surface isn't added to supported formats, there is no way to know
+    // when the color-format is configured to surface. This is necessary to be able to
+    // choose 10-bit format while decoding 10-bit clips in surface mode.
+    pixelFormats.push_back(HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED);
+
     // TODO: support more formats?
     addParameter(
             DefineParam(mPixelFormat, C2_PARAMKEY_PIXEL_FORMAT)
@@ -322,6 +328,9 @@ class C2SoftGav1Dec::IntfImpl : public SimpleInterface<void>::BaseParams {
     return C2R::Ok();
   }
 
+  // unsafe getters
+  std::shared_ptr<C2StreamPixelFormatInfo::output> getPixelFormat_l() const { return mPixelFormat; }
+
  private:
   std::shared_ptr<C2StreamProfileLevelInfo::input> mProfileLevel;
   std::shared_ptr<C2StreamPictureSizeInfo::output> mSize;
@@ -410,6 +419,10 @@ bool C2SoftGav1Dec::initDecoder() {
   mSignalledError = false;
   mSignalledOutputEos = false;
   mHalPixelFormat = HAL_PIXEL_FORMAT_YV12;
+  {
+      IntfImpl::Lock lock = mIntf->lock();
+      mPixelFormatInfo = mIntf->getPixelFormat_l();
+  }
   mCodecCtx.reset(new libgav1::Decoder());
 
   if (mCodecCtx == nullptr) {
@@ -633,10 +646,10 @@ bool C2SoftGav1Dec::outputBuffer(const std::shared_ptr<C2BlockPool> &pool,
 
   std::shared_ptr<C2GraphicBlock> block;
   uint32_t format = HAL_PIXEL_FORMAT_YV12;
-  if (buffer->bitdepth == 10) {
+  std::shared_ptr<C2StreamColorAspectsInfo::output> codedColorAspects;
+  if (buffer->bitdepth == 10 && mPixelFormatInfo->value != HAL_PIXEL_FORMAT_YCBCR_420_888) {
     IntfImpl::Lock lock = mIntf->lock();
-    std::shared_ptr<C2StreamColorAspectsInfo::output> codedColorAspects =
-        mIntf->getColorAspects_l();
+    codedColorAspects = mIntf->getColorAspects_l();
     bool allowRGBA1010102 = false;
     if (codedColorAspects->primaries == C2Color::PRIMARIES_BT2020 &&
         codedColorAspects->matrix == C2Color::MATRIX_BT2020 &&
@@ -714,9 +727,11 @@ bool C2SoftGav1Dec::outputBuffer(const std::shared_ptr<C2BlockPool> &pool,
     const uint16_t *srcV = (const uint16_t *)buffer->plane[2];
 
     if (format == HAL_PIXEL_FORMAT_RGBA_1010102) {
-        convertYUV420Planar16ToY410OrRGBA1010102((uint32_t *)dstY, srcY, srcU, srcV, srcYStride / 2,
-                                                 srcUStride / 2, srcVStride / 2,
-                                                 dstYStride / sizeof(uint32_t), mWidth, mHeight);
+        convertYUV420Planar16ToY410OrRGBA1010102(
+                (uint32_t *)dstY, srcY, srcU, srcV, srcYStride / 2,
+                srcUStride / 2, srcVStride / 2,
+                dstYStride / sizeof(uint32_t), mWidth, mHeight,
+                std::static_pointer_cast<const C2ColorAspectsStruct>(codedColorAspects));
     } else if (format == HAL_PIXEL_FORMAT_YCBCR_P010) {
         convertYUV420Planar16ToP010((uint16_t *)dstY, (uint16_t *)dstU, srcY, srcU, srcV,
                                     srcYStride / 2, srcUStride / 2, srcVStride / 2, dstYStride / 2,

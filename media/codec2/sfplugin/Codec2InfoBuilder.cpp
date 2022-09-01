@@ -33,6 +33,7 @@
 #include <OMX_Video.h>
 #include <OMX_VideoExt.h>
 #include <OMX_AsString.h>
+#include <SurfaceFlingerProperties.sysprop.h>
 
 #include <android/hardware/media/omx/1.0/IOmx.h>
 #include <android/hardware/media/omx/1.0/IOmxObserver.h>
@@ -136,7 +137,9 @@ bool addSupportedProfileLevels(
                 continue;
             }
             switch (type.coreIndex()) {
-            case C2StreamHdr10PlusInfo::CORE_INDEX:
+            case C2StreamHdrDynamicMetadataInfo::CORE_INDEX:
+                [[fallthrough]];
+            case C2StreamHdr10PlusInfo::CORE_INDEX:  // will be deprecated
                 supportsHdr10Plus = true;
                 break;
             case C2StreamHdrStaticInfo::CORE_INDEX:
@@ -148,13 +151,20 @@ bool addSupportedProfileLevels(
         }
     }
 
-    // For VP9/AV1, the static info is always propagated by framework.
+    // VP9 does not support HDR metadata in the bitstream and static metadata
+    // can always be carried by the framework. (The framework does not propagate
+    // dynamic metadata as that needs to be frame accurate.)
     supportsHdr |= (mediaType == MIMETYPE_VIDEO_VP9);
-    supportsHdr |= (mediaType == MIMETYPE_VIDEO_AV1);
 
     // HDR support implies 10-bit support.
     // TODO: directly check this from the component interface
     supports10Bit = (supportsHdr || supportsHdr10Plus);
+
+    // If the device doesn't support HDR display, then no codec on the device
+    // can advertise support for HDR profiles.
+    // Default to true to maintain backward compatibility
+    auto ret = sysprop::SurfaceFlingerProperties::has_HDR_display();
+    bool hasHDRDisplay = ret.has_value() ? *ret : true;
 
     bool added = false;
 
@@ -181,8 +191,8 @@ bool addSupportedProfileLevels(
         if (mapper && mapper->mapProfile(pl.profile, &sdkProfile)
                 && mapper->mapLevel(pl.level, &sdkLevel)) {
             caps->addProfileLevel((uint32_t)sdkProfile, (uint32_t)sdkLevel);
-            // also list HDR profiles if component supports HDR
-            if (supportsHdr) {
+            // also list HDR profiles if component supports HDR and device has HDR display
+            if (supportsHdr && hasHDRDisplay) {
                 auto hdrMapper = C2Mapper::GetHdrProfileLevelMapper(trait.mediaType);
                 if (hdrMapper && hdrMapper->mapProfile(pl.profile, &sdkProfile)) {
                     caps->addProfileLevel((uint32_t)sdkProfile, (uint32_t)sdkLevel);
@@ -299,8 +309,13 @@ void addSupportedColorFormats(
         if (trait.name.find("android") != std::string::npos) {
             addDefaultColorFormat(COLOR_FormatSurface);
         }
-        for (int32_t colorFormat : supportedColorFormats) {
-            caps->addColorFormat(colorFormat);
+
+        static const int kVendorSdkVersion = ::android::base::GetIntProperty(
+                "ro.vendor.build.version.sdk", android_get_device_api_level());
+        if (kVendorSdkVersion >= __ANDROID_API_T__) {
+            for (int32_t colorFormat : supportedColorFormats) {
+                caps->addColorFormat(colorFormat);
+            }
         }
     }
 }

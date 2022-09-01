@@ -47,6 +47,8 @@
 #include "media/RingBuffer.h"
 #include "utils/AutoConditionLock.h"
 #include "utils/ClientManager.h"
+#include "utils/IPCTransport.h"
+#include "utils/CameraServiceProxyWrapper.h"
 
 #include <set>
 #include <string>
@@ -99,7 +101,10 @@ public:
     // Implementation of BinderService<T>
     static char const* getServiceName() { return "media.camera"; }
 
-                        CameraService();
+                        // Non-null arguments for cameraServiceProxyWrapper should be provided for
+                        // testing purposes only.
+                        CameraService(std::shared_ptr<CameraServiceProxyWrapper>
+                                cameraServiceProxyWrapper = nullptr);
     virtual             ~CameraService();
 
     /////////////////////////////////////////////////////////////////////
@@ -242,7 +247,7 @@ public:
 
     /////////////////////////////////////////////////////////////////////
     // CameraDeviceFactory functionality
-    int                 getDeviceVersion(const String8& cameraId, int* facing = nullptr,
+    std::pair<int, IPCTransport>    getDeviceVersion(const String8& cameraId, int* facing = nullptr,
             int* orientation = nullptr);
 
     /////////////////////////////////////////////////////////////////////
@@ -771,6 +776,8 @@ private:
 
     sp<SensorPrivacyPolicy> mSensorPrivacyPolicy;
 
+    std::shared_ptr<CameraServiceProxyWrapper> mCameraServiceProxyWrapper;
+
     // Delay-load the Camera HAL module
     virtual void onFirstRef();
 
@@ -1272,8 +1279,9 @@ private:
             const sp<IInterface>& cameraCb, const String16& packageName,
             bool systemNativeClient, const std::optional<String16>& featureId,
             const String8& cameraId, int api1CameraId, int facing, int sensorOrientation,
-            int clientPid, uid_t clientUid, int servicePid, int deviceVersion,
-            apiLevel effectiveApiLevel, bool overrideForPerfClass, /*out*/sp<BasicClient>* client);
+            int clientPid, uid_t clientUid, int servicePid,
+            std::pair<int, IPCTransport> deviceVersionAndIPCTransport, apiLevel effectiveApiLevel,
+            bool overrideForPerfClass, /*out*/sp<BasicClient>* client);
 
     status_t checkCameraAccess(const String16& opPackageName);
 

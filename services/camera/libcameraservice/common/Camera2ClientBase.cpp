@@ -37,9 +37,11 @@
 #include "device3/aidl/AidlCamera3Device.h"
 #include "device3/hidl/HidlCamera3Device.h"
 #include "utils/CameraThreadState.h"
-#include "utils/CameraServiceProxyWrapper.h"
 
 namespace android {
+
+const static size_t kDisconnectTimeoutMs = 2500;
+
 using namespace camera2;
 
 // Interface used by CameraService
@@ -48,6 +50,7 @@ template <typename TClientBase>
 Camera2ClientBase<TClientBase>::Camera2ClientBase(
         const sp<CameraService>& cameraService,
         const sp<TCamCallbacks>& remoteCallback,
+        std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
         const String16& clientPackageName,
         bool systemNativeClient,
         const std::optional<String16>& clientFeatureId,
@@ -64,7 +67,7 @@ Camera2ClientBase<TClientBase>::Camera2ClientBase(
                 clientFeatureId, cameraId, api1CameraId, cameraFacing, sensorOrientation, clientPid,
                 clientUid, servicePid),
         mSharedCameraCallbacks(remoteCallback),
-        mDeviceVersion(cameraService->getDeviceVersion(TClientBase::mCameraIdStr)),
+        mCameraServiceProxyWrapper(cameraServiceProxyWrapper),
         mDeviceActive(false), mApi1CameraId(api1CameraId)
 {
     ALOGI("Camera %s: Opened. Client: %s (PID %d, UID %d)", cameraId.string(),
@@ -116,13 +119,13 @@ status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr
     switch (providerTransport) {
         case IPCTransport::HIDL:
             mDevice =
-                    new HidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
-                            mLegacyClient);
+                    new HidlCamera3Device(mCameraServiceProxyWrapper,
+                            TClientBase::mCameraIdStr, mOverrideForPerfClass, mLegacyClient);
             break;
         case IPCTransport::AIDL:
             mDevice =
-                    new AidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
-                            mLegacyClient);
+                    new AidlCamera3Device(mCameraServiceProxyWrapper,
+                            TClientBase::mCameraIdStr, mOverrideForPerfClass, mLegacyClient);
              break;
         default:
             ALOGE("%s Invalid transport for camera id %s", __FUNCTION__,
@@ -144,6 +147,10 @@ status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr
 
     wp<NotificationListener> weakThis(this);
     res = mDevice->setNotifyCallback(weakThis);
+
+    /** Start watchdog thread */
+    mCameraServiceWatchdog = new CameraServiceWatchdog();
+    mCameraServiceWatchdog->run("Camera2ClientBaseWatchdog");
 
     return OK;
 }
@@ -239,9 +246,18 @@ status_t Camera2ClientBase<TClientBase>::dumpDevice(
 
 // ICameraClient2BaseUser interface
 
-
 template <typename TClientBase>
 binder::Status Camera2ClientBase<TClientBase>::disconnect() {
+    if (mCameraServiceWatchdog != nullptr) {
+        // Initialization from hal succeeded, time disconnect.
+        return mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(disconnectImpl(),
+                kDisconnectTimeoutMs / kCycleLengthMs, kCycleLengthMs);
+    }
+    return disconnectImpl();
+}
+
+template <typename TClientBase>
+binder::Status Camera2ClientBase<TClientBase>::disconnectImpl() {
     ATRACE_CALL();
     ALOGD("Camera %s: start to disconnect", TClientBase::mCameraIdStr.string());
     Mutex::Autolock icl(mBinderSerializationLock);
@@ -326,7 +342,7 @@ status_t Camera2ClientBase<TClientBase>::notifyActive(float maxPreviewFps) {
                     TClientBase::mCameraIdStr.string(), res);
             return res;
         }
-        CameraServiceProxyWrapper::logActive(TClientBase::mCameraIdStr, maxPreviewFps);
+        mCameraServiceProxyWrapper->logActive(TClientBase::mCameraIdStr, maxPreviewFps);
     }
     mDeviceActive = true;
 
@@ -345,7 +361,7 @@ void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
             ALOGE("%s: Camera %s: Error finishing streaming ops: %d", __FUNCTION__,
                     TClientBase::mCameraIdStr.string(), res);
         }
-        CameraServiceProxyWrapper::logIdle(TClientBase::mCameraIdStr,
+        mCameraServiceProxyWrapper->logIdle(TClientBase::mCameraIdStr,
                 requestCount, resultErrorCount, deviceError, userTag, videoStabilizationMode,
                 streamStats);
     }
@@ -420,11 +436,6 @@ void Camera2ClientBase<TClientBase>::notifyRepeatingRequestError(long lastFrameN
 template <typename TClientBase>
 int Camera2ClientBase<TClientBase>::getCameraId() const {
     return mApi1CameraId;
-}
-
-template <typename TClientBase>
-int Camera2ClientBase<TClientBase>::getCameraDeviceVersion() const {
-    return mDeviceVersion;
 }
 
 template <typename TClientBase>

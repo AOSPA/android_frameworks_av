@@ -19,6 +19,8 @@
 
 #include "common/CameraDeviceBase.h"
 #include "camera/CaptureResult.h"
+#include "utils/CameraServiceProxyWrapper.h"
+#include "CameraServiceWatchdog.h"
 
 namespace android {
 
@@ -47,6 +49,7 @@ public:
     // TODO: too many params, move into a ClientArgs<T>
     Camera2ClientBase(const sp<CameraService>& cameraService,
                       const sp<TCamCallbacks>& remoteCallback,
+                      std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
                       const String16& clientPackageName,
                       bool systemNativeClient,
                       const std::optional<String16>& clientFeatureId,
@@ -135,6 +138,7 @@ protected:
     pid_t mInitialClientPid;
     bool mOverrideForPerfClass = false;
     bool mLegacyClient = false;
+    std::shared_ptr<CameraServiceProxyWrapper> mCameraServiceProxyWrapper;
 
     virtual sp<IBinder> asBinderWrapper() {
         return IInterface::asBinder(this);
@@ -151,8 +155,6 @@ protected:
     mutable Mutex         mBinderSerializationLock;
 
     /** CameraDeviceBase instance wrapping HAL3+ entry */
-
-    const int mDeviceVersion;
 
     // Note: This was previously set to const to avoid mDevice being updated -
     // b/112639939 (update of sp<> is racy) during dumpDevice (which is important to be lock free
@@ -175,6 +177,12 @@ protected:
 private:
     template<typename TProviderPtr>
     status_t              initializeImpl(TProviderPtr providerPtr, const String8& monitorTags);
+
+    binder::Status disconnectImpl();
+
+    // Watchdog thread
+    sp<CameraServiceWatchdog> mCameraServiceWatchdog;
+
 };
 
 }; // namespace android

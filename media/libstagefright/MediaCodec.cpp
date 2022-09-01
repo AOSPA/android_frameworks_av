@@ -818,7 +818,7 @@ MediaCodec::MediaCodec(
       mTunneledInputWidth(0),
       mTunneledInputHeight(0),
       mTunneled(false),
-      mTunnelPeekState(TunnelPeekState::kEnabledNoBuffer),
+      mTunnelPeekState(TunnelPeekState::kLegacyMode),
       mHaveInputSurface(false),
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
@@ -1088,6 +1088,8 @@ void MediaCodec::updateLowLatency(const sp<AMessage> &msg) {
 
 constexpr const char *MediaCodec::asString(TunnelPeekState state, const char *default_string){
     switch(state) {
+        case TunnelPeekState::kLegacyMode:
+            return "LegacyMode";
         case TunnelPeekState::kEnabledNoBuffer:
             return "EnabledNoBuffer";
         case TunnelPeekState::kDisabledNoBuffer:
@@ -1114,6 +1116,9 @@ void MediaCodec::updateTunnelPeek(const sp<AMessage> &msg) {
     TunnelPeekState previousState = mTunnelPeekState;
     if(tunnelPeek == 0){
         switch (mTunnelPeekState) {
+            case TunnelPeekState::kLegacyMode:
+                msg->setInt32("android._tunnel-peek-set-legacy", 0);
+                [[fallthrough]];
             case TunnelPeekState::kEnabledNoBuffer:
                 mTunnelPeekState = TunnelPeekState::kDisabledNoBuffer;
                 break;
@@ -1126,6 +1131,9 @@ void MediaCodec::updateTunnelPeek(const sp<AMessage> &msg) {
         }
     } else {
         switch (mTunnelPeekState) {
+            case TunnelPeekState::kLegacyMode:
+                msg->setInt32("android._tunnel-peek-set-legacy", 0);
+                [[fallthrough]];
             case TunnelPeekState::kDisabledNoBuffer:
                 mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
                 break;
@@ -2628,7 +2636,9 @@ status_t MediaCodec::queueBuffer(
     msg->setObject("c2buffer", obj);
     msg->setInt64("timeUs", presentationTimeUs);
     msg->setInt32("flags", flags);
-    msg->setMessage("tunings", tunings);
+    if (tunings && tunings->countEntries() > 0) {
+        msg->setMessage("tunings", tunings);
+    }
     msg->setPointer("errorDetailMsg", errorDetailMsg);
 
     sp<AMessage> response;
@@ -2670,7 +2680,9 @@ status_t MediaCodec::queueEncryptedBuffer(
     msg->setInt32("skipBlocks", pattern.mSkipBlocks);
     msg->setInt64("timeUs", presentationTimeUs);
     msg->setInt32("flags", flags);
-    msg->setMessage("tunings", tunings);
+    if (tunings && tunings->countEntries() > 0) {
+        msg->setMessage("tunings", tunings);
+    }
     msg->setPointer("errorDetailMsg", errorDetailMsg);
 
     sp<AMessage> response;
@@ -3558,10 +3570,12 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         break;
                     }
                     TunnelPeekState previousState = mTunnelPeekState;
-                    mTunnelPeekState = TunnelPeekState::kBufferRendered;
-                    ALOGV("TunnelPeekState: %s -> %s",
-                          asString(previousState),
-                          asString(TunnelPeekState::kBufferRendered));
+                    if (mTunnelPeekState != TunnelPeekState::kLegacyMode) {
+                        mTunnelPeekState = TunnelPeekState::kBufferRendered;
+                        ALOGV("TunnelPeekState: %s -> %s",
+                                asString(previousState),
+                                asString(TunnelPeekState::kBufferRendered));
+                    }
                     updatePlaybackDuration(msg);
                     // check that we have a notification set
                     if (mOnFrameRenderedNotification != NULL) {
@@ -3979,6 +3993,14 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 mTunneled = false;
             }
 
+            // If mTunnelPeekState is still in kLegacyMode at this point,
+            // configure the codec in legacy mode
+            if (mTunneled && (mTunnelPeekState == TunnelPeekState::kLegacyMode)) {
+                sp<AMessage> params = new AMessage;
+                params->setInt32("android._tunnel-peek-set-legacy", 1);
+                onSetParameters(params);
+            }
+
             int32_t background = 0;
             if (format->findInt32("android._background-mode", &background) && background) {
                 androidSetThreadPriority(gettid(), ANDROID_PRIORITY_BACKGROUND);
@@ -4097,10 +4119,12 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             sp<AReplyToken> replyID;
             CHECK(msg->senderAwaitsResponse(&replyID));
             TunnelPeekState previousState = mTunnelPeekState;
-            mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
-            ALOGV("TunnelPeekState: %s -> %s",
-                  asString(previousState),
-                  asString(TunnelPeekState::kEnabledNoBuffer));
+            if (previousState != TunnelPeekState::kLegacyMode) {
+                mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
+                ALOGV("TunnelPeekState: %s -> %s",
+                        asString(previousState),
+                        asString(TunnelPeekState::kEnabledNoBuffer));
+            }
 
             mReplyID = replyID;
             setState(STARTING);
@@ -4541,10 +4565,12 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             mCodec->signalFlush();
             returnBuffersToCodec();
             TunnelPeekState previousState = mTunnelPeekState;
-            mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
-            ALOGV("TunnelPeekState: %s -> %s",
-                  asString(previousState),
-                  asString(TunnelPeekState::kEnabledNoBuffer));
+            if (previousState != TunnelPeekState::kLegacyMode) {
+                mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
+                ALOGV("TunnelPeekState: %s -> %s",
+                        asString(previousState),
+                        asString(TunnelPeekState::kEnabledNoBuffer));
+            }
             break;
         }
 
@@ -4862,12 +4888,10 @@ status_t MediaCodec::queueCSDInputBuffer(size_t bufferIndex) {
         sp<WrapperObject<std::shared_ptr<C2Buffer>>> obj{
             new WrapperObject<std::shared_ptr<C2Buffer>>{c2Buffer}};
         msg->setObject("c2buffer", obj);
-        msg->setMessage("tunings", new AMessage);
     } else if (memory) {
         sp<WrapperObject<sp<hardware::HidlMemory>>> obj{
             new WrapperObject<sp<hardware::HidlMemory>>{memory}};
         msg->setObject("memory", obj);
-        msg->setMessage("tunings", new AMessage);
     }
 
     return onQueueInputBuffer(msg);
@@ -5047,9 +5071,10 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
     sp<MediaCodecBuffer> buffer = info->mData;
 
     if (c2Buffer || memory) {
-        sp<AMessage> tunings;
-        CHECK(msg->findMessage("tunings", &tunings));
-        onSetParameters(tunings);
+        sp<AMessage> tunings = NULL;
+        if (msg->findMessage("tunings", &tunings) && tunings != NULL) {
+            onSetParameters(tunings);
+        }
 
         status_t err = OK;
         if (c2Buffer) {
@@ -5081,6 +5106,8 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         offset = buffer->offset();
         size = buffer->size();
         if (err != OK) {
+            ALOGI("block model buffer attach failed: err = %s (%d)",
+                  StrMediaError(err).c_str(), err);
             return err;
         }
     }
