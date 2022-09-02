@@ -28,6 +28,9 @@
     },
     {
       "name": "trackplayerbase_tests"
+    },
+    {
+      "name": "audiosystem_tests"
     }
   ]
 }

@@ -229,7 +229,12 @@ status_t Camera3Device::initializeCommonLocked() {
 
     /** Start watchdog thread */
     mCameraServiceWatchdog = new CameraServiceWatchdog();
-    mCameraServiceWatchdog->run("CameraServiceWatchdog");
+    res = mCameraServiceWatchdog->run("CameraServiceWatchdog");
+    if (res != OK) {
+        SET_ERR_L("Unable to start camera service watchdog thread: %s (%d)",
+                strerror(-res), res);
+        return res;
+    }
 
     return OK;
 }
@@ -2295,6 +2300,9 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
         mIsConstrainedHighSpeedConfiguration = isConstrainedHighSpeed;
         mOperatingMode = operatingMode;
     }
+
+    // Reset min expected duration when session is reconfigured.
+    mMinExpectedDuration = 0;
 
     // In case called from configureStreams, abort queued input buffers not belonging to
     // any pending requests.

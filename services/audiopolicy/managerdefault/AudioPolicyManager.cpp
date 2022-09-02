@@ -175,8 +175,6 @@ void AudioPolicyManager::broadcastDeviceConnectionState(const sp<DeviceDescripto
 status_t AudioPolicyManager::setDeviceConnectionStateInt(
         audio_policy_dev_state_t state, const android::media::audio::common::AudioPort& port,
         audio_format_t encodedFormat) {
-    // TODO: b/211601178 Forward 'port' to Audio HAL via mHwModules. For now, only device_type,
-    // device_address and device_name are forwarded.
     if (port.ext.getTag() != AudioPortExt::device) {
         return BAD_VALUE;
     }
@@ -195,7 +193,13 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(
     sp<DeviceDescriptor> device = mHwModules.getDeviceDescriptor(
             device_type, device_address.c_str(), device_name, encodedFormat,
             state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE);
-    return device ? setDeviceConnectionStateInt(device, state) : INVALID_OPERATION;
+    if (device == nullptr) {
+        return INVALID_OPERATION;
+    }
+    if (state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) {
+        device->setExtraAudioDescriptors(port.extraAudioDescriptors);
+    }
+    return setDeviceConnectionStateInt(device, state);
 }
 
 status_t AudioPolicyManager::setDeviceConnectionStateInt(audio_devices_t deviceType,
@@ -1128,12 +1132,12 @@ sp<IOProfile> AudioPolicyManager::getSpatializerOutputProfile(
             if (curProfile->getFlags() != AUDIO_OUTPUT_FLAG_SPATIALIZER) {
                 continue;
             }
-            // reject profiles not corresponding to a device currently available
-            DeviceVector supportedDevices = curProfile->getSupportedDevices();
-            if (!mAvailableOutputDevices.containsAtLeastOne(supportedDevices)) {
-                continue;
-            }
             if (!devices.empty()) {
+                // reject profiles not corresponding to a device currently available
+                DeviceVector supportedDevices = curProfile->getSupportedDevices();
+                if (!mAvailableOutputDevices.containsAtLeastOne(supportedDevices)) {
+                    continue;
+                }
                 if (supportedDevices.getDevicesFromDeviceTypeAddrVec(devices).size()
                         != devices.size()) {
                     continue;
@@ -2070,7 +2074,8 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
     //    (see b/200293124, the incorrect selection of AUDIO_OUTPUT_FLAG_VOIP_RX).
     // 3: the output supporting the exact channel mask
     // 4: the output with a higher channel count than requested
-    // 5: the output with a higher sampling rate than requested
+    // 5: the output with the highest sampling rate if the requested sample rate is
+    //    greater than default sampling rate
     // 6: the output with the highest number of requested performance flags
     // 7: the output with the bit depth the closest to the requested one
     // 8: the primary output
@@ -2130,8 +2135,7 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
         }
 
         // sampling rate match
-        if (samplingRate > SAMPLE_RATE_HZ_DEFAULT &&
-                samplingRate <= outputDesc->getSamplingRate()) {
+        if (samplingRate > SAMPLE_RATE_HZ_DEFAULT) {
             currentMatchCriteria[4] = outputDesc->getSamplingRate();
         }
 
@@ -3343,7 +3347,7 @@ status_t AudioPolicyManager::getVolumeIndexForAttributes(const audio_attributes_
     // stream by the engine.
     DeviceTypeSet deviceTypes = {device};
     if (device == AUDIO_DEVICE_OUT_DEFAULT_FOR_VOLUME) {
-        DeviceTypeSet deviceTypes = mEngine->getOutputDevicesForAttributes(
+        deviceTypes = mEngine->getOutputDevicesForAttributes(
                 attr, nullptr, true /*fromCache*/).types();
     }
     return getVolumeIndex(getVolumeCurves(attr), index, deviceTypes);
@@ -3353,7 +3357,7 @@ status_t AudioPolicyManager::getVolumeIndex(const IVolumeCurves &curves,
                                             int &index,
                                             const DeviceTypeSet& deviceTypes) const
 {
-    if (isSingleDeviceType(deviceTypes, audio_is_output_device)) {
+    if (!isSingleDeviceType(deviceTypes, audio_is_output_device)) {
         return BAD_VALUE;
     }
     index = curves.getVolumeIndex(deviceTypes);
@@ -5627,10 +5631,6 @@ bool AudioPolicyManager::canBeSpatializedInt(const audio_attributes_t *attr,
         }
     }
 
-    // The caller can have the devices criteria ignored by passing and empty vector, and
-    // getSpatializerOutputProfile() will ignore the devices when looking for a match.
-    // Otherwise an output profile supporting a spatializer effect that can be routed
-    // to the specified devices must exist.
     sp<IOProfile> profile =
             getSpatializerOutputProfile(config, devices);
     if (profile == nullptr) {

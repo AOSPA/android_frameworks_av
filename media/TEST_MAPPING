@@ -15,7 +15,8 @@
                 {
                     "include-filter": "com.google.android.media.gts.WidevineH264PlaybackTests"
                 }
-            ]
+            ],
+            "file_patterns": ["(?i)drm|crypto"]
         }
     ],
 
@@ -34,9 +35,6 @@
             "options": [
                 {
                     "include-filter": "android.media.codec.cts.EncodeDecodeTest"
-                },
-                {
-                    "exclude-annotation": "androidx.test.filters.FlakyTest"
                 }
             ]
         },
@@ -52,6 +50,7 @@
             ]
         }
     ],
+
     "staged-platinum-postsubmit": [
         // runs every four hours
         {
@@ -71,4 +70,7 @@
             ]
         }
     ]
+
+    // TODO (b/229286407) Add EncodeDecodeTest and DecodeEditEncodeTest to
+    // platinum-postsubmit once issues in cuttlefish are fixed
 }
