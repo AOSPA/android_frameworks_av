@@ -1069,6 +1069,7 @@ private:
 
     CaptureStateNotifier mCaptureStateNotifier;
 
+    // created in onFirstRef() and never cleared: does not need to be guarded by mLock
     sp<Spatializer> mSpatializer;
 
     void *mLibraryHandle = nullptr;
