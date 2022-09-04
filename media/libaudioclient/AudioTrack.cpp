@@ -29,6 +29,7 @@
 #include <audio_utils/clock.h>
 #include <audio_utils/primitives.h>
 #include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
 #include <media/AudioTrack.h>
 #include <utils/Log.h>
 #include <private/media/AudioTrackShared.h>
@@ -45,7 +46,9 @@
 #define WAIT_PERIOD_MS                  10
 #define WAIT_STREAM_END_TIMEOUT_SEC     120
 #define DUMMY_TRACK_SMP_BUF_SIZE        12000
+
 static const int kMaxLoopCountNotifications = 32;
+static constexpr char kAudioServiceName[] = "audio";
 
 using ::android::aidl_utils::statusTFromBinderStatus;
 using ::android::base::StringPrintf;
@@ -2040,6 +2043,9 @@ status_t AudioTrack::createTrack_l()
     }
 
     mPortId = output.portId;
+    // notify the upper layers about the new portId
+    triggerPortIdUpdate_l();
+
     // We retain a copy of the I/O handle, but don't own the reference
     mOutput = output.outputId;
     mRefreshRemaining = true;
@@ -3610,10 +3616,32 @@ void AudioTrack::setPlayerIId(int playerIId)
     if (mPlayerIId == playerIId) return;
 
     mPlayerIId = playerIId;
+    triggerPortIdUpdate_l();
     mediametrics::LogItem(mMetricsId)
         .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_SETPLAYERIID)
         .set(AMEDIAMETRICS_PROP_PLAYERIID, playerIId)
         .record();
+}
+
+void AudioTrack::triggerPortIdUpdate_l() {
+    if (mAudioManager == nullptr) {
+        // use checkService() to avoid blocking if audio service is not up yet
+        sp<IBinder> binder =
+            defaultServiceManager()->checkService(String16(kAudioServiceName));
+        if (binder == nullptr) {
+            ALOGE("%s(%d): binding to audio service failed.",
+                  __func__,
+                  mPlayerIId);
+            return;
+        }
+
+        mAudioManager = interface_cast<IAudioManager>(binder);
+    }
+
+    // first time when the track is created we do not have a valid piid
+    if (mPlayerIId != PLAYER_PIID_INVALID) {
+        mAudioManager->playerEvent(mPlayerIId, PLAYER_UPDATE_PORT_ID, mPortId);
+    }
 }
 
 status_t AudioTrack::addAudioDeviceCallback(const sp<AudioSystem::AudioDeviceCallback>& callback)
