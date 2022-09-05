@@ -2310,8 +2310,11 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     // disable audio for time lapse recording
     const bool disableAudio = mCaptureFpsEnable && mCaptureFps < mFrameRate;
 
+    audio_mode_t phoneState = AudioSystem::getPhoneState();
+    ALOGI("%s: audio mode is :%d", __func__, phoneState);
+
     if (!disableAudio && mAudioSource != AUDIO_SOURCE_UNPROCESSED &&
-        mAudioSource != AUDIO_SOURCE_CNT &&
+        mAudioSource != AUDIO_SOURCE_CNT && phoneState <= AUDIO_MODE_NORMAL &&
         mAudioEncoder == AUDIO_ENCODER_AAC) {
         mAudioSourceNode = setAACCompressRecording();
         if (mAudioSourceNode == NULL) {

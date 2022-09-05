@@ -1305,7 +1305,7 @@ public:
             /* Sets the Audio Description Mix level in dB. */
             status_t setAudioDescriptionMixLevel_l(float leveldB);
 
-            void     createDummyAudioSessionForA2DP();
+            void     createDummyAudioSessionForBluetooth();
 
     // Next 4 fields may be changed if IAudioTrack is re-created, but always != 0
     sp<media::IAudioTrack>  mAudioTrack;
