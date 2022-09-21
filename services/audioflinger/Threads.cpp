@@ -31,6 +31,7 @@
 #include <sys/syscall.h>
 #include <cutils/bitops.h>
 #include <cutils/properties.h>
+#include <binder/PersistableBundle.h>
 #include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioParameter.h>
@@ -177,6 +178,11 @@ static const nsecs_t kOffloadStandbyDelayNs = seconds(3);
 
 // Direct output thread minimum sleep time in idle or active(underrun) state
 static const nsecs_t kDirectMinSleepTimeUs = 10000;
+
+// Minimum amount of time between checking to see if the timestamp is advancing
+// for underrun detection. If we check too frequently, we may not detect a
+// timestamp update and will falsely detect underrun.
+static const nsecs_t kMinimumTimeBetweenTimestampChecksNs = 150 /* ms */ * 1000;
 
 static const effect_uuid_t IID_VISUALIZER = {0x1d0a1a53, 0x7d5d, 0x48f2, 0x8e71, {0x27,
                                              0xfb, 0xd1, 0x0d, 0x84, 0x2c}};
@@ -2046,7 +2052,8 @@ AudioFlinger::PlaybackThread::PlaybackThread(const sp<AudioFlinger>& audioFlinge
         mFastTrackAvailMask(((1 << FastMixerState::sMaxFastTracks) - 1) & ~1),
         mHwSupportsPause(false), mHwPaused(false), mFlushPending(false), mHwSupportsSuspend(false),
         mLeftVolFloat(-1.0), mRightVolFloat(-1.0),
-        mDownStreamPatch{}
+        mDownStreamPatch{},
+        mIsTimestampAdvancing(kMinimumTimeBetweenTimestampChecksNs)
 {
     snprintf(mThreadName, kThreadNameLength, "AudioOut_%X", id);
     mNBLogWriter = audioFlinger->newWriter_l(kLogSize, mThreadName);
@@ -5413,8 +5420,19 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 volume *= vh;
                 track->mCachedVolume = volume;
                 gain_minifloat_packed_t vlr = proxy->getVolumeLR();
-                float vlf = volume * float_from_gain(gain_minifloat_unpack_left(vlr));
-                float vrf = volume * float_from_gain(gain_minifloat_unpack_right(vlr));
+                float vlf = float_from_gain(gain_minifloat_unpack_left(vlr));
+                float vrf = float_from_gain(gain_minifloat_unpack_right(vlr));
+
+                track->processMuteEvent_l(mAudioFlinger->getOrCreateAudioManager(),
+                    /*muteState=*/{masterVolume == 0.f,
+                                   mStreamTypes[track->streamType()].volume == 0.f,
+                                   mStreamTypes[track->streamType()].mute,
+                                   track->isPlaybackRestricted(),
+                                   vlf == 0.f && vrf == 0.f,
+                                   vh == 0.f});
+
+                vlf *= volume;
+                vrf *= volume;
 
                 track->setFinalVolume((vlf + vrf) / 2.f);
                 ++fastTracks;
@@ -5587,6 +5605,15 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                     ALOGV("Track right volume out of range: %.3g", vrf);
                     vrf = GAIN_FLOAT_UNITY;
                 }
+
+                track->processMuteEvent_l(mAudioFlinger->getOrCreateAudioManager(),
+                    /*muteState=*/{masterVolume == 0.f,
+                                   mStreamTypes[track->streamType()].volume == 0.f,
+                                   mStreamTypes[track->streamType()].mute,
+                                   track->isPlaybackRestricted(),
+                                   vlf == 0.f && vrf == 0.f,
+                                   vh == 0.f});
+
                 // now apply the master volume and stream type volume and shaper volume
                 vlf *= v * vh;
                 vrf *= v * vh;
@@ -5945,18 +5972,35 @@ uint32_t AudioFlinger::PlaybackThread::trackCountForUid_l(uid_t uid) const
     return trackCount;
 }
 
-bool AudioFlinger::PlaybackThread::checkRunningTimestamp()
+bool AudioFlinger::PlaybackThread::IsTimestampAdvancing::check(AudioStreamOut * output)
 {
+    // Check the timestamp to see if it's advancing once every 150ms. If we check too frequently, we
+    // could falsely detect that the frame position has stalled due to underrun because we haven't
+    // given the Audio HAL enough time to update.
+    const nsecs_t nowNs = systemTime();
+    if (nowNs - mPreviousNs < mMinimumTimeBetweenChecksNs) {
+        return mLatchedValue;
+    }
+    mPreviousNs = nowNs;
+    mLatchedValue = false;
+    // Determine if the presentation position is still advancing.
     uint64_t position = 0;
     struct timespec unused;
-    const status_t ret = mOutput->getPresentationPosition(&position, &unused);
+    const status_t ret = output->getPresentationPosition(&position, &unused);
     if (ret == NO_ERROR) {
-        if (position != mLastCheckedTimestampPosition) {
-            mLastCheckedTimestampPosition = position;
-            return true;
+        if (position != mPreviousPosition) {
+            mPreviousPosition = position;
+            mLatchedValue = true;
         }
     }
-    return false;
+    return mLatchedValue;
+}
+
+void AudioFlinger::PlaybackThread::IsTimestampAdvancing::clear()
+{
+    mLatchedValue = true;
+    mPreviousPosition = 0;
+    mPreviousNs = 0;
 }
 
 // isTrackAllowed_l() must be called with ThreadBase::mLock held
@@ -6159,11 +6203,18 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
 {
     float left, right;
 
+
     // Ensure volumeshaper state always advances even when muted.
     const sp<AudioTrackServerProxy> proxy = track->mAudioTrackServerProxy;
     const auto [shaperVolume, shaperActive] = track->getVolumeHandler()->getVolume(
             proxy->framesReleased());
     mVolumeShaperActive = shaperActive;
+
+    gain_minifloat_packed_t vlr = proxy->getVolumeLR();
+    left = float_from_gain(gain_minifloat_unpack_left(vlr));
+    right = float_from_gain(gain_minifloat_unpack_right(vlr));
+
+    const bool clientVolumeMute = (left == 0.f && right == 0.f);
 
     if (mMasterMute || mStreamTypes[track->streamType()].mute || track->isPlaybackRestricted()) {
         left = right = 0;
@@ -6171,18 +6222,24 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
         float typeVolume = mStreamTypes[track->streamType()].volume;
         const float v = mMasterVolume * typeVolume * shaperVolume;
 
-        gain_minifloat_packed_t vlr = proxy->getVolumeLR();
-        left = float_from_gain(gain_minifloat_unpack_left(vlr));
         if (left > GAIN_FLOAT_UNITY) {
             left = GAIN_FLOAT_UNITY;
         }
-        left *= v * mMasterBalanceLeft; // DirectOutputThread balance applied as track volume
-        right = float_from_gain(gain_minifloat_unpack_right(vlr));
         if (right > GAIN_FLOAT_UNITY) {
             right = GAIN_FLOAT_UNITY;
         }
+
+        left *= v * mMasterBalanceLeft; // DirectOutputThread balance applied as track volume
         right *= v * mMasterBalanceRight;
     }
+
+    track->processMuteEvent_l(mAudioFlinger->getOrCreateAudioManager(),
+        /*muteState=*/{mMasterMute,
+                       mStreamTypes[track->streamType()].volume == 0.f,
+                       mStreamTypes[track->streamType()].mute,
+                       track->isPlaybackRestricted(),
+                       clientVolumeMute,
+                       shaperVolume == 0.f});
 
     if (lastTrack) {
         track->setFinalVolume((left + right) / 2.f);
@@ -6401,9 +6458,9 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::DirectOutputThread::prep
                 // No buffers for this track. Give it a few chances to
                 // fill a buffer, then remove it from active list.
                 // Only consider last track started for mixer state control
+                bool isTimestampAdvancing = mIsTimestampAdvancing.check(mOutput);
                 if (--(track->mRetryCount) <= 0) {
-                    const bool running = checkRunningTimestamp();
-                    if (running) { // still running, give us more time.
+                    if (isTimestampAdvancing) { // HAL is still playing audio, give us more time.
                         track->mRetryCount = kMaxTrackRetriesOffload;
                     } else {
                         ALOGV("BUFFER TIMEOUT: remove track(%d) from active list", trackId);
@@ -7020,9 +7077,9 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::OffloadThread::prepareTr
             } else {
                 // No buffers for this track. Give it a few chances to
                 // fill a buffer, then remove it from active list.
+                bool isTimestampAdvancing = mIsTimestampAdvancing.check(mOutput);
                 if (--(track->mRetryCount) <= 0) {
-                    const bool running = checkRunningTimestamp();
-                    if (running) { // still running, give us more time.
+                    if (isTimestampAdvancing) { // HAL is still playing audio, give us more time.
                         track->mRetryCount = kMaxTrackRetriesOffload;
                     } else {
                         ALOGV("OffloadThread: BUFFER TIMEOUT: remove track(%d) from active list",

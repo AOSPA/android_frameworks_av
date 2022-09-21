@@ -1094,12 +1094,22 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
                     __func__, mId, (int)mThreadIoHandle);
         }
 
-        // states to reset position info for non-offloaded/direct tracks
-        if (!isOffloaded() && !isDirect()
+        PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
+
+        // states to reset position info for pcm tracks
+        if (audio_is_linear_pcm(mFormat)
                 && (state == IDLE || state == STOPPED || state == FLUSHED)) {
             mFrameMap.reset();
+
+            if (!isFastTrack() && (isDirect() || isOffloaded())) {
+                // Start point of track -> sink frame map. If the HAL returns a
+                // frame position smaller than the first written frame in
+                // updateTrackFrameInfo, the timestamp can be interpolated
+                // instead of using a larger value.
+                mFrameMap.push(mAudioTrackServerProxy->framesReleased(),
+                               playbackThread->framesWritten());
+            }
         }
-        PlaybackThread *playbackThread = (PlaybackThread *)thread.get();
         if (isFastTrack()) {
             // refresh fast track underruns on start because that field is never cleared
             // by the fast mixer; furthermore, the same track can be recycled, i.e. start
@@ -1481,6 +1491,39 @@ void AudioFlinger::PlaybackThread::Track::setTeePatches(TeePatches teePatches) {
     if (mState == TrackBase::ACTIVE || mState == TrackBase::RESUMING ||
             mState == TrackBase::STOPPING_1) {
         forEachTeePatchTrack([](auto patchTrack) { patchTrack->start(); });
+    }
+}
+
+// must be called with player thread lock held
+void AudioFlinger::PlaybackThread::Track::processMuteEvent_l(const sp<
+    IAudioManager>& audioManager, mute_state_t muteState)
+{
+    if (mMuteState == muteState) {
+        // mute state did not change, do nothing
+        return;
+    }
+
+    status_t result = UNKNOWN_ERROR;
+    if (audioManager && mPortId != AUDIO_PORT_HANDLE_NONE) {
+        if (mMuteEventExtras == nullptr) {
+            mMuteEventExtras = std::make_unique<os::PersistableBundle>();
+        }
+        mMuteEventExtras->putInt(String16(kExtraPlayerEventMuteKey),
+                                 static_cast<int>(muteState));
+
+        result = audioManager->portEvent(mPortId,
+                                         PLAYER_UPDATE_MUTED,
+                                         mMuteEventExtras);
+    }
+
+    if (result == OK) {
+        mMuteState = muteState;
+    } else {
+        ALOGW("%s(%d): cannot process mute state for port ID %d, status error %d",
+              __func__,
+              id(),
+              mPortId,
+              result);
     }
 }
 
