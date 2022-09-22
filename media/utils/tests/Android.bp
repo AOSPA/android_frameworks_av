@@ -132,6 +132,20 @@ cc_test {
 }
 
 cc_test {
+    name: "mediautils_fixedstring_tests",
+
+    defaults: ["libmediautils_tests_defaults"],
+
+    shared_libs: [
+        "libaudioutils",
+    ],
+
+    srcs: [
+        "mediautils_fixedstring_tests.cpp",
+    ],
+}
+
+cc_test {
     name: "mediautils_scopedstatistics_tests",
 
     defaults: ["libmediautils_tests_defaults"],
@@ -176,5 +190,15 @@ cc_test {
 
     srcs: [
         "extended_accumulator_tests.cpp",
+    ],
+}
+
+cc_test {
+    name: "inplace_function_tests",
+
+    defaults: ["libmediautils_tests_defaults"],
+
+    srcs: [
+        "inplace_function_tests.cpp"
     ],
 }

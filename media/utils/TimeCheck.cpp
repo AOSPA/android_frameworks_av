@@ -21,8 +21,9 @@
 #include <android-base/logging.h>
 #include <audio_utils/clock.h>
 #include <mediautils/EventLog.h>
-#include <cutils/properties.h>
+#include <mediautils/FixedString.h>
 #include <mediautils/MethodStatistics.h>
+#include <cutils/properties.h>
 #include <utils/Log.h>
 #include <mediautils/TimeCheck.h>
 #include "debuggerd/handler.h"
@@ -147,11 +148,11 @@ std::string TimeCheck::toString() {
 }
 
 // BUG(b/214424164)
-TimeCheck::TimeCheck(std::string tag, OnTimerFunc&& onTimer,
+TimeCheck::TimeCheck(std::string_view tag, OnTimerFunc&& onTimer,
         bool crashOnTimeout)
-    : mTimeCheckHandler(new TimeCheckHandler{
-            std::move(tag), std::move(onTimer), crashOnTimeout,
-            std::chrono::system_clock::now(), gettid()})
+    : mTimeCheckHandler{ std::make_shared<TimeCheckHandler>(
+            tag, std::move(onTimer), crashOnTimeout,
+            std::chrono::system_clock::now(), gettid()) }
     , mTimerHandle(timeOutMs == 0
               ? getTimeCheckThread().trackTask(mTimeCheckHandler->tag)
               : getTimeCheckThread().scheduleTask(
@@ -240,14 +241,14 @@ mediautils::TimeCheck makeTimeCheckStatsForClassMethod(
             mediautils::getStatisticsForClass(className);
     if (!statistics) return {}; // empty TimeCheck.
     return mediautils::TimeCheck(
-            std::string(className).append("::").append(methodName),
-            [ clazz = std::string(className), method = std::string(methodName),
+            FixedString62(className).append("::").append(methodName),
+            [ safeMethodName = FixedString30(methodName),
               stats = std::move(statistics) ]
             (bool timeout, float elapsedMs) {
                     if (timeout) {
                         ; // ignored, there is no timeout value.
                     } else {
-                        stats->event(method, elapsedMs);
+                        stats->event(safeMethodName.asStringView(), elapsedMs);
                     }
             }, 0 /* timeoutMs */);
 }
