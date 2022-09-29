@@ -5807,8 +5807,16 @@ uint32_t AudioPolicyManager::nextAudioPortGeneration()
 }
 
 static status_t deserializeAudioPolicyXmlConfig(AudioPolicyConfig &config) {
-    if (std::string audioPolicyXmlConfigFile = audio_get_audio_policy_config_file();
-            !audioPolicyXmlConfigFile.empty()) {
+
+    std::string audioPolicyXmlConfigFile;
+
+    if (property_get_bool("vendor.audio.gaming.enabled", false /* default_value */)) {
+        audioPolicyXmlConfigFile = "/vendor/etc/audio/audio_policy_configuration_gaming.xml";
+    } else {
+        audioPolicyXmlConfigFile = audio_get_audio_policy_config_file();
+    }
+
+    if (!audioPolicyXmlConfigFile.empty()) {
         status_t ret = deserializeAudioPolicyFile(audioPolicyXmlConfigFile.c_str(), &config);
         if (ret == NO_ERROR) {
             config.setSource(audioPolicyXmlConfigFile);
@@ -8162,9 +8170,10 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
         profile->pickAudioProfile(
                 config.sample_rate, config.channel_mask, config.format);
         config.offload_info.sample_rate = config.sample_rate;
-        config.offload_info.channel_mask = config.channel_mask;
         config.offload_info.format = config.format;
-
+        if (property_get_bool("vendor.audio.gaming.enabled", false /* default_value */))
+            config.channel_mask = AUDIO_CHANNEL_OUT_STEREO_HAPTIC_AB;
+        config.offload_info.channel_mask = config.channel_mask;
         status = desc->open(&config, mixerConfig, devices,
                             AUDIO_STREAM_DEFAULT, AUDIO_OUTPUT_FLAG_NONE, &output);
         if (status != NO_ERROR) {
@@ -8195,10 +8204,21 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
 
         //TODO: configure audio effect output stage here
 
-        // open a duplicating output thread for the new output and the primary output
+        // open a duplicating output thread for the new output and the haptic/primary output
         sp<SwAudioOutputDescriptor> dupOutputDesc =
                 new SwAudioOutputDescriptor(nullptr, mpClientInterface);
-        status = dupOutputDesc->openDuplicating(mPrimaryOutput, desc, &duplicatedOutput);
+        if (property_get_bool("vendor.audio.gaming.enabled", false /* default_value */)) {
+            sp<SwAudioOutputDescriptor> hapticDesc = nullptr;
+            for (size_t i = 0; i < mOutputs.size(); i++) {
+                 hapticDesc = mOutputs.valueAt(i);
+                 if (hapticDesc->getChannelMask() & AUDIO_CHANNEL_HAPTIC_ALL)
+                     break;
+            }
+            if (hapticDesc != nullptr)
+                status = dupOutputDesc->openDuplicating(hapticDesc, desc, &duplicatedOutput);
+        } else {
+            status = dupOutputDesc->openDuplicating(mPrimaryOutput, desc, &duplicatedOutput);
+        }
         if (status == NO_ERROR) {
             // add duplicated output descriptor
             addOutput(duplicatedOutput, dupOutputDesc);
