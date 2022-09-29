@@ -82,7 +82,8 @@ int main(int argc __unused, char **argv)
     bool doLog = (bool) property_get_bool("ro.test_harness", 0);
 #endif
 
-    uint32_t timeOutMs = (uint32_t)property_get_int32("vendor.audio.hal.boot.timeout.ms", mediautils::TimeCheck::kDefaultTimeOutMs);
+    uint32_t timeOutMs = (uint32_t)property_get_int32("vendor.audio.hal.boot.timeout.ms",
+        static_cast<uint32_t>(mediautils::TimeCheck::kDefaultTimeoutDuration.count()));
 
     mediautils::TimeCheck::setSystemReadyTimeoutMs(timeOutMs);
 

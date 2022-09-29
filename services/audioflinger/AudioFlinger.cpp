@@ -2710,7 +2710,8 @@ status_t AudioFlinger::systemReady()
 {
     Mutex::Autolock _l(mLock);
     ALOGI("%s", __FUNCTION__);
-    mediautils::TimeCheck::setSystemReadyTimeoutMs(mediautils::TimeCheck::kDefaultTimeOutMs);
+    mediautils::TimeCheck::setSystemReadyTimeoutMs(
+        mediautils::TimeCheck::kDefaultTimeoutDuration.count());
     if (mSystemReady) {
         ALOGW("%s called twice", __FUNCTION__);
         return NO_ERROR;
@@ -4633,7 +4634,9 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         } else {
             getIAudioFlingerStatistics().event(code, elapsedMs);
         }
-    });
+    }, mediautils::TimeCheck::kDefaultTimeoutDuration,
+    mediautils::TimeCheck::kDefaultSecondChanceDuration,
+    true /* crashOnTimeout */);
 
     // Make sure we connect to Audio Policy Service before calling into AudioFlinger:
     //  - AudioFlinger can call into Audio Policy Service with its global mutex held

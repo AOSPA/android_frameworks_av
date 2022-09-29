@@ -1,4 +1,4 @@
-// frameworks/av/media/libstagefright/mpeg2ts
+// frameworks/av/media/module/mpeg2ts
 {
   // tests which require dynamic content
   // invoke with: atest -- --enable-module-dynamic-download=true

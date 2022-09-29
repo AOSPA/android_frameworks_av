@@ -278,8 +278,8 @@ status_t AudioFlinger::EffectBase::updatePolicyState()
         if (!doRegister && !(registered && doEnable)) {
             return NO_ERROR;
         }
-        mPolicyLock.lock();
     }
+    mPolicyLock.lock();
     ALOGV("%s name %s id %d session %d doRegister %d registered %d doEnable %d enabled %d",
         __func__, mDescriptor.name, mId, mSessionId, doRegister, registered, doEnable, enabled);
     if (doRegister) {
@@ -1817,7 +1817,7 @@ status_t AudioFlinger::EffectHandle::onTransact(
         } else {
             getIEffectStatistics().event(code, elapsedMs);
         }
-    }, 0 /* timeoutMs */);
+    }, {} /* timeoutDuration */, {} /* secondChanceDuration */, false /* crashOnTimeout */);
     return BnEffect::onTransact(code, data, reply, flags);
 }
 
