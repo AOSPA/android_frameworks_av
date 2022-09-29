@@ -17,9 +17,25 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "AudioTestUtils"
 
+#include <system/audio_config.h>
 #include <utils/Log.h>
 
 #include "audio_test_utils.h"
+
+template <class T>
+constexpr void (*xmlDeleter)(T* t);
+template <>
+constexpr auto xmlDeleter<xmlDoc> = xmlFreeDoc;
+template <>
+constexpr auto xmlDeleter<xmlChar> = [](xmlChar* s) { xmlFree(s); };
+
+/** @return a unique_ptr with the correct deleter for the libxml2 object. */
+template <class T>
+constexpr auto make_xmlUnique(T* t) {
+    // Wrap deleter in lambda to enable empty base optimization
+    auto deleter = [](T* t) { xmlDeleter<T>(t); };
+    return std::unique_ptr<T, decltype(deleter)>{t, deleter};
+}
 
 // Generates a random string.
 void CreateRandomFile(int& fd) {
@@ -45,33 +61,18 @@ status_t OnAudioDeviceUpdateNotifier::waitForAudioDeviceCb() {
     return OK;
 }
 
-// AudioTrack callback function.
-static void AudioTrackCallBackFunction(int event, void* user, void* info __unused) {
-    switch (event) {
-        case AudioTrack::EVENT_BUFFER_END: {
-            AudioPlayback* ap = (AudioPlayback*)user;
-            std::unique_lock<std::mutex> lock{ap->mMutex};
-            ap->mStopPlaying = true;
-            ap->mCondition.notify_all();
-            break;
-        }
-        default:
-            ALOGV("received audiotrack callback %d", event);
-            break;
-    }
-}
-
 AudioPlayback::AudioPlayback(uint32_t sampleRate, audio_format_t format,
                              audio_channel_mask_t channelMask, audio_output_flags_t flags,
                              audio_session_t sessionId, AudioTrack::transfer_type transferType,
-                             audio_attributes_t* attributes)
+                             audio_attributes_t* attributes, audio_offload_info_t* info)
     : mSampleRate(sampleRate),
       mFormat(format),
       mChannelMask(channelMask),
       mFlags(flags),
       mSessionId(sessionId),
       mTransferType(transferType),
-      mAttributes(attributes) {
+      mAttributes(attributes),
+      mOffloadInfo(info) {
     mStopPlaying = false;
     mBytesUsedSoFar = 0;
     mState = PLAY_NO_INIT;
@@ -94,15 +95,17 @@ status_t AudioPlayback::create() {
     attributionSource.token = sp<BBinder>::make();
     if (mTransferType == AudioTrack::TRANSFER_OBTAIN) {
         mTrack = new AudioTrack(attributionSource);
-        mTrack->set(AUDIO_STREAM_MUSIC, mSampleRate, mFormat, mChannelMask, 0, mFlags, nullptr,
-                    nullptr, 0, 0, false, mSessionId, mTransferType, nullptr, attributionSource,
-                    mAttributes);
+        mTrack->set(AUDIO_STREAM_MUSIC, mSampleRate, mFormat, mChannelMask, 0 /* frameCount */,
+                    mFlags, nullptr /* callback */, 0 /* notificationFrames */,
+                    nullptr /* sharedBuffer */, false /*canCallJava */, mSessionId, mTransferType,
+                    mOffloadInfo, attributionSource, mAttributes);
     } else if (mTransferType == AudioTrack::TRANSFER_SHARED) {
         mTrack = new AudioTrack(AUDIO_STREAM_MUSIC, mSampleRate, mFormat, mChannelMask, mMemory,
-                                mFlags, AudioTrackCallBackFunction, this, 0, mSessionId,
-                                mTransferType, nullptr, attributionSource, mAttributes);
+                                mFlags, wp<AudioTrack::IAudioTrackCallback>::fromExisting(this), 0,
+                                mSessionId, mTransferType, nullptr, attributionSource, mAttributes);
     } else {
-        ALOGE("Required Transfer type not existed");
+        ALOGE("Test application is not handling transfer type %s",
+              AudioTrack::convertTransferToText(mTransferType));
         return INVALID_OPERATION;
     }
     mTrack->setCallerName(packageName);
@@ -155,6 +158,12 @@ status_t AudioPlayback::start() {
         }
     }
     return status;
+}
+
+void AudioPlayback::onBufferEnd() {
+    std::unique_lock<std::mutex> lock{mMutex};
+    mStopPlaying = true;
+    mCondition.notify_all();
 }
 
 status_t AudioPlayback::fillBuffer() {
@@ -238,9 +247,15 @@ void AudioPlayback::stop() {
     std::unique_lock<std::mutex> lock{mMutex};
     mStopPlaying = true;
     if (mState != PLAY_STOPPED) {
+        int32_t msec = 0;
+        (void)mTrack->pendingDuration(&msec);
         mTrack->stopAndJoinCallbacks();
         LOG_FATAL_IF(true != mTrack->stopped());
         mState = PLAY_STOPPED;
+        if (msec > 0) {
+            ALOGD("deleting recycled track, waiting for data drain (%d msec)", msec);
+            usleep(msec * 1000LL);
+        }
     }
 }
 
@@ -402,11 +417,8 @@ status_t AudioCapture::create() {
     }
     if (mFlags & AUDIO_INPUT_FLAG_FAST) {
         ALOGW("Overriding all previous computations");
-        const uint32_t kMinNormalCaptureBufferSizeMs = 12;
-        size_t maxFrameCount = kMinNormalCaptureBufferSizeMs * mSampleRate / 1000;
-        mMaxBytesPerCallback = maxFrameCount * samplesPerFrame * bytesPerSample / 2;
-        mNotificationFrames = maxFrameCount / 2;
-        mFrameCount = 2 * mNotificationFrames;
+        mFrameCount = 0;
+        mNotificationFrames = 0;
     }
     mNumFramesToRecord = (mSampleRate * 0.25);  // record .25 sec
     std::string packageName{"AudioCapture"};
@@ -416,10 +428,17 @@ status_t AudioCapture::create() {
     attributionSource.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(getpid()));
     attributionSource.token = sp<BBinder>::make();
     if (mTransferType == AudioRecord::TRANSFER_OBTAIN) {
-        mRecord = new AudioRecord(attributionSource);
-        status = mRecord->set(mInputSource, mSampleRate, mFormat, mChannelMask, mFrameCount,
-                              nullptr, nullptr, 0, false, mSessionId, mTransferType, mFlags,
-                              attributionSource.uid, attributionSource.pid);
+        if (mSampleRate == 48000) {  // test all available constructors
+            mRecord = new AudioRecord(mInputSource, mSampleRate, mFormat, mChannelMask,
+                                      attributionSource, mFrameCount, nullptr /* callback */,
+                                      mNotificationFrames, mSessionId, mTransferType, mFlags);
+        } else {
+            mRecord = new AudioRecord(attributionSource);
+            status = mRecord->set(mInputSource, mSampleRate, mFormat, mChannelMask, mFrameCount,
+                                  nullptr /* callback */, 0 /* notificationFrames */,
+                                  false /* canCallJava */, mSessionId, mTransferType, mFlags,
+                                  attributionSource.uid, attributionSource.pid);
+        }
         if (NO_ERROR != status) return status;
     } else if (mTransferType == AudioRecord::TRANSFER_CALLBACK) {
         mRecord = new AudioRecord(mInputSource, mSampleRate, mFormat, mChannelMask,
@@ -433,6 +452,11 @@ status_t AudioCapture::create() {
     mRecord->setCallerName(packageName);
     status = mRecord->initCheck();
     if (NO_ERROR == status) mState = REC_READY;
+    if (mFlags & AUDIO_INPUT_FLAG_FAST) {
+        mFrameCount = mRecord->frameCount();
+        mNotificationFrames = mRecord->getNotificationPeriodInFrames();
+        mMaxBytesPerCallback = mNotificationFrames * samplesPerFrame * bytesPerSample;
+    }
     return status;
 }
 
@@ -458,11 +482,10 @@ status_t AudioCapture::stop() {
     status_t status = OK;
     mStopRecording = true;
     if (mState != REC_STOPPED) {
-        uint32_t position;
-        status = mRecord->getPosition(&position);
-        if (OK == status && mTransferType == AudioRecord::TRANSFER_CALLBACK) {
-            if (position - mNumFramesToRecord > mFrameCount)
-                if (mBufferOverrun == false) status = BAD_VALUE;
+        if (mInputSource != AUDIO_SOURCE_DEFAULT) {
+            bool state = false;
+            status = AudioSystem::isSourceActive(mInputSource, &state);
+            if (status == OK && !state) status = BAD_VALUE;
         }
         mRecord->stopAndJoinCallbacks();
         mState = REC_STOPPED;
@@ -790,4 +813,92 @@ std::string dumpPort(const audio_port_v7& port) {
     }
     result << dumpPortConfig(port.active_config);
     return result.str();
+}
+
+std::string getXmlAttribute(const xmlNode* cur, const char* attribute) {
+    auto charPtr = make_xmlUnique(xmlGetProp(cur, reinterpret_cast<const xmlChar*>(attribute)));
+    if (charPtr == NULL) {
+        return "";
+    }
+    std::string value(reinterpret_cast<const char*>(charPtr.get()));
+    return value;
+}
+
+status_t parse_audio_policy_configuration_xml(std::vector<std::string>& attachedDevices,
+                                              std::vector<MixPort>& mixPorts,
+                                              std::vector<Route>& routes) {
+    std::string path = audio_find_readable_configuration_file("audio_policy_configuration.xml");
+    if (path.length() == 0) return UNKNOWN_ERROR;
+    auto doc = make_xmlUnique(xmlParseFile(path.c_str()));
+    if (doc == nullptr) return UNKNOWN_ERROR;
+    xmlNode* root = xmlDocGetRootElement(doc.get());
+    if (root == nullptr) return UNKNOWN_ERROR;
+    if (xmlXIncludeProcess(doc.get()) < 0) return UNKNOWN_ERROR;
+    mixPorts.clear();
+    if (!xmlStrcmp(root->name, reinterpret_cast<const xmlChar*>("audioPolicyConfiguration"))) {
+        std::string raw{getXmlAttribute(root, "version")};
+        for (auto* child = root->xmlChildrenNode; child != nullptr; child = child->next) {
+            if (!xmlStrcmp(child->name, reinterpret_cast<const xmlChar*>("modules"))) {
+                xmlNode* root = child;
+                for (auto* child = root->xmlChildrenNode; child != nullptr; child = child->next) {
+                    if (!xmlStrcmp(child->name, reinterpret_cast<const xmlChar*>("module"))) {
+                        xmlNode* root = child;
+                        for (auto* child = root->xmlChildrenNode; child != nullptr;
+                             child = child->next) {
+                            if (!xmlStrcmp(child->name,
+                                           reinterpret_cast<const xmlChar*>("mixPorts"))) {
+                                xmlNode* root = child;
+                                for (auto* child = root->xmlChildrenNode; child != nullptr;
+                                     child = child->next) {
+                                    if (!xmlStrcmp(child->name,
+                                                   reinterpret_cast<const xmlChar*>("mixPort"))) {
+                                        MixPort mixPort;
+                                        xmlNode* root = child;
+                                        mixPort.name = getXmlAttribute(root, "name");
+                                        mixPort.role = getXmlAttribute(root, "role");
+                                        mixPort.flags = getXmlAttribute(root, "flags");
+                                        if (mixPort.role == "source") mixPorts.push_back(mixPort);
+                                    }
+                                }
+                            } else if (!xmlStrcmp(child->name, reinterpret_cast<const xmlChar*>(
+                                                                       "attachedDevices"))) {
+                                xmlNode* root = child;
+                                for (auto* child = root->xmlChildrenNode; child != nullptr;
+                                     child = child->next) {
+                                    if (!xmlStrcmp(child->name,
+                                                   reinterpret_cast<const xmlChar*>("item"))) {
+                                        auto xmlValue = make_xmlUnique(xmlNodeListGetString(
+                                                child->doc, child->xmlChildrenNode, 1));
+                                        if (xmlValue == nullptr) {
+                                            raw = "";
+                                        } else {
+                                            raw = reinterpret_cast<const char*>(xmlValue.get());
+                                        }
+                                        std::string& value = raw;
+                                        attachedDevices.push_back(std::move(value));
+                                    }
+                                }
+                            } else if (!xmlStrcmp(child->name,
+                                                  reinterpret_cast<const xmlChar*>("routes"))) {
+                                xmlNode* root = child;
+                                for (auto* child = root->xmlChildrenNode; child != nullptr;
+                                     child = child->next) {
+                                    if (!xmlStrcmp(child->name,
+                                                   reinterpret_cast<const xmlChar*>("route"))) {
+                                        Route route;
+                                        xmlNode* root = child;
+                                        route.name = getXmlAttribute(root, "name");
+                                        route.sources = getXmlAttribute(root, "sources");
+                                        route.sink = getXmlAttribute(root, "sink");
+                                        routes.push_back(route);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return OK;
 }

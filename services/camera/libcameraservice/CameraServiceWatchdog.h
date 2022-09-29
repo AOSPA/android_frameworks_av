@@ -28,7 +28,7 @@
  * To disable/enable:
  *   - adb shell cmd media.camera set-cameraservice-watchdog [0/1]
  */
-
+#pragma once
 #include <chrono>
 #include <thread>
 #include <time.h>
@@ -67,7 +67,7 @@ public:
     /** Used to wrap monitored calls in start and stop functions using custom timer values */
     template<typename T>
     auto watchThread(T func, uint32_t tid, uint32_t cycles, uint32_t cycleLength) {
-        auto res = NULL;
+        decltype(func()) res;
 
         if (cycles != mMaxCycles || cycleLength != mCycleLengthMs) {
             // Create another instance of the watchdog to prevent disruption
@@ -79,7 +79,13 @@ public:
                     new CameraServiceWatchdog(cycles, cycleLength, mEnabled);
             mEnabledLock.unlock();
 
-            tempWatchdog->run("CameraServiceWatchdog");
+            status_t status = tempWatchdog->run("CameraServiceWatchdog");
+            if (status != OK) {
+                ALOGE("Unable to watch thread: %s (%d)", strerror(-status), status);
+                res = watchThread(func, tid);
+                return res;
+            }
+
             res = tempWatchdog->watchThread(func, tid);
             tempWatchdog->requestExit();
             tempWatchdog.clear();
@@ -95,9 +101,8 @@ public:
     /** Used to wrap monitored calls in start and stop functions using class timer values */
     template<typename T>
     auto watchThread(T func, uint32_t tid) {
+        decltype(func()) res;
         AutoMutex _l(mEnabledLock);
-
-        auto res = NULL;
 
         if (mEnabled) {
             start(tid);

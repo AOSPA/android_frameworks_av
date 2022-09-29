@@ -31,6 +31,7 @@
 #include <media/audiohal/EffectsFactoryHalInterface.h>
 #include <media/stagefright/foundation/AHandler.h>
 #include <media/stagefright/foundation/AMessage.h>
+#include <media/MediaMetricsItem.h>
 #include <media/ShmemCompat.h>
 #include <mediautils/ServiceUtilities.h>
 #include <utils/Thread.h>
@@ -56,6 +57,19 @@ using namespace std::chrono_literals;
     ({ auto _tmp = (x); \
        if (!_tmp.ok()) return aidl_utils::binderStatusFromStatusT(_tmp.error()); \
        std::move(_tmp.value()); })
+
+audio_channel_mask_t getMaxChannelMask(std::vector<audio_channel_mask_t> masks) {
+    uint32_t maxCount = 0;
+    audio_channel_mask_t maxMask = AUDIO_CHANNEL_NONE;
+    for (auto mask : masks) {
+        const size_t count = audio_channel_count_from_out_mask(mask);
+        if (count > maxCount) {
+            maxMask = mask;
+            maxCount = count;
+        }
+    }
+    return maxMask;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -214,21 +228,94 @@ status_t Spatializer::loadEngineConfiguration(sp<EffectHalInterface> effect) {
     status_t status = getHalParameter<false>(effect, SPATIALIZER_PARAM_HEADTRACKING_SUPPORTED,
                                          &supportsHeadTracking);
     if (status != NO_ERROR) {
+        ALOGW("%s: cannot get SPATIALIZER_PARAM_HEADTRACKING_SUPPORTED", __func__);
         return status;
     }
     mSupportsHeadTracking = supportsHeadTracking[0];
 
-    status = getHalParameter<true>(effect, SPATIALIZER_PARAM_SUPPORTED_LEVELS, &mLevels);
+    std::vector<media::SpatializationLevel> spatializationLevels;
+    status = getHalParameter<true>(effect, SPATIALIZER_PARAM_SUPPORTED_LEVELS,
+            &spatializationLevels);
     if (status != NO_ERROR) {
+        ALOGW("%s: cannot get SPATIALIZER_PARAM_SUPPORTED_LEVELS", __func__);
         return status;
     }
+    bool noneLevelFound = false;
+    bool activeLevelFound = false;
+    for (const auto spatializationLevel : spatializationLevels) {
+        if (!aidl_utils::isValidEnum(spatializationLevel)) {
+            ALOGW("%s: ignoring spatializationLevel:%d", __func__, (int)spatializationLevel);
+            continue;
+        }
+        if (spatializationLevel == media::SpatializationLevel::NONE) {
+            noneLevelFound = true;
+        } else {
+            activeLevelFound = true;
+        }
+        // we don't detect duplicates.
+        mLevels.emplace_back(spatializationLevel);
+    }
+    if (!noneLevelFound || !activeLevelFound) {
+        ALOGW("%s: SPATIALIZER_PARAM_SUPPORTED_LEVELS must include NONE"
+                " and another valid level",  __func__);
+        return BAD_VALUE;
+    }
+
+    std::vector<media::SpatializationMode> spatializationModes;
     status = getHalParameter<true>(effect, SPATIALIZER_PARAM_SUPPORTED_SPATIALIZATION_MODES,
-                                &mSpatializationModes);
+            &spatializationModes);
     if (status != NO_ERROR) {
+        ALOGW("%s: cannot get SPATIALIZER_PARAM_SUPPORTED_SPATIALIZATION_MODES", __func__);
         return status;
     }
-    return getHalParameter<true>(effect, SPATIALIZER_PARAM_SUPPORTED_CHANNEL_MASKS,
-                                 &mChannelMasks);
+    for (const auto spatializationMode : spatializationModes) {
+        if (!aidl_utils::isValidEnum(spatializationMode)) {
+            ALOGW("%s: ignoring spatializationMode:%d", __func__, (int)spatializationMode);
+            continue;
+        }
+        // we don't detect duplicates.
+        mSpatializationModes.emplace_back(spatializationMode);
+    }
+    if (mSpatializationModes.empty()) {
+        ALOGW("%s: SPATIALIZER_PARAM_SUPPORTED_SPATIALIZATION_MODES reports empty", __func__);
+        return BAD_VALUE;
+    }
+
+    std::vector<audio_channel_mask_t> channelMasks;
+    status = getHalParameter<true>(effect, SPATIALIZER_PARAM_SUPPORTED_CHANNEL_MASKS,
+                                 &channelMasks);
+    if (status != NO_ERROR) {
+        ALOGW("%s: cannot get SPATIALIZER_PARAM_SUPPORTED_CHANNEL_MASKS", __func__);
+        return status;
+    }
+    for (const auto channelMask : channelMasks) {
+        if (!audio_is_channel_mask_spatialized(channelMask)) {
+            ALOGW("%s: ignoring channelMask:%#x", __func__, channelMask);
+            continue;
+        }
+        // we don't detect duplicates.
+        mChannelMasks.emplace_back(channelMask);
+    }
+    if (mChannelMasks.empty()) {
+        ALOGW("%s: SPATIALIZER_PARAM_SUPPORTED_CHANNEL_MASKS reports empty", __func__);
+        return BAD_VALUE;
+    }
+
+    // Currently we expose only RELATIVE_WORLD.
+    // This is a limitation of the head tracking library based on a UX choice.
+    mHeadTrackingModes.push_back(SpatializerHeadTrackingMode::DISABLED);
+    if (mSupportsHeadTracking) {
+        mHeadTrackingModes.push_back(SpatializerHeadTrackingMode::RELATIVE_WORLD);
+    }
+    mediametrics::LogItem(mMetricsId)
+        .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_CREATE)
+        .set(AMEDIAMETRICS_PROP_CHANNELMASK, (int32_t)getMaxChannelMask(mChannelMasks))
+        .set(AMEDIAMETRICS_PROP_LEVELS, aidl_utils::enumsToString(mLevels))
+        .set(AMEDIAMETRICS_PROP_MODES, aidl_utils::enumsToString(mSpatializationModes))
+        .set(AMEDIAMETRICS_PROP_HEADTRACKINGMODES, aidl_utils::enumsToString(mHeadTrackingModes))
+        .set(AMEDIAMETRICS_PROP_STATUS, (int32_t)status)
+        .record();
+    return NO_ERROR;
 }
 
 /** Gets the channel mask, sampling rate and format set for the spatializer input. */
@@ -236,12 +323,7 @@ audio_config_base_t Spatializer::getAudioInConfig() const {
     std::lock_guard lock(mLock);
     audio_config_base_t config = AUDIO_CONFIG_BASE_INITIALIZER;
     // For now use highest supported channel count
-    uint32_t maxCount = 0;
-    for ( auto mask : mChannelMasks) {
-        if (audio_channel_count_from_out_mask(mask) > maxCount) {
-            config.channel_mask = mask;
-        }
-    }
+    config.channel_mask = getMaxChannelMask(mChannelMasks);
     return config;
 }
 
@@ -278,7 +360,7 @@ Status Spatializer::getSupportedLevels(std::vector<SpatializationLevel> *levels)
     if (levels == nullptr) {
         return binderStatusFromStatusT(BAD_VALUE);
     }
-    levels->push_back(SpatializationLevel::NONE);
+    // SpatializationLevel::NONE is already required from the effect or we don't load it.
     levels->insert(levels->end(), mLevels.begin(), mLevels.end());
     return Status::ok();
 }
@@ -339,16 +421,7 @@ Status Spatializer::getSupportedHeadTrackingModes(
     if (modes == nullptr) {
         return binderStatusFromStatusT(BAD_VALUE);
     }
-
-    modes->push_back(SpatializerHeadTrackingMode::DISABLED);
-    if (mSupportsHeadTracking) {
-        if (mHeadSensor != SpatializerPoseController::INVALID_SENSOR) {
-            modes->push_back(SpatializerHeadTrackingMode::RELATIVE_WORLD);
-            if (mScreenSensor != SpatializerPoseController::INVALID_SENSOR) {
-                modes->push_back(SpatializerHeadTrackingMode::RELATIVE_SCREEN);
-            }
-        }
-    }
+    modes->insert(modes->end(), mHeadTrackingModes.begin(), mHeadTrackingModes.end());
     return Status::ok();
 }
 
@@ -446,9 +519,11 @@ Status Spatializer::setHeadSensor(int sensorHandle) {
         return binderStatusFromStatusT(INVALID_OPERATION);
     }
     std::lock_guard lock(mLock);
-    mHeadSensor = sensorHandle;
-    checkPoseController_l();
-    checkSensorsState_l();
+    if (mHeadSensor != sensorHandle) {
+        mHeadSensor = sensorHandle;
+        checkPoseController_l();
+        checkSensorsState_l();
+    }
     return Status::ok();
 }
 
@@ -458,8 +533,13 @@ Status Spatializer::setScreenSensor(int sensorHandle) {
         return binderStatusFromStatusT(INVALID_OPERATION);
     }
     std::lock_guard lock(mLock);
-    mScreenSensor = sensorHandle;
-    checkSensorsState_l();
+    if (mScreenSensor != sensorHandle) {
+        mScreenSensor = sensorHandle;
+        // TODO: consider a new method setHeadAndScreenSensor()
+        // because we generally set both at the same time.
+        // This will avoid duplicated work and recentering.
+        checkSensorsState_l();
+    }
     return Status::ok();
 }
 
@@ -634,13 +714,16 @@ status_t Spatializer::attachOutput(audio_io_handle_t output, size_t numActiveTra
             mEngine->setEnabled(false);
             mEngine.clear();
             mPoseController.reset();
+            AudioSystem::removeSupportedLatencyModesCallback(this);
         }
+
         // create FX instance on output
         AttributionSourceState attributionSource = AttributionSourceState();
         mEngine = new AudioEffect(attributionSource);
-        mEngine->set(nullptr, &mEngineDescriptor.uuid, 0, Spatializer::engineCallback /* cbf */,
-                     this /* user */, AUDIO_SESSION_OUTPUT_STAGE, output, {} /* device */,
-                     false /* probe */, true /* notifyFramesProcessed */);
+        mEngine->set(nullptr /* type */, &mEngineDescriptor.uuid, 0 /* priority */,
+                     wp<AudioEffect::IAudioEffectCallback>::fromExisting(this),
+                     AUDIO_SESSION_OUTPUT_STAGE, output, {} /* device */, false /* probe */,
+                     true /* notifyFramesProcessed */);
         status_t status = mEngine->initCheck();
         ALOGV("%s mEngine create status %d", __func__, (int)status);
         if (status != NO_ERROR) {
@@ -650,6 +733,13 @@ status_t Spatializer::attachOutput(audio_io_handle_t output, size_t numActiveTra
         outputChanged = mOutput != output;
         mOutput = output;
         mNumActiveTracks = numActiveTracks;
+        AudioSystem::addSupportedLatencyModesCallback(this);
+
+        std::vector<audio_latency_mode_t> latencyModes;
+        status = AudioSystem::getSupportedLatencyModes(mOutput, &latencyModes);
+        if (status == OK) {
+            mSupportedLatencyModes = latencyModes;
+        }
 
         checkEngineState_l();
         if (mSupportsHeadTracking) {
@@ -679,6 +769,7 @@ audio_io_handle_t Spatializer::detachOutput() {
         // remove FX instance
         mEngine->setEnabled(false);
         mEngine.clear();
+        AudioSystem::removeSupportedLatencyModesCallback(this);
         output = mOutput;
         mOutput = AUDIO_IO_HANDLE_NONE;
         mPoseController.reset();
@@ -691,6 +782,15 @@ audio_io_handle_t Spatializer::detachOutput() {
     return output;
 }
 
+void Spatializer::onSupportedLatencyModesChanged(
+        audio_io_handle_t output, const std::vector<audio_latency_mode_t>& modes) {
+    std::lock_guard lock(mLock);
+    if (output == mOutput) {
+        mSupportedLatencyModes = modes;
+        checkSensorsState_l();
+    }
+}
+
 void Spatializer::updateActiveTracks(size_t numActiveTracks) {
     std::lock_guard lock(mLock);
     if (mNumActiveTracks != numActiveTracks) {
@@ -701,16 +801,24 @@ void Spatializer::updateActiveTracks(size_t numActiveTracks) {
 }
 
 void Spatializer::checkSensorsState_l() {
+    audio_latency_mode_t requestedLatencyMode = AUDIO_LATENCY_MODE_FREE;
+    bool lowLatencySupported = mSupportedLatencyModes.empty()
+            || (std::find(mSupportedLatencyModes.begin(), mSupportedLatencyModes.end(),
+                    AUDIO_LATENCY_MODE_LOW) != mSupportedLatencyModes.end());
     if (mSupportsHeadTracking && mPoseController != nullptr) {
-        if (mNumActiveTracks > 0 && mLevel != SpatializationLevel::NONE
+        if (lowLatencySupported && mNumActiveTracks > 0 && mLevel != SpatializationLevel::NONE
             && mDesiredHeadTrackingMode != HeadTrackingMode::STATIC
             && mHeadSensor != SpatializerPoseController::INVALID_SENSOR) {
             mPoseController->setHeadSensor(mHeadSensor);
             mPoseController->setScreenSensor(mScreenSensor);
+            requestedLatencyMode = AUDIO_LATENCY_MODE_LOW;
         } else {
             mPoseController->setHeadSensor(SpatializerPoseController::INVALID_SENSOR);
             mPoseController->setScreenSensor(SpatializerPoseController::INVALID_SENSOR);
         }
+    }
+    if (mOutput != AUDIO_IO_HANDLE_NONE) {
+        AudioSystem::setRequestedLatencyMode(mOutput, requestedLatencyMode);
     }
 }
 
@@ -757,27 +865,10 @@ void Spatializer::calculateHeadPose() {
     }
 }
 
-void Spatializer::engineCallback(int32_t event, void *user, void *info) {
-    if (user == nullptr) {
-        return;
-    }
-    Spatializer* const me = reinterpret_cast<Spatializer *>(user);
-    switch (event) {
-        case AudioEffect::EVENT_FRAMES_PROCESSED: {
-            int frames = info == nullptr ? 0 : *(int*)info;
-            ALOGV("%s frames processed %d for me %p", __func__, frames, me);
-            me->postFramesProcessedMsg(frames);
-        } break;
-        default:
-            ALOGV("%s event %d", __func__, event);
-            break;
-    }
-}
-
-void Spatializer::postFramesProcessedMsg(int frames) {
+void Spatializer::onFramesProcessed(int32_t framesProcessed) {
     sp<AMessage> msg =
             new AMessage(EngineCallbackHandler::kWhatOnFramesProcessed, mHandler);
-    msg->setInt32(EngineCallbackHandler::kNumFramesKey, frames);
+    msg->setInt32(EngineCallbackHandler::kNumFramesKey, framesProcessed);
     msg->post();
 }
 

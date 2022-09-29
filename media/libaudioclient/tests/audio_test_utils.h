@@ -28,6 +28,8 @@
 #include <thread>
 
 #include <binder/MemoryDealer.h>
+#include <libxml/parser.h>
+#include <libxml/xinclude.h>
 #include <media/AidlConversion.h>
 #include <media/AudioRecord.h>
 #include <media/AudioTrack.h>
@@ -36,6 +38,21 @@
 
 using namespace android;
 
+struct MixPort {
+    std::string name;
+    std::string role;
+    std::string flags;
+};
+
+struct Route {
+    std::string name;
+    std::string sources;
+    std::string sink;
+};
+
+status_t parse_audio_policy_configuration_xml(std::vector<std::string>& attachedDevices,
+                                              std::vector<MixPort>& mixPorts,
+                                              std::vector<Route>& routes);
 void CreateRandomFile(int& fd);
 status_t listAudioPorts(std::vector<audio_port_v7>& portsVec);
 status_t listAudioPatches(std::vector<struct audio_patch>& patchesVec);
@@ -63,14 +80,15 @@ class OnAudioDeviceUpdateNotifier : public AudioSystem::AudioDeviceCallback {
 };
 
 // Simple AudioPlayback class.
-class AudioPlayback {
-  public:
+class AudioPlayback : public AudioTrack::IAudioTrackCallback {
+    friend sp<AudioPlayback>;
     AudioPlayback(uint32_t sampleRate, audio_format_t format, audio_channel_mask_t channelMask,
                   audio_output_flags_t flags = AUDIO_OUTPUT_FLAG_NONE,
                   audio_session_t sessionId = AUDIO_SESSION_NONE,
                   AudioTrack::transfer_type transferType = AudioTrack::TRANSFER_SHARED,
-                  audio_attributes_t* attributes = nullptr);
-    ~AudioPlayback();
+                  audio_attributes_t* attributes = nullptr, audio_offload_info_t* info = nullptr);
+
+  public:
     status_t loadResource(const char* name);
     status_t create();
     sp<AudioTrack> getAudioTrackHandle();
@@ -78,6 +96,7 @@ class AudioPlayback {
     status_t waitForConsumption(bool testSeek = false);
     status_t fillBuffer();
     status_t onProcess(bool testSeek = false);
+    virtual void onBufferEnd() override;
     void stop();
 
     bool mStopPlaying;
@@ -92,6 +111,7 @@ class AudioPlayback {
     };
 
   private:
+    ~AudioPlayback();
     const uint32_t mSampleRate;
     const audio_format_t mFormat;
     const audio_channel_mask_t mChannelMask;
@@ -99,6 +119,7 @@ class AudioPlayback {
     const audio_session_t mSessionId;
     const AudioTrack::transfer_type mTransferType;
     const audio_attributes_t* mAttributes;
+    const audio_offload_info_t* mOffloadInfo;
 
     size_t mBytesUsedSoFar;
     State mState;

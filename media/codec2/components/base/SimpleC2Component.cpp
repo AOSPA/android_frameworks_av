@@ -18,6 +18,7 @@
 #define LOG_TAG "SimpleC2Component"
 #include <log/log.h>
 
+#include <android/hardware_buffer.h>
 #include <cutils/properties.h>
 #include <media/stagefright/foundation/AMessage.h>
 
@@ -26,18 +27,13 @@
 #include <C2Config.h>
 #include <C2Debug.h>
 #include <C2PlatformSupport.h>
+#include <Codec2BufferUtils.h>
+#include <Codec2CommonUtils.h>
 #include <SimpleC2Component.h>
 
 namespace android {
 constexpr uint8_t kNeutralUVBitDepth8 = 128;
 constexpr uint16_t kNeutralUVBitDepth10 = 512;
-
-bool isAtLeastT() {
-    char deviceCodeName[PROP_VALUE_MAX];
-    __system_property_get("ro.build.version.codename", deviceCodeName);
-    return android_get_device_api_level() >= __ANDROID_API_T__ ||
-           !strcmp(deviceCodeName, "Tiramisu");
-}
 
 void convertYUV420Planar8ToYV12(uint8_t *dstY, uint8_t *dstU, uint8_t *dstV, const uint8_t *srcY,
                                 const uint8_t *srcU, const uint8_t *srcV, size_t srcYStride,
@@ -135,6 +131,215 @@ void convertYUV420Planar16ToY410(uint32_t *dst, const uint16_t *srcY, const uint
         srcU += srcUStride;
         srcV += srcVStride;
         dst += dstStride * 2;
+    }
+}
+
+namespace {
+
+static C2ColorAspectsStruct FillMissingColorAspects(
+        std::shared_ptr<const C2ColorAspectsStruct> aspects,
+        int32_t width, int32_t height) {
+    C2ColorAspectsStruct _aspects;
+    if (aspects) {
+        _aspects = *aspects;
+    }
+
+    // use matrix for conversion
+    if (_aspects.matrix == C2Color::MATRIX_UNSPECIFIED) {
+        // if not specified, deduce matrix from primaries
+        if (_aspects.primaries == C2Color::PRIMARIES_UNSPECIFIED) {
+            // if those are also not specified, deduce primaries first from transfer, then from
+            // width and height
+            if (_aspects.transfer == C2Color::TRANSFER_ST2084
+                    || _aspects.transfer == C2Color::TRANSFER_HLG) {
+                _aspects.primaries = C2Color::PRIMARIES_BT2020;
+            } else if (width >= 3840 || height >= 3840 || width * (int64_t)height >= 3840 * 1634) {
+                // TODO: stagefright defaults to BT.2020 for UHD, but perhaps we should default to
+                // BT.709 for non-HDR 10-bit UHD content
+                // (see media/libstagefright/foundation/ColorUtils.cpp)
+                _aspects.primaries = C2Color::PRIMARIES_BT2020;
+            } else if ((width <= 720 && height <= 576)
+                    || (height <= 720 && width <= 576)) {
+                // note: it does not actually matter whether to use 525 or 625 here as the
+                // conversion is the same
+                _aspects.primaries = C2Color::PRIMARIES_BT601_625;
+            } else {
+                _aspects.primaries = C2Color::PRIMARIES_BT709;
+            }
+        }
+
+        switch (_aspects.primaries) {
+        case C2Color::PRIMARIES_BT601_525:
+        case C2Color::PRIMARIES_BT601_625:
+            _aspects.matrix = C2Color::MATRIX_BT601;
+            break;
+
+        case C2Color::PRIMARIES_BT709:
+            _aspects.matrix = C2Color::MATRIX_BT709;
+            break;
+
+        case C2Color::PRIMARIES_BT2020:
+        default:
+            _aspects.matrix = C2Color::MATRIX_BT2020;
+        }
+    }
+
+    return _aspects;
+}
+
+// matrix conversion coefficients
+// (see media/libstagefright/colorconverter/ColorConverter.cpp for more details)
+struct Coeffs {
+    int32_t _y, _r_v, _g_u, _g_v, _b_u, _c16;
+};
+
+static const struct Coeffs GetCoeffsForAspects(const C2ColorAspectsStruct &aspects) {
+    bool isFullRange = aspects.range == C2Color::RANGE_FULL;
+
+    switch (aspects.matrix) {
+    case C2Color::MATRIX_BT601:
+        /**
+         * BT.601:  K_R = 0.299;  K_B = 0.114
+         */
+        if (isFullRange) {
+            return Coeffs { 1024, 1436, 352, 731, 1815, 0 };
+        } else {
+            return Coeffs { 1196, 1639, 402, 835, 2072, 64 };
+        }
+        break;
+
+    case C2Color::MATRIX_BT709:
+        /**
+         * BT.709:  K_R = 0.2126;  K_B = 0.0722
+         */
+        if (isFullRange) {
+            return Coeffs { 1024, 1613, 192, 479, 1900, 0 };
+        } else {
+            return Coeffs { 1196, 1841, 219, 547, 2169, 64 };
+        }
+        break;
+
+    case C2Color::MATRIX_BT2020:
+    default:
+        /**
+         * BT.2020:  K_R = 0.2627;  K_B = 0.0593
+         */
+        if (isFullRange) {
+            return Coeffs { 1024, 1510, 169, 585, 1927, 0 };
+        } else {
+            return Coeffs { 1196, 1724, 192, 668, 2200, 64 };
+        }
+    }
+}
+
+}
+
+#define CLIP3(min, v, max) (((v) < (min)) ? (min) : (((max) > (v)) ? (v) : (max)))
+void convertYUV420Planar16ToRGBA1010102(
+        uint32_t *dst, const uint16_t *srcY, const uint16_t *srcU,
+        const uint16_t *srcV, size_t srcYStride, size_t srcUStride,
+        size_t srcVStride, size_t dstStride, size_t width,
+        size_t height,
+        std::shared_ptr<const C2ColorAspectsStruct> aspects) {
+
+    C2ColorAspectsStruct _aspects = FillMissingColorAspects(aspects, width, height);
+
+    struct Coeffs coeffs = GetCoeffsForAspects(_aspects);
+
+    int32_t _y = coeffs._y;
+    int32_t _b_u = coeffs._b_u;
+    int32_t _neg_g_u = -coeffs._g_u;
+    int32_t _neg_g_v = -coeffs._g_v;
+    int32_t _r_v = coeffs._r_v;
+    int32_t _c16 = coeffs._c16;
+
+    // Converting two lines at a time, slightly faster
+    for (size_t y = 0; y < height; y += 2) {
+        uint32_t *dstTop = (uint32_t *)dst;
+        uint32_t *dstBot = (uint32_t *)(dst + dstStride);
+        uint16_t *ySrcTop = (uint16_t *)srcY;
+        uint16_t *ySrcBot = (uint16_t *)(srcY + srcYStride);
+        uint16_t *uSrc = (uint16_t *)srcU;
+        uint16_t *vSrc = (uint16_t *)srcV;
+
+        for (size_t x = 0; x < width; x += 2) {
+            int32_t u, v, y00, y01, y10, y11;
+            u = *uSrc - 512;
+            uSrc += 1;
+            v = *vSrc - 512;
+            vSrc += 1;
+
+            y00 = *ySrcTop - _c16;
+            ySrcTop += 1;
+            y01 = *ySrcTop - _c16;
+            ySrcTop += 1;
+            y10 = *ySrcBot - _c16;
+            ySrcBot += 1;
+            y11 = *ySrcBot - _c16;
+            ySrcBot += 1;
+
+            int32_t u_b = u * _b_u;
+            int32_t u_g = u * _neg_g_u;
+            int32_t v_g = v * _neg_g_v;
+            int32_t v_r = v * _r_v;
+
+            int32_t yMult, b, g, r;
+            yMult = y00 * _y + 512;
+            b = (yMult + u_b) / 1024;
+            g = (yMult + v_g + u_g) / 1024;
+            r = (yMult + v_r) / 1024;
+            b = CLIP3(0, b, 1023);
+            g = CLIP3(0, g, 1023);
+            r = CLIP3(0, r, 1023);
+            *dstTop++ = 3 << 30 | (b << 20) | (g << 10) | r;
+
+            yMult = y01 * _y + 512;
+            b = (yMult + u_b) / 1024;
+            g = (yMult + v_g + u_g) / 1024;
+            r = (yMult + v_r) / 1024;
+            b = CLIP3(0, b, 1023);
+            g = CLIP3(0, g, 1023);
+            r = CLIP3(0, r, 1023);
+            *dstTop++ = 3 << 30 | (b << 20) | (g << 10) | r;
+
+            yMult = y10 * _y + 512;
+            b = (yMult + u_b) / 1024;
+            g = (yMult + v_g + u_g) / 1024;
+            r = (yMult + v_r) / 1024;
+            b = CLIP3(0, b, 1023);
+            g = CLIP3(0, g, 1023);
+            r = CLIP3(0, r, 1023);
+            *dstBot++ = 3 << 30 | (b << 20) | (g << 10) | r;
+
+            yMult = y11 * _y + 512;
+            b = (yMult + u_b) / 1024;
+            g = (yMult + v_g + u_g) / 1024;
+            r = (yMult + v_r) / 1024;
+            b = CLIP3(0, b, 1023);
+            g = CLIP3(0, g, 1023);
+            r = CLIP3(0, r, 1023);
+            *dstBot++ = 3 << 30 | (b << 20) | (g << 10) | r;
+        }
+
+        srcY += srcYStride * 2;
+        srcU += srcUStride;
+        srcV += srcVStride;
+        dst += dstStride * 2;
+    }
+}
+
+void convertYUV420Planar16ToY410OrRGBA1010102(
+        uint32_t *dst, const uint16_t *srcY,
+        const uint16_t *srcU, const uint16_t *srcV,
+        size_t srcYStride, size_t srcUStride,
+        size_t srcVStride, size_t dstStride, size_t width, size_t height,
+        std::shared_ptr<const C2ColorAspectsStruct> aspects) {
+    if (isAtLeastT()) {
+        convertYUV420Planar16ToRGBA1010102(dst, srcY, srcU, srcV, srcYStride, srcUStride,
+                                           srcVStride, dstStride, width, height, aspects);
+    } else {
+        convertYUV420Planar16ToY410(dst, srcY, srcU, srcV, srcYStride, srcUStride, srcVStride,
+                                    dstStride, width, height);
     }
 }
 
@@ -774,35 +979,29 @@ int SimpleC2Component::getHalPixelFormatForBitDepth10(bool allowRGBA1010102) {
     // Save supported hal pixel formats for bit depth of 10, the first time this is called
     if (!mBitDepth10HalPixelFormats.size()) {
         std::vector<int> halPixelFormats;
-        if (isAtLeastT()) {
-            halPixelFormats.push_back(HAL_PIXEL_FORMAT_YCBCR_P010);
-        }
+        halPixelFormats.push_back(HAL_PIXEL_FORMAT_YCBCR_P010);
+
         // since allowRGBA1010102 can chance in each call, but mBitDepth10HalPixelFormats
         // is populated only once, allowRGBA1010102 is not considered at this stage.
         halPixelFormats.push_back(HAL_PIXEL_FORMAT_RGBA_1010102);
 
         for (int halPixelFormat : halPixelFormats) {
-            std::shared_ptr<C2GraphicBlock> block;
-
-            uint32_t gpuConsumerFlags = halPixelFormat == HAL_PIXEL_FORMAT_RGBA_1010102
-                                                ? C2AndroidMemoryUsage::HW_TEXTURE_READ
-                                                : 0;
-            C2MemoryUsage usage = {C2MemoryUsage::CPU_READ | gpuConsumerFlags,
-                                   C2MemoryUsage::CPU_WRITE};
-            // TODO(b/214411172) Use AHardwareBuffer_isSupported once it supports P010
-            c2_status_t status =
-                    mOutputBlockPool->fetchGraphicBlock(320, 240, halPixelFormat, usage, &block);
-            if (status == C2_OK) {
+            if (isHalPixelFormatSupported((AHardwareBuffer_Format)halPixelFormat)) {
                 mBitDepth10HalPixelFormats.push_back(halPixelFormat);
             }
         }
         // Add YV12 in the end as a fall-back option
         mBitDepth10HalPixelFormats.push_back(HAL_PIXEL_FORMAT_YV12);
     }
-    // When RGBA1010102 is not allowed and if the first supported hal pixel is format is
-    // HAL_PIXEL_FORMAT_RGBA_1010102, then return HAL_PIXEL_FORMAT_YV12
-    if (!allowRGBA1010102 && mBitDepth10HalPixelFormats[0] == HAL_PIXEL_FORMAT_RGBA_1010102) {
-        return HAL_PIXEL_FORMAT_YV12;
+    // From Android T onwards, HAL_PIXEL_FORMAT_RGBA_1010102 corresponds to true
+    // RGBA 1010102 format unlike earlier versions where it was used to represent
+    // YUVA 1010102 data
+    if (!isAtLeastT()) {
+        // When RGBA1010102 is not allowed and if the first supported hal pixel is format is
+        // HAL_PIXEL_FORMAT_RGBA_1010102, then return HAL_PIXEL_FORMAT_YV12
+        if (!allowRGBA1010102 && mBitDepth10HalPixelFormats[0] == HAL_PIXEL_FORMAT_RGBA_1010102) {
+            return HAL_PIXEL_FORMAT_YV12;
+        }
     }
     // Return the first entry from supported formats
     return mBitDepth10HalPixelFormats[0];

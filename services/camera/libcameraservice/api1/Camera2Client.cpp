@@ -22,6 +22,7 @@
 #include <utils/Log.h>
 #include <utils/Trace.h>
 
+#include <camera/CameraUtils.h>
 #include <cutils/properties.h>
 #include <gui/Surface.h>
 #include <android/hardware/camera2/ICameraDeviceCallbacks.h>
@@ -33,6 +34,7 @@
 #include "api1/client2/CaptureSequencer.h"
 #include "api1/client2/CallbackProcessor.h"
 #include "api1/client2/ZslProcessor.h"
+#include "device3/RotateAndCropMapper.h"
 #include "utils/CameraThreadState.h"
 #include "utils/CameraServiceProxyWrapper.h"
 
@@ -50,6 +52,7 @@ using namespace camera2;
 
 Camera2Client::Camera2Client(const sp<CameraService>& cameraService,
         const sp<hardware::ICameraClient>& cameraClient,
+        std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
         const String16& clientPackageName,
         const std::optional<String16>& clientFeatureId,
         const String8& cameraDeviceId,
@@ -60,13 +63,17 @@ Camera2Client::Camera2Client(const sp<CameraService>& cameraService,
         uid_t clientUid,
         int servicePid,
         bool overrideForPerfClass):
-        Camera2ClientBase(cameraService, cameraClient, clientPackageName,
+        Camera2ClientBase(cameraService, cameraClient, cameraServiceProxyWrapper, clientPackageName,
                 false/*systemNativeClient - since no ndk for api1*/, clientFeatureId,
                 cameraDeviceId, api1CameraId, cameraFacing, sensorOrientation, clientPid,
                 clientUid, servicePid, overrideForPerfClass, /*legacyClient*/ true),
         mParameters(api1CameraId, cameraFacing)
 {
     ATRACE_CALL();
+
+    mRotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_NONE;
+    mRotateAndCropIsSupported = false;
+    mRotateAndCropPreviewTransform = 0;
 
     SharedParameters::Lock l(mParameters);
     l.mParameters.state = Parameters::DISCONNECTED;
@@ -106,7 +113,7 @@ status_t Camera2Client::initializeImpl(TProviderPtr providerPtr, const String8& 
     {
         SharedParameters::Lock l(mParameters);
 
-        res = l.mParameters.initialize(mDevice.get(), mDeviceVersion);
+        res = l.mParameters.initialize(mDevice.get());
         if (res != OK) {
             ALOGE("%s: Camera %d: unable to build defaults: %s (%d)",
                     __FUNCTION__, mCameraId, strerror(-res), res);
@@ -115,6 +122,14 @@ status_t Camera2Client::initializeImpl(TProviderPtr providerPtr, const String8& 
 
         l.mParameters.isDeviceZslSupported = isZslEnabledInStillTemplate();
     }
+
+    const CameraMetadata& staticInfo = mDevice->info();
+    mRotateAndCropIsSupported = camera3::RotateAndCropMapper::isNeeded(&staticInfo);
+    // The 'mRotateAndCropMode' value only accounts for the necessary adjustment
+    // when the display rotates. The sensor orientation still needs to be calculated
+    // and applied similar to the Camera2 path.
+    CameraUtils::getRotationTransform(staticInfo, OutputConfiguration::MIRROR_MODE_AUTO,
+            &mRotateAndCropPreviewTransform);
 
     String8 threadName;
 
@@ -125,28 +140,53 @@ status_t Camera2Client::initializeImpl(TProviderPtr providerPtr, const String8& 
     mFrameProcessor = new FrameProcessor(mDevice, this);
     threadName = String8::format("C2-%d-FrameProc",
             mCameraId);
-    mFrameProcessor->run(threadName.string());
+    res = mFrameProcessor->run(threadName.string());
+    if (res != OK) {
+        ALOGE("%s: Unable to start frame processor thread: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+        return res;
+    }
 
     mCaptureSequencer = new CaptureSequencer(this);
     threadName = String8::format("C2-%d-CaptureSeq",
             mCameraId);
-    mCaptureSequencer->run(threadName.string());
+    res = mCaptureSequencer->run(threadName.string());
+    if (res != OK) {
+        ALOGE("%s: Unable to start capture sequencer thread: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+        return res;
+    }
 
     mJpegProcessor = new JpegProcessor(this, mCaptureSequencer);
     threadName = String8::format("C2-%d-JpegProc",
             mCameraId);
-    mJpegProcessor->run(threadName.string());
+    res = mJpegProcessor->run(threadName.string());
+    if (res != OK) {
+        ALOGE("%s: Unable to start jpeg processor thread: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+        return res;
+    }
 
     mZslProcessor = new ZslProcessor(this, mCaptureSequencer);
 
     threadName = String8::format("C2-%d-ZslProc",
             mCameraId);
-    mZslProcessor->run(threadName.string());
+    res = mZslProcessor->run(threadName.string());
+    if (res != OK) {
+        ALOGE("%s: Unable to start zsl processor thread: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+        return res;
+    }
 
     mCallbackProcessor = new CallbackProcessor(this);
     threadName = String8::format("C2-%d-CallbkProc",
             mCameraId);
-    mCallbackProcessor->run(threadName.string());
+    res = mCallbackProcessor->run(threadName.string());
+    if (res != OK) {
+        ALOGE("%s: Unable to start callback processor thread: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+        return res;
+    }
 
     if (gLogLevel >= 1) {
         SharedParameters::Lock l(mParameters);
@@ -464,7 +504,7 @@ binder::Status Camera2Client::disconnect() {
     CameraService::Client::disconnect();
 
     int32_t closeLatencyMs = ns2ms(systemTime() - startTime);
-    CameraServiceProxyWrapper::logClose(mCameraIdStr, closeLatencyMs);
+    mCameraServiceProxyWrapper->logClose(mCameraIdStr, closeLatencyMs);
 
     return res;
 }
@@ -1675,6 +1715,14 @@ status_t Camera2Client::commandSetDisplayOrientationL(int degrees) {
                 __FUNCTION__, mCameraId, degrees);
         return BAD_VALUE;
     }
+    {
+        Mutex::Autolock icl(mRotateAndCropLock);
+        if (mRotateAndCropMode != ANDROID_SCALER_ROTATE_AND_CROP_NONE) {
+            ALOGI("%s: Rotate and crop set to: %d, skipping display orientation!", __FUNCTION__,
+                    mRotateAndCropMode);
+            transform = mRotateAndCropPreviewTransform;
+        }
+    }
     SharedParameters::Lock l(mParameters);
     if (transform != l.mParameters.previewTransform &&
             getPreviewStreamId() != NO_STREAM) {
@@ -2300,6 +2348,16 @@ status_t Camera2Client::setCameraServiceWatchdog(bool enabled) {
 
 status_t Camera2Client::setRotateAndCropOverride(uint8_t rotateAndCrop) {
     if (rotateAndCrop > ANDROID_SCALER_ROTATE_AND_CROP_AUTO) return BAD_VALUE;
+
+    {
+        Mutex::Autolock icl(mRotateAndCropLock);
+        if (mRotateAndCropIsSupported) {
+            mRotateAndCropMode = rotateAndCrop;
+        } else {
+            mRotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_NONE;
+            return OK;
+        }
+    }
 
     return mDevice->setRotateAndCropAutoBehavior(
         static_cast<camera_metadata_enum_android_scaler_rotate_and_crop_t>(rotateAndCrop));

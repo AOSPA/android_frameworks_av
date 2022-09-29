@@ -26,6 +26,32 @@ cc_library_static {
     ],
 }
 
+prebuilt_etc {
+    name: "mediaserver.zygote64_32.rc",
+    src: "mediaserver.zygote64_32.rc",
+    sub_dir: "init/hw",
+}
+
+prebuilt_etc {
+    name: "mediaserver.zygote64.rc",
+    src: "mediaserver.zygote64.rc",
+    sub_dir: "init/hw",
+}
+
+soong_config_module_type {
+    name: "mediaserver_cc_binary",
+    module_type: "cc_binary",
+    config_namespace: "ANDROID",
+    bool_variables: ["TARGET_DYNAMIC_64_32_MEDIASERVER"],
+    properties: [
+        "compile_multilib",
+        "init_rc",
+        "multilib.lib32.suffix",
+        "multilib.lib64.suffix",
+        "required",
+    ],
+}
+
 cc_defaults {
     name: "mediaserver_defaults",
     shared_libs: [
@@ -51,6 +77,29 @@ cc_defaults {
     ],
 
     vintf_fragments: ["manifest_media_c2_software.xml"],
+    // TODO(b/244769449) re-enable this block
+    // soong_config_variables: {
+    //     TARGET_DYNAMIC_64_32_MEDIASERVER: {
+    //         compile_multilib: "both",
+    //         multilib: {
+    //             lib32: {
+    //                 suffix: "32",
+    //             },
+    //             lib64: {
+    //                 suffix: "64",
+    //             },
+    //         },
+    //         required: [
+    //             "mediaserver.zygote64_32.rc",
+    //             "mediaserver.zygote64.rc",
+    //         ],
+    //         init_rc: ["mediaserver_dynamic.rc"],
+    //         conditions_default: {
+    //             init_rc: ["mediaserver.rc"],
+    //         },
+    //     },
+    // },
+
 }
 
 cc_binary {

@@ -29,6 +29,7 @@
 #include "common/FrameProcessorBase.h"
 #include "common/Camera2ClientBase.h"
 #include "CompositeStream.h"
+#include "utils/CameraServiceProxyWrapper.h"
 #include "utils/SessionConfigurationUtils.h"
 
 using android::camera3::OutputStreamInfo;
@@ -178,6 +179,7 @@ public:
 
     CameraDeviceClient(const sp<CameraService>& cameraService,
             const sp<hardware::camera2::ICameraDeviceCallbacks>& remoteCallback,
+            std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
             const String16& clientPackageName,
             bool clientPackageOverride,
             const std::optional<String16>& clientFeatureId,
@@ -355,6 +357,8 @@ private:
 
     // The string representation of object passed into CaptureRequest.setTag.
     std::string mUserTag;
+    // The last set video stabilization mode
+    int mVideoStabilizationMode = -1;
 };
 
 }; // namespace android

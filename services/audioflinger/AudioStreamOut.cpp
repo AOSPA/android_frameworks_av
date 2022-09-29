@@ -37,6 +37,7 @@ AudioStreamOut::AudioStreamOut(AudioHwDevice *dev, audio_output_flags_t flags)
         , mRateMultiplier(1)
         , mHalFormatHasProportionalFrames(false)
         , mHalFrameSize(0)
+        , mExpectRetrograde(false)
 {
 }
 
@@ -67,8 +68,12 @@ status_t AudioStreamOut::getRenderPosition(uint64_t *frames)
     const uint32_t truncatedPosition = (uint32_t)mRenderPosition;
     int32_t deltaHalPosition; // initialization not needed, overwitten by __builtin_sub_overflow()
     (void) __builtin_sub_overflow(halPosition, truncatedPosition, &deltaHalPosition);
+
     if (deltaHalPosition > 0) {
         mRenderPosition += deltaHalPosition;
+    } else if (mExpectRetrograde) {
+        mExpectRetrograde = false;
+        mRenderPosition -= static_cast<uint64_t>(-deltaHalPosition);
     }
     // Scale from HAL sample rate to application rate.
     *frames = mRenderPosition / mRateMultiplier;
@@ -180,6 +185,7 @@ audio_config_base_t AudioStreamOut::getAudioProperties() const
 int AudioStreamOut::flush()
 {
     mRenderPosition = 0;
+    mExpectRetrograde = false;
     status_t result = stream->flush();
     return result != INVALID_OPERATION ? result : NO_ERROR;
 }
@@ -187,6 +193,7 @@ int AudioStreamOut::flush()
 int AudioStreamOut::standby()
 {
     mRenderPosition = 0;
+    mExpectRetrograde = false;
     return stream->standby();
 }
 

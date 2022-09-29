@@ -1099,21 +1099,26 @@ protected:
          * @param attr audio attributes describing the playback use case
          * @param config audio configuration describing the audio format, channels, sample rate...
          * @param devices the sink audio device selected for playback
-         * @param allowCurrentOutputReconfig if true, the result will be considering it is possible
-         *      to close and reopen an existing spatializer output stream to match the requested
-         *      criteria. If false, the criteria must be compatible with the opened sptializer
-         *      output.
          * @return true if spatialization is possible for this context, false otherwise.
          */
         virtual bool canBeSpatializedInt(const audio_attributes_t *attr,
                                       const audio_config_t *config,
-                                      const AudioDeviceTypeAddrVector &devices,
-                                      bool allowCurrentOutputReconfig = true) const;
+                                      const AudioDeviceTypeAddrVector &devices) const;
 
+
+        /**
+         * @brief Gets an IOProfile for a spatializer output with the best match with
+         * provided arguments.
+         * The caller can have the devices criteria ignored by passing and empty vector, and
+         * getSpatializerOutputProfile() will ignore the devices when looking for a match.
+         * Otherwise an output profile supporting a spatializer effect that can be routed
+         * to the specified devices must exist.
+         * @param config audio configuration describing the audio format, channels, sample rate...
+         * @param devices the sink audio device selected for playback
+         * @return an IOProfile that canbe used to open a spatializer output.
+         */
         sp<IOProfile> getSpatializerOutputProfile(const audio_config_t *config,
                                                   const AudioDeviceTypeAddrVector &devices) const;
-
-        static bool isChannelMaskSpatialized(audio_channel_mask_t channels);
 
         void checkVirtualizerClientRoutes();
 

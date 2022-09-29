@@ -47,6 +47,8 @@
 #include "media/RingBuffer.h"
 #include "utils/AutoConditionLock.h"
 #include "utils/ClientManager.h"
+#include "utils/IPCTransport.h"
+#include "utils/CameraServiceProxyWrapper.h"
 
 #include <set>
 #include <string>
@@ -99,7 +101,10 @@ public:
     // Implementation of BinderService<T>
     static char const* getServiceName() { return "media.camera"; }
 
-                        CameraService();
+                        // Non-null arguments for cameraServiceProxyWrapper should be provided for
+                        // testing purposes only.
+                        CameraService(std::shared_ptr<CameraServiceProxyWrapper>
+                                cameraServiceProxyWrapper = nullptr);
     virtual             ~CameraService();
 
     /////////////////////////////////////////////////////////////////////
@@ -242,7 +247,7 @@ public:
 
     /////////////////////////////////////////////////////////////////////
     // CameraDeviceFactory functionality
-    int                 getDeviceVersion(const String8& cameraId, int* facing = nullptr,
+    std::pair<int, IPCTransport>    getDeviceVersion(const String8& cameraId, int* facing = nullptr,
             int* orientation = nullptr);
 
     /////////////////////////////////////////////////////////////////////
@@ -771,6 +776,8 @@ private:
 
     sp<SensorPrivacyPolicy> mSensorPrivacyPolicy;
 
+    std::shared_ptr<CameraServiceProxyWrapper> mCameraServiceProxyWrapper;
+
     // Delay-load the Camera HAL module
     virtual void onFirstRef();
 
@@ -1057,6 +1064,29 @@ private:
                 return IInterface::asBinder(mListener)->linkToDeath(this);
             }
 
+            template<typename... args_t>
+            void handleBinderStatus(const binder::Status &ret, const char *logOnError,
+                    args_t... args) {
+                if (!ret.isOk() &&
+                        (ret.exceptionCode() != binder::Status::Exception::EX_TRANSACTION_FAILED
+                        || !mLastTransactFailed)) {
+                    ALOGE(logOnError, args...);
+                }
+
+                // If the transaction failed, the process may have died (or other things, see
+                // b/28321379). Mute consecutive errors from this listener to avoid log spam.
+                if (ret.exceptionCode() == binder::Status::Exception::EX_TRANSACTION_FAILED) {
+                    if (!mLastTransactFailed) {
+                        ALOGE("%s: Muting similar errors from listener %d:%d", __FUNCTION__,
+                                mListenerUid, mListenerPid);
+                    }
+                    mLastTransactFailed = true;
+                } else {
+                    // Reset mLastTransactFailed when binder becomes healthy again.
+                    mLastTransactFailed = false;
+                }
+            }
+
             virtual void binderDied(const wp<IBinder> &/*who*/) {
                 auto parent = mParent.promote();
                 if (parent.get() != nullptr) {
@@ -1077,6 +1107,9 @@ private:
             int mListenerPid = -1;
             bool mIsVendorListener = false;
             bool mOpenCloseCallbackAllowed = false;
+
+            // Flag for preventing log spam when binder becomes unhealthy
+            bool mLastTransactFailed = false;
     };
 
     // Guarded by mStatusListenerMutex
@@ -1246,8 +1279,9 @@ private:
             const sp<IInterface>& cameraCb, const String16& packageName,
             bool systemNativeClient, const std::optional<String16>& featureId,
             const String8& cameraId, int api1CameraId, int facing, int sensorOrientation,
-            int clientPid, uid_t clientUid, int servicePid, int deviceVersion,
-            apiLevel effectiveApiLevel, bool overrideForPerfClass, /*out*/sp<BasicClient>* client);
+            int clientPid, uid_t clientUid, int servicePid,
+            std::pair<int, IPCTransport> deviceVersionAndIPCTransport, apiLevel effectiveApiLevel,
+            bool overrideForPerfClass, /*out*/sp<BasicClient>* client);
 
     status_t checkCameraAccess(const String16& opPackageName);
 

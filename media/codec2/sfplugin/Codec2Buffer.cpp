@@ -308,6 +308,39 @@ public:
                     mInitCheck = BAD_VALUE;
                     return;
                 }
+                std::optional<int> clientBitDepth = {};
+                switch (mClientColorFormat) {
+                    case COLOR_FormatYUVP010:
+                        clientBitDepth = 10;
+                        break;
+                    case COLOR_FormatYUV411PackedPlanar:
+                    case COLOR_FormatYUV411Planar:
+                    case COLOR_FormatYUV420Flexible:
+                    case COLOR_FormatYUV420PackedPlanar:
+                    case COLOR_FormatYUV420PackedSemiPlanar:
+                    case COLOR_FormatYUV420Planar:
+                    case COLOR_FormatYUV420SemiPlanar:
+                    case COLOR_FormatYUV422Flexible:
+                    case COLOR_FormatYUV422PackedPlanar:
+                    case COLOR_FormatYUV422PackedSemiPlanar:
+                    case COLOR_FormatYUV422Planar:
+                    case COLOR_FormatYUV422SemiPlanar:
+                    case COLOR_FormatYUV444Flexible:
+                    case COLOR_FormatYUV444Interleaved:
+                        clientBitDepth = 8;
+                        break;
+                    default:
+                        // no-op; used with optional
+                        break;
+
+                }
+                // conversion fails if client bit-depth and the component bit-depth differs
+                if ((clientBitDepth) && (bitDepth != clientBitDepth.value())) {
+                    ALOGD("Bit depth of client: %d and component: %d differs",
+                        *clientBitDepth, bitDepth);
+                    mInitCheck = BAD_VALUE;
+                    return;
+                }
                 C2PlaneInfo yPlane = layout.planes[C2PlanarLayout::PLANE_Y];
                 C2PlaneInfo uPlane = layout.planes[C2PlanarLayout::PLANE_U];
                 C2PlaneInfo vPlane = layout.planes[C2PlanarLayout::PLANE_V];
@@ -1222,9 +1255,6 @@ c2_status_t SetHdrMetadataToGralloc4Handle(
     }
     if (dynamicInfo && *dynamicInfo && dynamicInfo->flexCount() > 0) {
         ALOGV("Setting dynamic HDR info as gralloc4 metadata");
-        hidl_vec<uint8_t> vec;
-        vec.resize(dynamicInfo->flexCount());
-        memcpy(vec.data(), dynamicInfo->m.data, dynamicInfo->flexCount());
         std::optional<IMapper4::MetadataType> metadataType;
         switch (dynamicInfo->m.type_) {
         case C2Config::HDR_DYNAMIC_METADATA_TYPE_SMPTE_2094_10:
@@ -1234,12 +1264,20 @@ c2_status_t SetHdrMetadataToGralloc4Handle(
             metadataType = MetadataType_Smpte2094_40;
             break;
         }
+
         if (metadataType) {
-            Return<Error4> ret = mapper->set(buffer.get(), *metadataType, vec);
-            if (!ret.isOk()) {
-                err = C2_REFUSED;
-            } else if (ret != Error4::NONE) {
-                err = C2_CORRUPTED;
+            std::vector<uint8_t> smpte2094_40;
+            smpte2094_40.resize(dynamicInfo->flexCount());
+            memcpy(smpte2094_40.data(), dynamicInfo->m.data, dynamicInfo->flexCount());
+
+            hidl_vec<uint8_t> vec;
+            if (gralloc4::encodeSmpte2094_40({ smpte2094_40 }, &vec) == OK) {
+                Return<Error4> ret = mapper->set(buffer.get(), *metadataType, vec);
+                if (!ret.isOk()) {
+                    err = C2_REFUSED;
+                } else if (ret != Error4::NONE) {
+                    err = C2_CORRUPTED;
+                }
             }
         } else {
             err = C2_BAD_VALUE;

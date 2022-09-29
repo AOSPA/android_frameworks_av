@@ -17,6 +17,7 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "ToneGenerator"
 
+#include <inttypes.h>
 #include <utility>
 
 #include <math.h>
@@ -866,6 +867,11 @@ const ToneGenerator::ToneDescriptor ToneGenerator::sToneDescriptors[] = {
                         { .duration = 0 , .waveFreq = { 0 }, 0, 0}},
           .repeatCnt = ToneGenerator::TONEGEN_INF,
           .repeatSegment = 0 },                               // TONE_TW_RINGTONE
+        { .segments = { { .duration = 200, .waveFreq = { 400, 0 }, 0, 0 },
+                        { .duration = 3000, .waveFreq = { 0 }, 0, 0 },
+                        { .duration = 0 , .waveFreq = { 0 }, 0, 0}},
+          .repeatCnt = 3,
+          .repeatSegment = 0 },                              // TONE_NZ_CALL_WAITING
 };
 
 // Used by ToneGenerator::getToneForRegion() to convert user specified supervisory tone type
@@ -960,6 +966,16 @@ const unsigned char /*tone_type*/ ToneGenerator::sToneMappingTable[NUM_REGIONS-1
             TONE_SUP_ERROR,              // TONE_SUP_ERROR
             TONE_SUP_CALL_WAITING,       // TONE_SUP_CALL_WAITING
             TONE_TW_RINGTONE             // TONE_SUP_RINGTONE
+        },
+        {   // NEW ZEALAND
+            TONE_JAPAN_DIAL,              // TONE_SUP_DIAL
+            TONE_JAPAN_BUSY,              // TONE_SUP_BUSY
+            TONE_SUP_CONGESTION,          // TONE_SUP_CONGESTION
+            TONE_SUP_RADIO_ACK,           // TONE_SUP_RADIO_ACK
+            TONE_SUP_RADIO_NOTAVAIL,      // TONE_SUP_RADIO_NOTAVAIL
+            TONE_SUP_ERROR,               // TONE_SUP_ERROR
+            TONE_NZ_CALL_WAITING,         // TONE_SUP_CALL_WAITING
+            TONE_GB_RINGTONE              // TONE_SUP_RINGTONE
         }
 };
 
@@ -1037,6 +1053,8 @@ ToneGenerator::ToneGenerator(audio_stream_type_t streamType, float volume, bool 
         mRegion = INDIA;
     } else if (strstr(value, "tw") != NULL) {
         mRegion = TAIWAN;
+    } else if (strstr(value, "nz") != NULL) {
+        mRegion = NZ;
     } else {
         mRegion = CEPT;
     }
@@ -1229,7 +1247,8 @@ void ToneGenerator::stopTone() {
                     sec = sec * 1000 + nsec / 1000000; // duration in milliseconds
                     mMaxSmp = (unsigned int)(((int64_t)sec * mSamplingRate) / 1000);
                 }
-                ALOGV("stopTone() forcing mMaxSmp to %d, total for far %d", mMaxSmp,  mTotalSmp);
+                ALOGV("stopTone() forcing mMaxSmp to %d, total for far %" PRIu64, mMaxSmp,
+                      mTotalSmp);
             } else {
                 mState = TONE_STOPPING;
             }
@@ -1399,7 +1418,7 @@ size_t ToneGenerator::onMoreData(const AudioTrack::Buffer& buffer) {
             mNextSegSmp = TONEGEN_INF; // forced to skip state machine management below
         }
 
-        if (mTotalSmp > mNextSegSmp) {
+        if (mTotalSmp > mNextSegSmp && mNextSegSmp != TONEGEN_INF) {
             // Time to go to next sequence segment
 
             ALOGV("End Segment, time: %d", (unsigned int)(systemTime()/1000000));
@@ -1483,8 +1502,11 @@ size_t ToneGenerator::onMoreData(const AudioTrack::Buffer& buffer) {
             }
 
             // Update next segment transition position. No harm to do it also for last segment as
-            // mNextSegSmp won't be used any more
-            mNextSegSmp += (mpToneDesc->segments[mCurSegment].duration * mSamplingRate) / 1000;
+            // mNextSegSmp won't be used any more.
+            // Handle 32 bit wraparound gracefully.
+            const uint64_t res = static_cast<uint64_t>(mNextSegSmp) +
+                    (mpToneDesc->segments[mCurSegment].duration * mSamplingRate) / 1000;
+            mNextSegSmp = static_cast<uint32_t>(std::min<uint64_t>(TONEGEN_INF, res));
 
         } else {
             // Inside a segment keep tone ON or OFF

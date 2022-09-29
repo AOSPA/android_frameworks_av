@@ -31,8 +31,9 @@
 
 #include <camera/CaptureResult.h>
 
-#include "android/hardware/camera/metadata/3.8/types.h"
 #include "CameraServiceWatchdog.h"
+#include <aidl/android/hardware/camera/device/CameraBlob.h>
+
 #include "common/CameraDeviceBase.h"
 #include "device3/BufferUtils.h"
 #include "device3/StatusTracker.h"
@@ -48,10 +49,10 @@
 #include "utils/TagMonitor.h"
 #include "utils/IPCTransport.h"
 #include "utils/LatencyHistogram.h"
+#include "utils/CameraServiceProxyWrapper.h"
 #include <camera_metadata_hidden.h>
 
 using android::camera3::camera_capture_request_t;
-using android::camera3::camera_jpeg_blob_t;
 using android::camera3::camera_request_template;
 using android::camera3::camera_stream_buffer_t;
 using android::camera3::camera_stream_configuration_t;
@@ -82,14 +83,17 @@ class Camera3Device :
   friend class AidlCamera3Device;
   public:
 
-    explicit Camera3Device(const String8& id, bool overrideForPerfClass, bool legacyClient = false);
+    explicit Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraServiceProxyWrapper,
+            const String8& id, bool overrideForPerfClass, bool legacyClient = false);
 
     virtual ~Camera3Device();
     // Delete and optionally close native handles and clear the input vector afterward
     static void cleanupNativeHandles(
             std::vector<native_handle_t*> *handles, bool closeFd = false);
 
-    IPCTransport getTransportType() { return mInterface->getTransportType(); }
+    virtual IPCTransport getTransportType() const override {
+        return mInterface->getTransportType();
+    }
 
     /**
      * CameraDeviceBase interface
@@ -318,9 +322,12 @@ class Camera3Device :
 
     struct                     RequestTrigger;
     // minimal jpeg buffer size: 256KB + blob header
-    static const ssize_t       kMinJpegBufferSize = 256 * 1024 + sizeof(camera_jpeg_blob_t);
+    static const ssize_t       kMinJpegBufferSize =
+            256 * 1024 + sizeof(aidl::android::hardware::camera::device::CameraBlob);
     // Constant to use for stream ID when one doesn't exist
     static const int           NO_STREAM = -1;
+
+    std::shared_ptr<CameraServiceProxyWrapper> mCameraServiceProxyWrapper;
 
     // A lock to enforce serialization on the input/configure side
     // of the public interface.
@@ -362,7 +369,7 @@ class Camera3Device :
         HalInterface(const HalInterface &other);
         HalInterface();
 
-        virtual IPCTransport getTransportType() = 0;
+        virtual IPCTransport getTransportType() const = 0;
 
         // Returns true if constructed with a valid device or session, and not yet cleared
         virtual bool valid() = 0;
@@ -455,6 +462,28 @@ class Camera3Device :
                 // Verify buffer caches
                 std::vector<uint64_t> bufIds(offlineStream.circulatingBufferIds.begin(),
                         offlineStream.circulatingBufferIds.end());
+                {
+                    // Due to timing it is possible that we may not have any remaining pending
+                    // capture requests that can update the caches on Hal side. This can result in
+                    // buffer cache mismatch between the service and the Hal and must be accounted
+                    // for.
+                    std::lock_guard<std::mutex> l(mFreedBuffersLock);
+                    for (const auto& it : mFreedBuffers) {
+                        if (it.first == id) {
+                            ALOGV("%s: stream ID %d buffer id %" PRIu64 " cache removal still "
+                                    "pending", __FUNCTION__, id, it.second);
+                            const auto& cachedEntry = std::find(bufIds.begin(), bufIds.end(),
+                                    it.second);
+                            if (cachedEntry != bufIds.end()) {
+                                bufIds.erase(cachedEntry);
+                            } else {
+                                ALOGE("%s: stream ID %d buffer id %" PRIu64 " cache removal still "
+                                        "pending however buffer is no longer in the offline stream "
+                                        "info!", __FUNCTION__, id, it.second);
+                            }
+                        }
+                    }
+                }
                 if (!verifyBufferIds(id, bufIds)) {
                     ALOGE("%s: stream ID %d buffer cache records mismatch!", __FUNCTION__, id);
                     return UNKNOWN_ERROR;

@@ -1,24 +1,7 @@
 // for frameworks/av/media
 {
-    "presubmit-large": [
-        // runs whenever we change something in this tree
-        {
-            "name": "CtsMediaCodecTestCases",
-            "options": [
-                {
-                    "include-filter": "android.media.codec.cts.EncodeDecodeTest"
-                }
-            ]
-        },
-        {
-            "name": "CtsMediaCodecTestCases",
-            "options": [
-                {
-                    "include-filter": "android.media.codec.cts.DecodeEditEncodeTest"
-                }
-            ]
-        }
-    ],
+    // TODO (b/229286407) Add EncodeDecodeTest and DecodeEditEncodeTest to
+    // presubmit-large once issues in cuttlefish are fixed
     "presubmit": [
         {
             "name": "GtsMediaTestCases",
@@ -32,7 +15,8 @@
                 {
                     "include-filter": "com.google.android.media.gts.WidevineH264PlaybackTests"
                 }
-            ]
+            ],
+            "file_patterns": ["(?i)drm|crypto"]
         }
     ],
 
@@ -51,9 +35,6 @@
             "options": [
                 {
                     "include-filter": "android.media.codec.cts.EncodeDecodeTest"
-                },
-                {
-                    "exclude-annotation": "androidx.test.filters.FlakyTest"
                 }
             ]
         },
@@ -69,6 +50,7 @@
             ]
         }
     ],
+
     "staged-platinum-postsubmit": [
         // runs every four hours
         {
@@ -88,4 +70,7 @@
             ]
         }
     ]
+
+    // TODO (b/229286407) Add EncodeDecodeTest and DecodeEditEncodeTest to
+    // platinum-postsubmit once issues in cuttlefish are fixed
 }

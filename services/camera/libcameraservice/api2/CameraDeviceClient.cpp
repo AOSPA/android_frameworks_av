@@ -31,7 +31,6 @@
 #include "device3/Camera3Device.h"
 #include "device3/Camera3OutputStream.h"
 #include "api2/CameraDeviceClient.h"
-#include "utils/CameraServiceProxyWrapper.h"
 
 #include <camera_metadata_hidden.h>
 
@@ -87,6 +86,7 @@ CameraDeviceClientBase::CameraDeviceClientBase(
 
 CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
         const sp<hardware::camera2::ICameraDeviceCallbacks>& remoteCallback,
+        std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
         const String16& clientPackageName,
         bool systemNativeClient,
         const std::optional<String16>& clientFeatureId,
@@ -97,9 +97,9 @@ CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
         uid_t clientUid,
         int servicePid,
         bool overrideForPerfClass) :
-    Camera2ClientBase(cameraService, remoteCallback, clientPackageName, systemNativeClient,
-                clientFeatureId, cameraId, /*API1 camera ID*/ -1, cameraFacing, sensorOrientation,
-                clientPid, clientUid, servicePid, overrideForPerfClass),
+    Camera2ClientBase(cameraService, remoteCallback, cameraServiceProxyWrapper, clientPackageName,
+            systemNativeClient, clientFeatureId, cameraId, /*API1 camera ID*/ -1, cameraFacing,
+            sensorOrientation, clientPid, clientUid, servicePid, overrideForPerfClass),
     mInputStream(),
     mStreamingRequestId(REQUEST_ID_NONE),
     mRequestIdCounter(0),
@@ -135,7 +135,12 @@ status_t CameraDeviceClient::initializeImpl(TProviderPtr providerPtr, const Stri
     String8 threadName;
     mFrameProcessor = new FrameProcessorBase(mDevice);
     threadName = String8::format("CDU-%s-FrameProc", mCameraIdStr.string());
-    mFrameProcessor->run(threadName.string());
+    res = mFrameProcessor->run(threadName.string());
+    if (res != OK) {
+        ALOGE("%s: Unable to start frame processor thread: %s (%d)",
+                __FUNCTION__, strerror(-res), res);
+        return res;
+    }
 
     mFrameProcessor->registerListener(camera2::FrameProcessorBase::FRAME_PROCESSOR_LISTENER_MIN_ID,
                                       camera2::FrameProcessorBase::FRAME_PROCESSOR_LISTENER_MAX_ID,
@@ -176,9 +181,8 @@ status_t CameraDeviceClient::initializeImpl(TProviderPtr providerPtr, const Stri
                                 __FUNCTION__, mCameraIdStr.c_str(), entry.data.i64[i]);
                     }
                 }
-                mDynamicProfileMap.emplace(
-                        ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD,
-                        standardBitmap);
+                mDynamicProfileMap[ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD] =
+                        standardBitmap;
             } else {
                 ALOGE("%s: Device %s supports 10-bit output but doesn't include a dynamic range"
                         " profile map!", __FUNCTION__, mCameraIdStr.c_str());
@@ -527,8 +531,15 @@ binder::Status CameraDeviceClient::submitRequestList(
         metadataRequestList.push_back(physicalSettingsList);
         surfaceMapList.push_back(surfaceMap);
 
+        // Save certain CaptureRequest settings
         if (!request.mUserTag.empty()) {
             mUserTag = request.mUserTag;
+        }
+        camera_metadata_entry entry =
+                physicalSettingsList.begin()->metadata.find(
+                        ANDROID_CONTROL_VIDEO_STABILIZATION_MODE);
+        if (entry.count == 1) {
+            mVideoStabilizationMode = entry.data.u8[0];
         }
     }
     mRequestIdCounter++;
@@ -694,7 +705,7 @@ binder::Status CameraDeviceClient::endConfigure(int operatingMode,
 
         nsecs_t configureEnd = systemTime();
         int32_t configureDurationMs = ns2ms(configureEnd) - startTimeMs;
-        CameraServiceProxyWrapper::logStreamConfigured(mCameraIdStr, operatingMode,
+        mCameraServiceProxyWrapper->logStreamConfigured(mCameraIdStr, operatingMode,
                 false /*internalReconfig*/, configureDurationMs);
     }
 
@@ -1992,7 +2003,7 @@ void CameraDeviceClient::notifyIdle(
         remoteCb->onDeviceIdle();
     }
     Camera2ClientBase::notifyIdleWithUserTag(requestCount, resultErrorCount, deviceError,
-            streamStats, mUserTag);
+            streamStats, mUserTag, mVideoStabilizationMode);
 }
 
 void CameraDeviceClient::notifyShutter(const CaptureResultExtras& resultExtras,
@@ -2072,7 +2083,7 @@ void CameraDeviceClient::detachDevice() {
     Camera2ClientBase::detachDevice();
 
     int32_t closeLatencyMs = ns2ms(systemTime() - startTime);
-    CameraServiceProxyWrapper::logClose(mCameraIdStr, closeLatencyMs);
+    mCameraServiceProxyWrapper->logClose(mCameraIdStr, closeLatencyMs);
 }
 
 /** Device-related methods */

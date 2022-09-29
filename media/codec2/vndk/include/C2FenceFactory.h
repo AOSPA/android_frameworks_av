@@ -28,7 +28,7 @@ class C2SurfaceSyncMemory;
 struct _C2FenceFactory {
 
     class SurfaceFenceImpl;
-    class AndroidFenceImpl;
+    class SyncFenceImpl;
 
     /*
      * Create C2Fence for BufferQueueBased blockpool.
@@ -46,7 +46,14 @@ struct _C2FenceFactory {
      * \param fenceFd           Fence file descriptor.
      *                          It will be owned and closed by the returned fence object.
      */
-    static C2Fence CreateAndroidFence(int fenceFd);
+    static C2Fence CreateSyncFence(int fenceFd);
+
+    /**
+     * Create a native handle from fence for marshalling
+     *
+     * \return a non-null pointer if the fence can be marshalled, otherwise return nullptr
+     */
+    static native_handle_t* CreateNativeHandle(const C2Fence& fence);
 
     /*
      * Create C2Fence from a native handle.
@@ -55,7 +62,7 @@ struct _C2FenceFactory {
      *                         The fd in the native handle will be duplicated, so the caller will
      *                         still own the handle and have to close it.
      */
-    static C2Fence CreateFromNativeHandle(const C2Handle* handle);
+    static C2Fence CreateFromNativeHandle(const native_handle_t* handle);
 };
 
 

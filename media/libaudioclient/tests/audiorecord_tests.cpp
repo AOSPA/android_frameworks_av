@@ -81,8 +81,8 @@ TEST_F(AudioRecordTest, TestSimpleRecord) {
 
 TEST_F(AudioRecordTest, TestAudioCbNotifier) {
     EXPECT_EQ(BAD_VALUE, mAC->getAudioRecordHandle()->addAudioDeviceCallback(nullptr));
-    sp<OnAudioDeviceUpdateNotifier> cb = new OnAudioDeviceUpdateNotifier();
-    sp<OnAudioDeviceUpdateNotifier> cbOld = new OnAudioDeviceUpdateNotifier();
+    sp<OnAudioDeviceUpdateNotifier> cb = sp<OnAudioDeviceUpdateNotifier>::make();
+    sp<OnAudioDeviceUpdateNotifier> cbOld = sp<OnAudioDeviceUpdateNotifier>::make();
     EXPECT_EQ(OK, mAC->getAudioRecordHandle()->addAudioDeviceCallback(cbOld));
     EXPECT_EQ(INVALID_OPERATION, mAC->getAudioRecordHandle()->addAudioDeviceCallback(cbOld));
     EXPECT_EQ(OK, mAC->getAudioRecordHandle()->addAudioDeviceCallback(cb));
@@ -99,8 +99,8 @@ TEST_F(AudioRecordTest, TestAudioCbNotifier) {
 }
 
 TEST_F(AudioRecordTest, TestEventRecordTrackPause) {
-    std::unique_ptr<AudioPlayback> playback{
-            new AudioPlayback(8000, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_MONO)};
+    const auto playback = sp<AudioPlayback>::make(
+            8000 /* sampleRate */, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_MONO);
     ASSERT_EQ(OK, playback->loadResource("/data/local/tmp/bbb_1ch_8kHz_s16le.raw"))
             << "Unable to open Resource";
     EXPECT_EQ(OK, playback->create()) << "AudioTrack Creation failed";
@@ -117,8 +117,8 @@ TEST_F(AudioRecordTest, TestEventRecordTrackPause) {
 }
 
 TEST_F(AudioRecordTest, TestEventRecordTrackStop) {
-    std::unique_ptr<AudioPlayback> playback{
-            new AudioPlayback(8000, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_MONO)};
+    const auto playback = sp<AudioPlayback>::make(
+            8000 /* sampleRate */, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_MONO);
     ASSERT_EQ(OK, playback->loadResource("/data/local/tmp/bbb_1ch_8kHz_s16le.raw"))
             << "Unable to open Resource";
     EXPECT_EQ(OK, playback->create()) << "AudioTrack Creation failed";
@@ -160,20 +160,6 @@ TEST_F(AudioRecordTest, TestGetSetMarkerPeriodical) {
     EXPECT_EQ(marker, mAC->mMarkerPeriod) << "configured marker and received marker are different";
     EXPECT_EQ(mAC->mReceivedCbMarkerCount, mAC->mNumFramesToRecord / mAC->mMarkerPeriod)
             << "configured marker and received cb marker are different";
-}
-
-TEST_F(AudioRecordTest, TestMicDirectionConfiguration) {
-    EXPECT_EQ(OK, mAC->getAudioRecordHandle()->setPreferredMicrophoneDirection(MIC_DIRECTION_FRONT))
-            << "setPreferredMicrophoneDirection() Failed";
-    EXPECT_EQ(OK, mAC->start()) << "start recording failed";
-    EXPECT_EQ(OK, mAC->audioProcess()) << "audioProcess failed";
-}
-
-TEST_F(AudioRecordTest, TestMicFieldConfiguration) {
-    EXPECT_EQ(OK, mAC->getAudioRecordHandle()->setPreferredMicrophoneFieldDimension(0.5f))
-            << "setPreferredMicrophoneFieldDimension() Failed";
-    EXPECT_EQ(OK, mAC->start()) << "start recording failed";
-    EXPECT_EQ(OK, mAC->audioProcess()) << "audioProcess failed";
 }
 
 TEST_F(AudioRecordTest, TestGetPosition) {
@@ -220,6 +206,18 @@ INSTANTIATE_TEST_SUITE_P(AudioRecordPrimaryInput, AudioRecordCreateTest,
                                                               AUDIO_CHANNEL_IN_STEREO,
                                                               AUDIO_CHANNEL_IN_FRONT_BACK),
                                             ::testing::Values(AUDIO_INPUT_FLAG_NONE),
+                                            ::testing::Values(AUDIO_SESSION_NONE),
+                                            ::testing::Values(AUDIO_SOURCE_DEFAULT)));
+
+// for port fast input
+INSTANTIATE_TEST_SUITE_P(AudioRecordFastInput, AudioRecordCreateTest,
+                         ::testing::Combine(::testing::Values(8000, 11025, 12000, 16000, 22050,
+                                                              24000, 32000, 44100, 48000),
+                                            ::testing::Values(AUDIO_FORMAT_PCM_8_24_BIT),
+                                            ::testing::Values(AUDIO_CHANNEL_IN_MONO,
+                                                              AUDIO_CHANNEL_IN_STEREO,
+                                                              AUDIO_CHANNEL_IN_FRONT_BACK),
+                                            ::testing::Values(AUDIO_INPUT_FLAG_FAST),
                                             ::testing::Values(AUDIO_SESSION_NONE),
                                             ::testing::Values(AUDIO_SOURCE_DEFAULT)));
 

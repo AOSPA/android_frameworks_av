@@ -196,6 +196,12 @@ void Engine::filterOutputDevicesForStrategy(legacy_strategy strategy,
                     AUDIO_DEVICE_OUT_BLUETOOTH_A2DP, AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_HEADPHONES,
                     AUDIO_DEVICE_OUT_BLUETOOTH_A2DP_SPEAKER, }));
         }
+        // If connected to a dock, never use the device speaker for calls
+        if (!availableOutputDevices.getDevicesFromTypes({AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET})
+                .isEmpty()) {
+            availableOutputDevices.remove(
+                    availableOutputDevices.getDevicesFromTypes({AUDIO_DEVICE_OUT_SPEAKER}));
+        }
         } break;
     case STRATEGY_ACCESSIBILITY: {
         // do not route accessibility prompts to a digital output currently configured with a
@@ -546,7 +552,7 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
             if (device != nullptr) break;
         }
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                AUDIO_DEVICE_IN_WIRED_HEADSET,
                 AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
                 AUDIO_DEVICE_IN_BLUETOOTH_BLE, AUDIO_DEVICE_IN_BUILTIN_MIC});
         break;
@@ -605,7 +611,7 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
         // because sometimes user want to do voice search by bt remote
         // even if BUILDIN_MIC is available.
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                AUDIO_DEVICE_IN_WIRED_HEADSET,
                 AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
                 AUDIO_DEVICE_IN_BLUETOOTH_BLE, AUDIO_DEVICE_IN_BUILTIN_MIC});
 
@@ -627,7 +633,7 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
         }
 
         device = availableDevices.getFirstExistingDevice({
-                AUDIO_DEVICE_IN_BLE_HEADSET, AUDIO_DEVICE_IN_WIRED_HEADSET,
+                AUDIO_DEVICE_IN_WIRED_HEADSET,
                 AUDIO_DEVICE_IN_USB_HEADSET, AUDIO_DEVICE_IN_USB_DEVICE,
                 AUDIO_DEVICE_IN_BUILTIN_MIC});
         break;

@@ -1123,6 +1123,7 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
                     .mPosition[ExtendedTimestamp::LOCATION_KERNEL];
             mLogLatencyMs = 0.;
         }
+        mLogForceVolumeUpdate = true;  // at least one volume logged for metrics when starting.
 
         if (status == NO_ERROR || status == ALREADY_EXISTS) {
             // for streaming tracks, remove the buffer read stop limit.
@@ -1394,12 +1395,21 @@ void AudioFlinger::PlaybackThread::Track::setFinalVolume(float volume)
     if (mFinalVolume != volume) { // Compare to an epsilon if too many meaningless updates
         mFinalVolume = volume;
         setMetadataHasChanged();
-        mTrackMetrics.logVolume(volume);
+        mLogForceVolumeUpdate = true;
+    }
+    if (mLogForceVolumeUpdate) {
+        mLogForceVolumeUpdate = false;
+        mTrackMetrics.logVolume(mFinalVolume);
     }
 }
 
 void AudioFlinger::PlaybackThread::Track::copyMetadataTo(MetadataInserter& backInserter) const
 {
+    // Do not forward metadata for PatchTrack with unspecified stream type
+    if (mStreamType == AUDIO_STREAM_PATCH) {
+        return;
+    }
+
     playback_track_metadata_v7_t metadata;
     metadata.base = {
             .usage = mAttr.usage,

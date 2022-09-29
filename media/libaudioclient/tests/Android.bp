@@ -118,7 +118,7 @@ cc_defaults {
         "libshmemcompat",
         "libstagefright_foundation",
         "libutils",
-        "libvibrator",
+        "libxml2",
         "mediametricsservice-aidl-cpp",
         "packagemanager_aidl-cpp",
         "shared-file-region-aidl-cpp",
@@ -141,6 +141,7 @@ cc_defaults {
     ],
     data: ["bbb*.raw"],
     test_config_template: "audio_test_template.xml",
+    test_suites: ["device-tests"],
 }
 
 cc_test {
@@ -177,9 +178,6 @@ cc_test {
         "audiorouting_tests.cpp",
         "audio_test_utils.cpp",
     ],
-    shared_libs: [
-        "libxml2",
-    ],
 }
 
 cc_test {
@@ -195,4 +193,13 @@ cc_test {
     name: "trackplayerbase_tests",
     defaults: ["libaudioclient_gtests_defaults"],
     srcs: ["trackplayerbase_tests.cpp"],
+}
+
+cc_test {
+    name: "audiosystem_tests",
+    defaults: ["libaudioclient_gtests_defaults"],
+    srcs: [
+        "audiosystem_tests.cpp",
+        "audio_test_utils.cpp",
+    ],
 }

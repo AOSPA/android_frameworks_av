@@ -148,6 +148,8 @@ class AudioPolicyManagerTest : public testing::Test {
 
     std::unique_ptr<AudioPolicyManagerTestClient> mClient;
     std::unique_ptr<AudioPolicyTestManager> mManager;
+
+    const uint32_t k48000SamplingRate = 48000;
 };
 
 void AudioPolicyManagerTest::SetUp() {
@@ -414,11 +416,11 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
     AudioPolicyConfig& config = mManager->getConfig();
     mMsdOutputDevice = new DeviceDescriptor(AUDIO_DEVICE_OUT_BUS);
     sp<AudioProfile> pcmOutputProfile = new AudioProfile(
-            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, 48000);
+            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, k48000SamplingRate);
     sp<AudioProfile> ac3OutputProfile = new AudioProfile(
-            AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, 48000);
+            AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, k48000SamplingRate);
     sp<AudioProfile> iec958OutputProfile = new AudioProfile(
-            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_OUT_STEREO, 48000);
+            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_OUT_STEREO, k48000SamplingRate);
     mMsdOutputDevice->addAudioProfile(pcmOutputProfile);
     mMsdOutputDevice->addAudioProfile(ac3OutputProfile);
     mMsdOutputDevice->addAudioProfile(iec958OutputProfile);
@@ -473,7 +475,7 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
     // Add a profile with another encoding to the default device to test routing
     // of streams that are not supported by MSD.
     sp<AudioProfile> dtsOutputProfile = new AudioProfile(
-            AUDIO_FORMAT_DTS, AUDIO_CHANNEL_OUT_5POINT1, 48000);
+            AUDIO_FORMAT_DTS, AUDIO_CHANNEL_OUT_5POINT1, k48000SamplingRate);
     config.getDefaultOutputDevice()->addAudioProfile(dtsOutputProfile);
     sp<OutputProfile> primaryEncodedOutputProfile = new OutputProfile("encoded");
     primaryEncodedOutputProfile->addAudioProfile(dtsOutputProfile);
@@ -491,7 +493,7 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
     // Add HDMI input device with IEC60958 profile for HDMI in -> MSD patching.
     mHdmiInputDevice = new DeviceDescriptor(AUDIO_DEVICE_IN_HDMI);
     sp<AudioProfile> iec958InputProfile = new AudioProfile(
-            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_IN_STEREO, 48000);
+            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate);
     mHdmiInputDevice->addAudioProfile(iec958InputProfile);
     config.addDevice(mHdmiInputDevice);
     sp<InputProfile> hdmiInputProfile = new InputProfile("hdmi input");
@@ -556,8 +558,8 @@ TEST_P(AudioPolicyManagerTestMsd, PatchCreationSetReleaseMsdOutputPatches) {
 TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrEncodedRoutesToMsd) {
     const PatchCountCheck patchCount = snapshotPatchCount();
     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
-    getOutputForAttr(&selectedDeviceId,
-            AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, 48000, AUDIO_OUTPUT_FLAG_DIRECT);
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1,
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT);
     ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
 }
@@ -566,7 +568,7 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrPcmRoutesToMsd) {
     const PatchCountCheck patchCount = snapshotPatchCount();
     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
     getOutputForAttr(&selectedDeviceId,
-            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, 48000);
+            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, k48000SamplingRate);
     ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
 }
@@ -574,13 +576,13 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrPcmRoutesToMsd) {
 TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrEncodedPlusPcmRoutesToMsd) {
     const PatchCountCheck patchCount = snapshotPatchCount();
     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
-    getOutputForAttr(&selectedDeviceId,
-            AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, 48000, AUDIO_OUTPUT_FLAG_DIRECT);
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1,
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT);
     ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
     selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
     getOutputForAttr(&selectedDeviceId,
-            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, 48000);
+            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, k48000SamplingRate);
     ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
     ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
 }
@@ -588,8 +590,8 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrEncodedPlusPcmRoutesToMsd) {
 TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrUnsupportedFormatBypassesMsd) {
     const PatchCountCheck patchCount = snapshotPatchCount();
     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
-    getOutputForAttr(&selectedDeviceId,
-            AUDIO_FORMAT_DTS, AUDIO_CHANNEL_OUT_5POINT1, 48000, AUDIO_OUTPUT_FLAG_DIRECT);
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_DTS, AUDIO_CHANNEL_OUT_5POINT1,
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT);
     ASSERT_NE(selectedDeviceId, mMsdOutputDevice->getId());
     ASSERT_EQ(0, patchCount.deltaFromSnapshot());
 }
@@ -600,9 +602,8 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrFormatSwitching) {
         const PatchCountCheck patchCount = snapshotPatchCount();
         audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
         audio_port_handle_t portId;
-        getOutputForAttr(&selectedDeviceId,
-                AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, 48000, AUDIO_OUTPUT_FLAG_DIRECT,
-                nullptr /*output*/, &portId);
+        getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1,
+                k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT, nullptr /*output*/, &portId);
         ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
         ASSERT_EQ(mExpectedAudioPatchCount, patchCount.deltaFromSnapshot());
         mManager->releaseOutput(portId);
@@ -612,9 +613,8 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrFormatSwitching) {
         const PatchCountCheck patchCount = snapshotPatchCount();
         audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
         audio_port_handle_t portId;
-        getOutputForAttr(&selectedDeviceId,
-                AUDIO_FORMAT_DTS, AUDIO_CHANNEL_OUT_5POINT1, 48000, AUDIO_OUTPUT_FLAG_DIRECT,
-                nullptr /*output*/, &portId);
+        getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_DTS, AUDIO_CHANNEL_OUT_5POINT1,
+                k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT, nullptr /*output*/, &portId);
         ASSERT_NE(selectedDeviceId, mMsdOutputDevice->getId());
         ASSERT_EQ(-static_cast<int>(mExpectedAudioPatchCount), patchCount.deltaFromSnapshot());
         mManager->releaseOutput(portId);
@@ -623,8 +623,8 @@ TEST_P(AudioPolicyManagerTestMsd, GetOutputForAttrFormatSwitching) {
     {
         const PatchCountCheck patchCount = snapshotPatchCount();
         audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
-        getOutputForAttr(&selectedDeviceId,
-                AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, 48000, AUDIO_OUTPUT_FLAG_DIRECT);
+        getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1,
+                k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT);
         ASSERT_EQ(selectedDeviceId, mDefaultOutputDevice->getId());
         ASSERT_EQ(0, patchCount.deltaFromSnapshot());
     }
@@ -653,8 +653,8 @@ TEST_P(AudioPolicyManagerTestMsd, PatchCreationFromHdmiInToMsd) {
     ASSERT_EQ(AUDIO_FORMAT_IEC60958, patch->mPatch.sinks[0].format);
     ASSERT_EQ(AUDIO_CHANNEL_IN_STEREO, patch->mPatch.sources[0].channel_mask);
     ASSERT_EQ(AUDIO_CHANNEL_OUT_STEREO, patch->mPatch.sinks[0].channel_mask);
-    ASSERT_EQ(48000, patch->mPatch.sources[0].sample_rate);
-    ASSERT_EQ(48000, patch->mPatch.sinks[0].sample_rate);
+    ASSERT_EQ(k48000SamplingRate, patch->mPatch.sources[0].sample_rate);
+    ASSERT_EQ(k48000SamplingRate, patch->mPatch.sinks[0].sample_rate);
     ASSERT_EQ(1, patchCount.deltaFromSnapshot());
 }
 
@@ -919,6 +919,30 @@ TEST_F(AudioPolicyManagerTestWithConfigurationFile, ListAudioPortsHasFlags) {
     EXPECT_TRUE(foundVoipTx);
 }
 
+TEST_F(AudioPolicyManagerTestWithConfigurationFile, HandleDeviceConfigChange) {
+    {
+        const auto prevCounter = mClient->getRoutingUpdatedCounter();
+
+        EXPECT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                                               AUDIO_POLICY_DEVICE_STATE_AVAILABLE,
+                                                               "", "", AUDIO_FORMAT_LDAC));
+        const auto currCounter = mClient->getRoutingUpdatedCounter();
+        EXPECT_GT(currCounter, prevCounter);
+    }
+    {
+        const auto prevCounter = mClient->getRoutingUpdatedCounter();
+        // Update device configuration
+        EXPECT_EQ(NO_ERROR, mManager->handleDeviceConfigChange(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                                               "" /*address*/, "" /*name*/,
+                                                               AUDIO_FORMAT_AAC));
+
+        // As mClient marks isReconfigA2dpSupported to false, device state needs to be toggled for
+        // config changes to take effect
+        const auto currCounter = mClient->getRoutingUpdatedCounter();
+        EXPECT_GT(currCounter, prevCounter);
+    }
+}
+
 using PolicyMixTuple = std::tuple<audio_usage_t, audio_source_t, uint32_t>;
 
 class AudioPolicyManagerTestDynamicPolicy : public AudioPolicyManagerTestWithConfigurationFile {
@@ -996,7 +1020,7 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, RegisterPolicyMixes) {
     clearPolicyMix();
     audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
-    audioConfig.sample_rate = 48000;
+    audioConfig.sample_rate = k48000SamplingRate;
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
             AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig,
             std::vector<PolicyMixTuple>());
@@ -1035,7 +1059,7 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, UnregisterPolicyMixes) {
 
     audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
-    audioConfig.sample_rate = 48000;
+    audioConfig.sample_rate = k48000SamplingRate;
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
             AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig,
             std::vector<PolicyMixTuple>());
@@ -1273,7 +1297,7 @@ TEST_F(AudioPolicyManagerTestDPNoRemoteSubmixModule, RegistrationFailure) {
     audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
     audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
-    audioConfig.sample_rate = 48000;
+    audioConfig.sample_rate = k48000SamplingRate;
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
             AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig, std::vector<PolicyMixTuple>());
     ASSERT_EQ(INVALID_OPERATION, ret);
@@ -1307,7 +1331,7 @@ void AudioPolicyManagerTestDPPlaybackReRouting::SetUp() {
     audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
     audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
-    audioConfig.sample_rate = 48000;
+    audioConfig.sample_rate = k48000SamplingRate;
     status_t ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
             AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig, mUsageRules);
     ASSERT_EQ(NO_ERROR, ret);
@@ -1323,7 +1347,7 @@ void AudioPolicyManagerTestDPPlaybackReRouting::SetUp() {
     std::string tags = "addr=" + mMixAddress;
     strncpy(attr.tags, tags.c_str(), AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - 1);
     getInputForAttr(attr, mTracker->getRiid(), &selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT,
-            AUDIO_CHANNEL_IN_STEREO, 48000 /*sampleRate*/, AUDIO_INPUT_FLAG_NONE, &mPortId);
+            AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate, AUDIO_INPUT_FLAG_NONE, &mPortId);
     ASSERT_EQ(NO_ERROR, mManager->startInput(mPortId));
     ASSERT_EQ(extractionPort.id, selectedDeviceId);
 
@@ -1350,8 +1374,8 @@ TEST_P(AudioPolicyManagerTestDPPlaybackReRouting, PlaybackReRouting) {
 
     audio_port_handle_t playbackRoutedPortId = AUDIO_PORT_HANDLE_NONE;
     getOutputForAttr(&playbackRoutedPortId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
-            48000 /*sampleRate*/, AUDIO_OUTPUT_FLAG_NONE,
-            nullptr /*output*/, nullptr /*portId*/, attr);
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_NONE, nullptr /*output*/, nullptr /*portId*/,
+            attr);
     if (std::find_if(begin(mUsageRules), end(mUsageRules), [&usage](const auto &usageRule) {
             return (std::get<0>(usageRule) == usage) &&
             (std::get<2>(usageRule) == RULE_MATCH_ATTRIBUTE_USAGE);}) != end(mUsageRules) ||
@@ -1493,7 +1517,7 @@ void AudioPolicyManagerTestDPMixRecordInjection::SetUp() {
     audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
     audioConfig.channel_mask = AUDIO_CHANNEL_IN_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
-    audioConfig.sample_rate = 48000;
+    audioConfig.sample_rate = k48000SamplingRate;
     status_t ret = addPolicyMix(MIX_TYPE_RECORDERS, MIX_ROUTE_FLAG_LOOP_BACK,
             AUDIO_DEVICE_IN_REMOTE_SUBMIX, mMixAddress, audioConfig, mSourceRules);
     ASSERT_EQ(NO_ERROR, ret);
@@ -1509,7 +1533,7 @@ void AudioPolicyManagerTestDPMixRecordInjection::SetUp() {
     std::string tags = std::string("addr=") + mMixAddress;
     strncpy(attr.tags, tags.c_str(), AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - 1);
     getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
-            48000 /*sampleRate*/, AUDIO_OUTPUT_FLAG_NONE, nullptr /*output*/, &mPortId, attr);
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_NONE, nullptr /*output*/, &mPortId, attr);
     ASSERT_EQ(NO_ERROR, mManager->startOutput(mPortId));
     ASSERT_EQ(injectionPort.id, getDeviceIdFromPatch(mClient->getLastAddedPatch()));
 
@@ -1537,7 +1561,7 @@ TEST_P(AudioPolicyManagerTestDPMixRecordInjection, RecordingInjection) {
     audio_port_handle_t captureRoutedPortId = AUDIO_PORT_HANDLE_NONE;
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
     getInputForAttr(attr, mTracker->getRiid(), &captureRoutedPortId, AUDIO_FORMAT_PCM_16_BIT,
-            AUDIO_CHANNEL_IN_STEREO, 48000 /*sampleRate*/, AUDIO_INPUT_FLAG_NONE, &portId);
+            AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate, AUDIO_INPUT_FLAG_NONE, &portId);
     if (std::find_if(begin(mSourceRules), end(mSourceRules), [&source](const auto &sourceRule) {
             return (std::get<1>(sourceRule) == source) &&
             (std::get<2>(sourceRule) == RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET);})
@@ -1687,17 +1711,56 @@ TEST_P(AudioPolicyManagerTestDeviceConnection, ExplicitlyRoutingAfterConnection)
     // Try start input or output according to the device type
     if (audio_is_output_devices(type)) {
         getOutputForAttr(&routedPortId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
-                48000 /*sampleRate*/, AUDIO_OUTPUT_FLAG_NONE);
+                k48000SamplingRate, AUDIO_OUTPUT_FLAG_NONE);
     } else if (audio_is_input_device(type)) {
         RecordingActivityTracker tracker;
         getInputForAttr({}, tracker.getRiid(), &routedPortId, AUDIO_FORMAT_PCM_16_BIT,
-                AUDIO_CHANNEL_IN_STEREO, 48000 /*sampleRate*/, AUDIO_INPUT_FLAG_NONE);
+                AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate, AUDIO_INPUT_FLAG_NONE);
     }
     ASSERT_EQ(devicePort.id, routedPortId);
 
     ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(
             type, AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
             address.c_str(), name.c_str(), AUDIO_FORMAT_DEFAULT));
+}
+
+android::media::audio::common::ExtraAudioDescriptor make_ExtraAudioDescriptor(
+        android::media::audio::common::AudioStandard audioStandard,
+        android::media::audio::common::AudioEncapsulationType audioEncapsulationType) {
+    android::media::audio::common::ExtraAudioDescriptor result;
+    result.standard = audioStandard;
+    result.audioDescriptor = {0xb4, 0xaf, 0x98, 0x1a};
+    result.encapsulationType = audioEncapsulationType;
+    return result;
+}
+
+TEST_P(AudioPolicyManagerTestDeviceConnection, PassingExtraAudioDescriptors) {
+    const audio_devices_t type = std::get<0>(GetParam());
+    if (!audio_device_is_digital(type)) {
+        // EADs are used only for HDMI devices.
+        GTEST_SKIP() << "Not a digital device type: " << audio_device_to_string(type);
+    }
+    const std::string name = std::get<1>(GetParam());
+    const std::string address = std::get<2>(GetParam());
+    android::media::AudioPort audioPort;
+    ASSERT_EQ(NO_ERROR,
+            mManager->deviceToAudioPort(type, address.c_str(), name.c_str(), &audioPort));
+    android::media::audio::common::AudioPort& port = audioPort.hal;
+    port.extraAudioDescriptors.push_back(make_ExtraAudioDescriptor(
+                    android::media::audio::common::AudioStandard::EDID,
+                    android::media::audio::common::AudioEncapsulationType::IEC61937));
+    const size_t lastConnectedDevicePortCount = mClient->getConnectedDevicePortCount();
+    const size_t lastDisconnectedDevicePortCount = mClient->getDisconnectedDevicePortCount();
+    EXPECT_EQ(NO_ERROR, mManager->setDeviceConnectionState(
+                    AUDIO_POLICY_DEVICE_STATE_AVAILABLE, port, AUDIO_FORMAT_DEFAULT));
+    EXPECT_EQ(lastConnectedDevicePortCount + 1, mClient->getConnectedDevicePortCount());
+    EXPECT_EQ(lastDisconnectedDevicePortCount, mClient->getDisconnectedDevicePortCount());
+    const audio_port_v7* devicePort = mClient->getLastConnectedDevicePort();
+    EXPECT_EQ(port.extraAudioDescriptors.size(), devicePort->num_extra_audio_descriptors);
+    EXPECT_EQ(AUDIO_STANDARD_EDID, devicePort->extra_audio_descriptors[0].standard);
+    EXPECT_EQ(AUDIO_ENCAPSULATION_TYPE_IEC61937,
+            devicePort->extra_audio_descriptors[0].encapsulation_type);
+    EXPECT_NE(0, devicePort->extra_audio_descriptors[0].descriptor[0]);
 }
 
 INSTANTIATE_TEST_CASE_P(
@@ -1714,6 +1777,57 @@ INSTANTIATE_TEST_CASE_P(
                                             "hfp_client_out"})
                 )
         );
+
+class AudioPolicyManagerCarTest : public AudioPolicyManagerTestDynamicPolicy {
+protected:
+    std::string getConfigFile() override { return sCarConfig; }
+
+    static const std::string sCarConfig;
+};
+
+const std::string AudioPolicyManagerCarTest::sCarConfig =
+        AudioPolicyManagerCarTest::sExecutableDir + "test_car_ap_atmos_offload_configuration.xml";
+
+TEST_F(AudioPolicyManagerCarTest, InitSuccess) {
+    // SetUp must finish with no assertions.
+}
+
+TEST_F(AudioPolicyManagerCarTest, Dump) {
+    dumpToLog();
+}
+
+TEST_F(AudioPolicyManagerCarTest, GetOutputForAttrAtmosOutputAfterRegisteringPolicyMix) {
+    status_t ret;
+    audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
+    const std::string kTestBusMediaOutput = "bus0_media_out";
+    ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER,
+            AUDIO_DEVICE_OUT_BUS, kTestBusMediaOutput, audioConfig, std::vector<PolicyMixTuple>());
+    ASSERT_EQ(NO_ERROR, ret);
+
+    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    audio_io_handle_t output;
+    audio_port_handle_t portId;
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_E_AC3_JOC, AUDIO_CHANNEL_OUT_5POINT1,
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT, &output, &portId);
+    ASSERT_NE(AUDIO_PORT_HANDLE_NONE, selectedDeviceId);
+    sp<SwAudioOutputDescriptor> outDesc = mManager->getOutputs().valueFor(output);
+    ASSERT_NE(nullptr, outDesc.get());
+    ASSERT_EQ(AUDIO_FORMAT_E_AC3_JOC, outDesc->getFormat());
+    ASSERT_EQ(AUDIO_CHANNEL_OUT_5POINT1, outDesc->getChannelMask());
+    ASSERT_EQ(k48000SamplingRate, outDesc->getSamplingRate());
+
+    selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    output = AUDIO_IO_HANDLE_NONE;
+    portId = AUDIO_PORT_HANDLE_NONE;
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_7POINT1POINT4,
+            k48000SamplingRate, AUDIO_OUTPUT_FLAG_DIRECT, &output, &portId);
+    ASSERT_NE(AUDIO_PORT_HANDLE_NONE, selectedDeviceId);
+    outDesc = mManager->getOutputs().valueFor(output);
+    ASSERT_NE(nullptr, outDesc.get());
+    ASSERT_EQ(AUDIO_FORMAT_PCM_16_BIT, outDesc->getFormat());
+    ASSERT_EQ(AUDIO_CHANNEL_OUT_7POINT1POINT4, outDesc->getChannelMask());
+    ASSERT_EQ(k48000SamplingRate, outDesc->getSamplingRate());
+}
 
 class AudioPolicyManagerTVTest : public AudioPolicyManagerTestWithConfigurationFile {
 protected:
@@ -1735,8 +1849,8 @@ void AudioPolicyManagerTVTest::testHDMIPortSelection(
     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
     audio_io_handle_t output;
     audio_port_handle_t portId;
-    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, 48000,
-            flags, &output, &portId);
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+            k48000SamplingRate, flags, &output, &portId);
     sp<SwAudioOutputDescriptor> outDesc = mManager->getOutputs().valueFor(output);
     ASSERT_NE(nullptr, outDesc.get());
     audio_port_v7 port = {};
