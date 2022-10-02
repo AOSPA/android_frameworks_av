@@ -34,7 +34,7 @@ cc_library_static {
     ],
 
     include_dirs: [
-        "frameworks/av/media/libstagefright/mpeg2ts",
+        "frameworks/av/media/module/mpeg2ts",
         "frameworks/av/media/libavextensions",
     ],
     local_include_dirs: [

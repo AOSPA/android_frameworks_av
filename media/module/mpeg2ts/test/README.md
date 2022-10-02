@@ -5,7 +5,7 @@ The Mpeg2TS Unit Test Suite validates the functionality of the libraries present
 
 Run the following steps to build the test suite:
 ```
-mmm frameworks/av/media/libstagefright/mpeg2ts/test/
+mmm frameworks/av/media/module/mpeg2ts/test/
 ```
 
 The 32-bit binaries will be created in the following path : ${OUT}/data/nativetest/
@@ -20,7 +20,7 @@ To test 32-bit binary push binaries from nativetest.
 
 adb push ${OUT}/data/nativetest/Mpeg2tsUnitTest/Mpeg2tsUnitTest /data/local/tmp/
 
-The resource file for the tests is taken from [here](https://storage.googleapis.com/android_media/frameworks/av/media/libstagefright/mpeg2ts/test/Mpeg2tsUnitTest.zip ).
+The resource file for the tests is taken from [here](https://storage.googleapis.com/android_media/frameworks/av/media/module/mpeg2ts/test/Mpeg2tsUnitTest.zip ).
 Download, unzip and push these files into device for testing.
 
 ```

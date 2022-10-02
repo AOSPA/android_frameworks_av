@@ -516,7 +516,8 @@ void AudioPolicyService::onCheckSpatializer_l()
 
 void AudioPolicyService::doOnCheckSpatializer()
 {
-    ALOGI("%s mSpatializer %p level %d", __func__, mSpatializer.get(), (int)mSpatializer->getLevel());
+    ALOGV("%s mSpatializer %p level %d",
+        __func__, mSpatializer.get(), (int)mSpatializer->getLevel());
 
     if (mSpatializer != nullptr) {
         // Note: mSpatializer != nullptr =>  mAudioPolicyManager != nullptr
@@ -1341,7 +1342,9 @@ status_t AudioPolicyService::onTransact(
         } else {
             getIAudioPolicyServiceStatistics().event(code, elapsedMs);
         }
-    });
+    }, mediautils::TimeCheck::kDefaultTimeoutDuration,
+    mediautils::TimeCheck::kDefaultSecondChanceDuration,
+    true /* crashOnTimeout */);
 
     switch (code) {
         case SHELL_COMMAND_TRANSACTION: {
@@ -1724,6 +1727,7 @@ void AudioPolicyService::UidPolicy::updateUidLocked(std::unordered_map<uid_t,
 }
 
 bool AudioPolicyService::UidPolicy::isA11yOnTop() {
+    Mutex::Autolock _l(mLock);
     for (const auto &uid : mCachedUids) {
         if (!isA11yUid(uid.first)) {
             continue;
