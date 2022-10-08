@@ -36,6 +36,7 @@ ndk_library {
     symbol_file: "src/libaaudio.map.txt",
     first_version: "26",
     unversioned_until: "current",
+    allow_untyped_symbols: true,
 }
 
 cc_library_headers {
