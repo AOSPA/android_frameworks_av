@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "f0f72685_a0972825",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000469
+      },
+      "writtenOn": "2022-10-10T04:49:45Z",
+      "side": 1,
+      "message": "I think if we\u0027re have to have this, it should be integrated in the expanded volume panel itself, with each app appearing as separate rows with the app\u0027s icon. Since there is already media switcher in the main panel now, adding another button for app volume does not look good IMO.",
+      "revId": "4749c327aafed0581f95b76d164f9daf1987b79a",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
