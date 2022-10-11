@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "StagefrightRecorder"
 #define ATRACE_TAG ATRACE_TAG_VIDEO
 #include <utils/Trace.h>
@@ -2314,8 +2314,12 @@ status_t StagefrightRecorder::setupMPEG4orWEBMRecording() {
     // disable audio for time lapse recording
     const bool disableAudio = mCaptureFpsEnable && mCaptureFps < mFrameRate;
 
-    if (!disableAudio && mAudioSource != AUDIO_SOURCE_CNT &&
-        mAudioEncoder == AUDIO_ENCODER_AAC ) {
+    audio_mode_t phoneState = AudioSystem::getPhoneState();
+    ALOGI("%s: audio mode is :%d", __func__, phoneState);
+
+    if (!disableAudio && mAudioSource != AUDIO_SOURCE_UNPROCESSED &&
+        mAudioSource != AUDIO_SOURCE_CNT && phoneState <= AUDIO_MODE_NORMAL &&
+        mAudioEncoder == AUDIO_ENCODER_AAC) {
         mAudioSourceNode = setAACCompressRecording();
         if (mAudioSourceNode == NULL) {
             ALOGW("%s: unable to create compress recording", __func__);

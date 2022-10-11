@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "FrameDecoder"
 
 #include "include/FrameDecoder.h"
@@ -916,7 +916,9 @@ sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
     } else {
         videoFormat->setInt32("color-format", OMX_COLOR_FormatYUV420Planar);
     }
-    videoFormat->setInt32("vendor.qti-ext-dec-heif-mode.value", 1);
+    if (!isAvif(trackMeta())) {
+        videoFormat->setInt32("vendor.qti-ext-dec-heif-mode.value", 1);
+    }
 
     if ((mGridRows == 1) && (mGridCols == 1)) {
         videoFormat->setInt32("android._num-input-buffers", 1);
