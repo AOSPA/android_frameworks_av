@@ -1071,10 +1071,9 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 }
 
                 // Pause the renderer till video queue pre-rolls
-                if (!mPaused && mVideoDecoder != NULL && mAudioDecoder != NULL
-                   && !mRenderer->isVideoSampleReceived()) {
+                if (!mPaused && mVideoDecoder != NULL && mAudioDecoder != NULL) {
                     ALOGI("NOTE: Pausing Renderer after decoders instantiated..");
-                    mRenderer->pause();
+                    mRenderer->pause(true /* forPreroll */);
                     // wake up renderer if timed out
                     sp<AMessage> msg = new AMessage(kWhatWakeupRendererFromPreroll, this);
                     msg->post(kDefaultVideoPrerollMaxUs);
@@ -1294,7 +1293,7 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                             // Only video track has error. Audio track could be still good to play.
                             notifyListener(MEDIA_INFO, MEDIA_INFO_PLAY_VIDEO_ERROR, err);
                         }
-                        if (mRenderer != NULL && !mRenderer->isVideoPrerollCompleted()) {
+                        if (mRenderer != NULL && mRenderer->isVideoPrerollInprogress()) {
                             // wake up renderer immediately. it's still waiting for video preroll,
                             // but video is already gone.
                             sp<AMessage> msg = new AMessage(kWhatWakeupRendererFromPreroll, this);
@@ -1553,7 +1552,7 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
         case kWhatWakeupRendererFromPreroll:
         {
             // don't break pause if client requested renderer to pause too.
-            if (!mPaused && mRenderer != NULL && !mRenderer->isVideoPrerollCompleted()) {
+            if (!mPaused && mRenderer != NULL && mRenderer->isVideoPrerollInprogress()) {
                 ALOGI("NOTE: Video preroll timed out, resume renderer");
                 mRenderer->resume();
             }
