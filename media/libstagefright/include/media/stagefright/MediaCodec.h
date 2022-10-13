@@ -18,6 +18,7 @@
 
 #define MEDIA_CODEC_H_
 
+#include <list>
 #include <memory>
 #include <vector>
 
@@ -485,7 +486,7 @@ private:
     // stop/flush/reset/release.
     Mutex mBufferLock;
 
-    List<size_t> mAvailPortBuffers[2];
+    std::list<size_t> mAvailPortBuffers[2];
     std::vector<BufferInfo> mPortBuffers[2];
 
     int32_t mDequeueInputTimeoutGeneration;
@@ -503,7 +504,7 @@ private:
 
     sp<IDescrambler> mDescrambler;
 
-    List<sp<ABuffer> > mCSD;
+    std::list<sp<ABuffer> > mCSD;
 
     sp<AMessage> mActivityNotify;
 
