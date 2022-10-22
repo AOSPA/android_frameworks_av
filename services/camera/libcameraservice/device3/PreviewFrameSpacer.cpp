@@ -35,12 +35,12 @@ PreviewFrameSpacer::PreviewFrameSpacer(wp<Camera3OutputStream> parent, sp<Surfac
 PreviewFrameSpacer::~PreviewFrameSpacer() {
 }
 
-status_t PreviewFrameSpacer::queuePreviewBuffer(nsecs_t timestamp, nsecs_t readoutTimestamp,
-        int32_t transform, ANativeWindowBuffer* anwBuffer, int releaseFence) {
+status_t PreviewFrameSpacer::queuePreviewBuffer(nsecs_t timestamp, int32_t transform,
+        ANativeWindowBuffer* anwBuffer, int releaseFence) {
     Mutex::Autolock l(mLock);
-    mPendingBuffers.emplace(timestamp, readoutTimestamp, transform, anwBuffer, releaseFence);
-    ALOGV("%s: mPendingBuffers size %zu, timestamp %" PRId64 ", readoutTime %" PRId64,
-            __FUNCTION__, mPendingBuffers.size(), timestamp, readoutTimestamp);
+    mPendingBuffers.emplace(timestamp, transform, anwBuffer, releaseFence);
+    ALOGV("%s: mPendingBuffers size %zu, timestamp %" PRId64, __FUNCTION__,
+            mPendingBuffers.size(), timestamp);
 
     mBufferCond.signal();
     return OK;
@@ -59,10 +59,10 @@ bool PreviewFrameSpacer::threadLoop() {
 
     nsecs_t currentTime = systemTime();
     auto buffer = mPendingBuffers.front();
-    nsecs_t readoutInterval = buffer.readoutTimestamp - mLastCameraReadoutTime;
-    // If the readout interval exceeds threshold, directly queue
+    nsecs_t captureInterval = buffer.timestamp - mLastCameraCaptureTime;
+    // If the capture interval exceeds threshold, directly queue
     // cached buffer.
-    if (readoutInterval >= kFrameIntervalThreshold) {
+    if (captureInterval >= kFrameIntervalThreshold) {
         mPendingBuffers.pop();
         queueBufferToClientLocked(buffer, currentTime);
         return true;
@@ -71,7 +71,7 @@ bool PreviewFrameSpacer::threadLoop() {
     // Cache the frame to match readout time interval, for up to kMaxFrameWaitTime
     // Because the code between here and queueBuffer() takes time to execute, make sure the
     // presentationInterval is slightly shorter than readoutInterval.
-    nsecs_t expectedQueueTime = mLastCameraPresentTime + readoutInterval - kFrameAdjustThreshold;
+    nsecs_t expectedQueueTime = mLastCameraPresentTime + captureInterval - kFrameAdjustThreshold;
     nsecs_t frameWaitTime = std::min(kMaxFrameWaitTime, expectedQueueTime - currentTime);
     if (frameWaitTime > 0 && mPendingBuffers.size() < 2) {
         mBufferCond.waitRelative(mLock, frameWaitTime);
@@ -80,8 +80,8 @@ bool PreviewFrameSpacer::threadLoop() {
         }
         currentTime = systemTime();
     }
-    ALOGV("%s: readoutInterval %" PRId64 ", waited for %" PRId64
-            ", timestamp %" PRId64, __FUNCTION__, readoutInterval,
+    ALOGV("%s: captureInterval %" PRId64 ", waited for %" PRId64
+            ", timestamp %" PRId64, __FUNCTION__, captureInterval,
             mPendingBuffers.size() < 2 ? frameWaitTime : 0, buffer.timestamp);
     mPendingBuffers.pop();
     queueBufferToClientLocked(buffer, currentTime);
@@ -126,7 +126,7 @@ void PreviewFrameSpacer::queueBufferToClientLocked(
 
     parent->onCachedBufferQueued();
     mLastCameraPresentTime = currentTime;
-    mLastCameraReadoutTime = bufferHolder.readoutTimestamp;
+    mLastCameraCaptureTime = bufferHolder.timestamp;
 }
 
 }; // namespace camera3
