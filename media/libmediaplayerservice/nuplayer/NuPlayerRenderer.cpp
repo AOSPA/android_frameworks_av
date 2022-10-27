@@ -149,6 +149,7 @@ NuPlayer::Renderer::Renderer(
       mSyncQueues(false),
       mPaused(false),
       mPauseDrainAudioAllowedUs(0),
+      mVideoPrerollInprogress(false),
       mVideoSampleReceived(false),
       mVideoRenderingStarted(false),
       mVideoRenderingStartGeneration(0),
@@ -378,8 +379,10 @@ void NuPlayer::Renderer::signalEnableOffloadAudio() {
     (new AMessage(kWhatEnableOffloadAudio, this))->post();
 }
 
-void NuPlayer::Renderer::pause() {
-    (new AMessage(kWhatPause, this))->post();
+void NuPlayer::Renderer::pause(bool forPreroll) {
+    sp<AMessage> msg = new AMessage(kWhatPause, this);
+    msg->setInt32("pause-for-preroll", forPreroll);
+    msg->post();
 }
 
 void NuPlayer::Renderer::resume() {
@@ -786,7 +789,9 @@ void NuPlayer::Renderer::onMessageReceived(const sp<AMessage> &msg) {
 
         case kWhatPause:
         {
-            onPause();
+            int32_t pauseForPreroll;
+            CHECK(msg->findInt32("pause-for-preroll", &pauseForPreroll));
+            onPause(pauseForPreroll);
             break;
         }
 
@@ -1335,7 +1340,7 @@ void NuPlayer::Renderer::onNewAudioMediaTime(int64_t mediaTimeUs) {
 void NuPlayer::Renderer::postDrainVideoQueue() {
     if (mDrainVideoQueuePending
             || getSyncQueues()
-            || (mPaused && mVideoSampleReceived)) {
+            || (mPaused && mVideoSampleReceived && !mVideoPrerollInprogress)) {
         return;
     }
 
@@ -1357,11 +1362,12 @@ void NuPlayer::Renderer::postDrainVideoQueue() {
 
     // notify preroll completed immediately when we are ready to post msg to drain video buf, so that
     // NuPlayer could wake up renderer early to resume AudioSink since audio sink resume has latency
-    if (mPaused && !mVideoSampleReceived) {
+    if (mVideoPrerollInprogress) {
         sp<AMessage> notify = mNotify->dup();
         notify->setInt32("what", kWhatVideoPrerollComplete);
         ALOGI("NOTE: notifying video preroll complete");
         notify->post();
+        mVideoPrerollInprogress = false;
     }
 
     int64_t nowUs = ALooper::GetNowUs();
@@ -1583,6 +1589,8 @@ void NuPlayer::Renderer::notifyEOS_l(bool audio, status_t finalResult, int64_t d
                 msg->post();
             }
         }
+    } else {
+        mHasVideo = false;
     }
 }
 
@@ -1751,6 +1759,7 @@ void NuPlayer::Renderer::onFlush(const sp<AMessage> &msg) {
         } else {
             notifyComplete = mNotifyCompleteVideo;
             mNotifyCompleteVideo = false;
+            mHasVideo = false;
         }
 
         // If we're currently syncing the queues, i.e. dropping audio while
@@ -1808,6 +1817,7 @@ void NuPlayer::Renderer::onFlush(const sp<AMessage> &msg) {
         flushQueue(&mVideoQueue);
 
         mDrainVideoQueuePending = false;
+        mVideoPrerollInprogress = false;
 
         if (mVideoScheduler != NULL) {
             mVideoScheduler->restart();
@@ -1898,9 +1908,17 @@ void NuPlayer::Renderer::onEnableOffloadAudio() {
     }
 }
 
-void NuPlayer::Renderer::onPause() {
+void NuPlayer::Renderer::onPause(bool forPreroll) {
     if (mPaused) {
         return;
+    }
+
+    if (forPreroll) {
+        if (mVideoSampleReceived) {
+            ALOGI("NOTE: already received video buffer, ignore preroll request");
+            return;
+        }
+        mVideoPrerollInprogress = true;
     }
 
     startAudioOffloadPauseTimeout();
@@ -2319,12 +2337,8 @@ void NuPlayer::Renderer::onChangeAudioFormat(
     notify->post();
 }
 
-bool NuPlayer::Renderer::isVideoPrerollCompleted() const {
-    return mVideoSampleReceived || !mPaused;
-}
-
-bool NuPlayer::Renderer::isVideoSampleReceived() const {
-    return mVideoSampleReceived;
+bool NuPlayer::Renderer::isVideoPrerollInprogress() const {
+    return mVideoPrerollInprogress;
 }
 
 void NuPlayer::Renderer::setIsSeekonPause() {
