@@ -642,21 +642,22 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
 }
 
 /* static */
-int AudioFlinger::onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration) {
+os::HapticScale AudioFlinger::onExternalVibrationStart(
+        const sp<os::ExternalVibration>& externalVibration) {
     sp<os::IExternalVibratorService> evs = getExternalVibratorService();
     if (evs != nullptr) {
         int32_t ret;
         binder::Status status = evs->onExternalVibrationStart(*externalVibration, &ret);
         if (status.isOk()) {
             ALOGD("%s, start external vibration with intensity as %d", __func__, ret);
-            return ret;
+            return os::ExternalVibration::externalVibrationScaleToHapticScale(ret);
         }
     }
     ALOGD("%s, start external vibration with intensity as MUTE due to %s",
             __func__,
             evs == nullptr ? "external vibration service not found"
                            : "error when querying intensity");
-    return static_cast<int>(os::HapticScale::MUTE);
+    return os::HapticScale::MUTE;
 }
 
 /* static */
@@ -1078,8 +1079,6 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         clientPid = callingPid;
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
-            adjAttributionSource);
 
     audio_session_t sessionId = input.sessionId;
     if (sessionId == AUDIO_SESSION_ALLOCATE) {
@@ -2298,8 +2297,7 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
                  __func__, callingUid, callingPid, currentPid);
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
-            adjAttributionSource);
+
     if (!audio_is_valid_format(input.config.format) ) {
         ALOGE("createRecord() invalid format %#x", input.config.format);
         lStatus = BAD_VALUE;
@@ -3952,7 +3950,6 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
         currentPid = callingPid;
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(adjAttributionSource);
 
     ALOGV("createEffect pid %d, effectClient %p, priority %d, sessionId %d, io %d, factory %p",
           adjAttributionSource.pid, effectClient.get(), priority, sessionId, io,

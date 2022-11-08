@@ -285,6 +285,12 @@ enum {
     kKeyDvbAudioDescription = 'addt', // bool (int32_t), DVB audio description only defined for
                                       // audio component
     kKeyVendorFeatureNalLength = 'vfnl', // int32_t key to check nal length enable
+
+    // DVB teletext magazine number
+    kKeyDvbTeletextMagazineNumber = 'ttxm', // int32_t, DVB teletext magazine number
+
+    // DVB teletext page number
+    kKeyDvbTeletextPageNumber = 'ttxp', // int32_t, DVB teletext page number
 };
 
 enum {
