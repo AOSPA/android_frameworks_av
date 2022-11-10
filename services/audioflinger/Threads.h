@@ -1092,6 +1092,10 @@ public:
                     return INVALID_OPERATION;
                 }
 
+                void startMelComputation(const sp
+                             <audio_utils::MelProcessor::MelCallback>& callback);
+                void stopMelComputation();
+
 protected:
     // updated by readOutputParameters_l()
     size_t                          mNormalFrameCount;  // normal mixer and effects
@@ -1191,6 +1195,8 @@ protected:
     audio_channel_mask_t            mMixerChannelMask = AUDIO_CHANNEL_NONE;
 
 private:
+    mediautils::atomic_sp<audio_utils::MelProcessor> mMelProcessor;
+
     // mMasterMute is in both PlaybackThread and in AudioFlinger.  When a
     // PlaybackThread needs to find out if master-muted, it checks it's local
     // copy rather than the one in AudioFlinger.  This optimization saves a lock.
