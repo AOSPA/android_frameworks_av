@@ -1516,6 +1516,7 @@ status_t Camera3Device::internalPauseAndWaitLocked(nsecs_t maxExpectedDuration) 
           maxExpectedDuration);
     status_t res = waitUntilStateThenRelock(/*active*/ false, maxExpectedDuration);
     if (res != OK) {
+        mStatusTracker->dumpActiveComponents();
         SET_ERR_L("Can't idle device in %f seconds!",
                 maxExpectedDuration/1e9);
     }
@@ -2235,7 +2236,6 @@ bool Camera3Device::reconfigureCamera(const CameraMetadata& sessionParams, int c
     if (mStatus == STATUS_ACTIVE) {
         markClientActive = true;
         mPauseStateNotify = true;
-        mStatusTracker->markComponentIdle(clientStatusId, Fence::NO_FENCE);
 
         rc = internalPauseAndWaitLocked(maxExpectedDuration);
     }
@@ -3458,6 +3458,10 @@ bool Camera3Device::RequestThread::threadLoop() {
         if (res == OK) {
             sp<Camera3Device> parent = mParent.promote();
             if (parent != nullptr) {
+                sp<StatusTracker> statusTracker = mStatusTracker.promote();
+                if (statusTracker != nullptr) {
+                    statusTracker->markComponentIdle(mStatusId, Fence::NO_FENCE);
+                }
                 mReconfigured |= parent->reconfigureCamera(mLatestSessionParams, mStatusId);
             }
             setPaused(false);

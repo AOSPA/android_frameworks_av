@@ -410,7 +410,6 @@ aaudio_result_t AudioStreamTrack::processCommands() {
             if (err != OK) {
                 return AAudioConvert_androidToAAudioResult(err);
             } else if (position == 0) {
-                // TODO Advance frames read to match written.
                 setState(AAUDIO_STREAM_STATE_FLUSHED);
             }
         }
@@ -554,6 +553,16 @@ status_t AudioStreamTrack::doSetVolume() {
         status = NO_ERROR;
     }
     return status;
+}
+
+void AudioStreamTrack::registerPlayerBase() {
+    AudioStream::registerPlayerBase();
+
+    if (mAudioTrack == nullptr) {
+        ALOGW("%s: cannot set piid, AudioTrack is null", __func__);
+        return;
+    }
+    mAudioTrack->setPlayerIId(mPlayerBase->getPlayerIId());
 }
 
 #if AAUDIO_USE_VOLUME_SHAPER

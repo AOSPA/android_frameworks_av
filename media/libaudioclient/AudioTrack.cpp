@@ -513,7 +513,7 @@ status_t AudioTrack::set(
     std::string errorMessage;
     // Note mPortId is not valid until the track is created, so omit mPortId in ALOG for set.
     ALOGV("%s(): streamType %d, sampleRate %u, format %#x, channelMask %#x, frameCount %zu, "
-          "flags #%x, notificationFrames %d, sessionId %d, transferType %d, uid %d, pid %d",
+          "flags %#x, notificationFrames %d, sessionId %d, transferType %d, uid %d, pid %d",
           __func__,
           streamType, sampleRate, format, channelMask, frameCount, flags, notificationFrames,
           sessionId, transferType, attributionSource.uid, attributionSource.pid);
@@ -1358,6 +1358,10 @@ status_t AudioTrack::setPlaybackRate(const AudioPlaybackRate &playbackRate)
                         legacy2aidl_audio_playback_rate_t_AudioPlaybackRate(playbackRate))));
         if (status == NO_ERROR) {
             mPlaybackRate = playbackRate;
+        } else if (status == INVALID_OPERATION
+                && playbackRate.mSpeed == 1.0f && mPlaybackRate.mPitch == 1.0f) {
+            mPlaybackRate = playbackRate;
+            return NO_ERROR;
         }
         return status;
     }

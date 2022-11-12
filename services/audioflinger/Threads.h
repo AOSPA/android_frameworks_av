@@ -624,7 +624,7 @@ protected:
     virtual     void        dumpTracks_l(int fd __unused, const Vector<String16>& args __unused) { }
 
 
-    friend class AudioFlinger;      // for mEffectChains
+    friend class AudioFlinger;      // for mEffectChains and mAudioManager
 
                 const type_t            mType;
 
@@ -1178,7 +1178,7 @@ protected:
     volatile int32_t                mSuspended;
 
     int64_t                         mBytesWritten;
-    int64_t                         mFramesWritten; // not reset on standby
+    std::atomic<int64_t>            mFramesWritten; // not reset on standby
     int64_t                         mLastFramesWritten = -1; // track changes in timestamp
                                                              // server frames written.
     int64_t                         mSuspendedFrames; // not reset on standby
@@ -1392,6 +1392,7 @@ public:
     virtual     bool        hasFastMixer() const = 0;
     virtual     FastTrackUnderruns getFastTrackUnderruns(size_t fastIndex __unused) const
                                 { FastTrackUnderruns dummy; return dummy; }
+                const std::atomic<int64_t>& framesWritten() const { return mFramesWritten; }
 
 protected:
                 // accessed by both binder threads and within threadLoop(), lock on mutex needed
@@ -1410,13 +1411,38 @@ protected:
 
                 std::atomic_bool mCheckOutputStageEffects{};
 
-                // A differential check on the timestamps to see if there is a change in the
-                // timestamp frame position between the last call to checkRunningTimestamp.
-                uint64_t mLastCheckedTimestampPosition = ~0LL;
 
-                bool checkRunningTimestamp();
+                // Provides periodic checking for timestamp advancement for underrun detection.
+                class IsTimestampAdvancing {
+                public:
+                    // The timestamp will not be checked any faster than the specified time.
+                    IsTimestampAdvancing(nsecs_t minimumTimeBetweenChecksNs)
+                        :   mMinimumTimeBetweenChecksNs(minimumTimeBetweenChecksNs)
+                    {
+                        clear();
+                    }
+                    // Check if the presentation position has advanced in the last periodic time.
+                    bool check(AudioStreamOut * output);
+                    // Clear the internal state when the playback state changes for the output
+                    // stream.
+                    void clear();
+                private:
+                    // The minimum time between timestamp checks.
+                    const nsecs_t mMinimumTimeBetweenChecksNs;
+                    // Add differential check on the timestamps to see if there is a change in the
+                    // timestamp frame position between the last call to check.
+                    uint64_t mPreviousPosition;
+                    // The time at which the last check occurred, to ensure we don't check too
+                    // frequently, giving the Audio HAL enough time to update its timestamps.
+                    nsecs_t mPreviousNs;
+                    // The valued is latched so we don't check timestamps too frequently.
+                    bool mLatchedValue;
+                };
+                IsTimestampAdvancing mIsTimestampAdvancing;
 
-    virtual     void flushHw_l() { mLastCheckedTimestampPosition = ~0LL; }
+    virtual     void flushHw_l() {
+                    mIsTimestampAdvancing.clear();
+                }
 };
 
 class MixerThread : public PlaybackThread {
