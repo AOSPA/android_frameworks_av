@@ -17,7 +17,7 @@
 
 
 #define LOG_TAG "AudioFlinger"
-//#define LOG_NDEBUG 0
+// #define LOG_NDEBUG 0
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
 #include "Configuration.h"
@@ -44,6 +44,7 @@
 #include <private/media/AudioTrackShared.h>
 #include <private/android_filesystem_config.h>
 #include <audio_utils/Balance.h>
+#include <audio_utils/MelProcessor.h>
 #include <audio_utils/Metadata.h>
 #include <audio_utils/channels.h>
 #include <audio_utils/mono_blend.h>
@@ -794,6 +795,7 @@ void AudioFlinger::ThreadBase::processConfigEvents_l()
                                             (CreateAudioPatchConfigEventData *)event->mData.get();
             event->mStatus = createAudioPatch_l(&data->mPatch, &data->mHandle);
             const DeviceTypeSet newDevices = getDeviceTypes();
+            configChanged = oldDevices != newDevices;
             mLocalLog.log("CFG_EVENT_CREATE_AUDIO_PATCH: old device %s (%s) new device %s (%s)",
                     dumpDeviceTypes(oldDevices).c_str(), toString(oldDevices).c_str(),
                     dumpDeviceTypes(newDevices).c_str(), toString(newDevices).c_str());
@@ -804,6 +806,7 @@ void AudioFlinger::ThreadBase::processConfigEvents_l()
                                             (ReleaseAudioPatchConfigEventData *)event->mData.get();
             event->mStatus = releaseAudioPatch_l(data->mHandle);
             const DeviceTypeSet newDevices = getDeviceTypes();
+            configChanged = oldDevices != newDevices;
             mLocalLog.log("CFG_EVENT_RELEASE_AUDIO_PATCH: old device %s (%s) new device %s (%s)",
                     dumpDeviceTypes(oldDevices).c_str(), toString(oldDevices).c_str(),
                     dumpDeviceTypes(newDevices).c_str(), toString(newDevices).c_str());
@@ -3353,6 +3356,7 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
         }
         ssize_t framesWritten = mNormalSink->write((char *)mSinkBuffer + offset, count);
         ATRACE_END();
+
         if (framesWritten > 0) {
             bytesWritten = framesWritten * mFrameSize;
 #ifdef TEE_SINK
@@ -3360,6 +3364,11 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
 #endif
         } else {
             bytesWritten = framesWritten;
+        }
+
+        auto processor = mMelProcessor.load();
+        if (processor) {
+            processor->process((char *)mSinkBuffer + offset, bytesWritten);
         }
     // otherwise use the HAL / AudioStreamOut directly
     } else {
@@ -3395,6 +3404,21 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
         mStandby = false;
     }
     return bytesWritten;
+}
+
+void AudioFlinger::PlaybackThread::startMelComputation(const sp<
+        audio_utils::MelProcessor::MelCallback>& callback)
+{
+    ALOGV("%s: creating new mel processor for thread %d", __func__, id());
+    mMelProcessor = sp<audio_utils::MelProcessor>::make(mSampleRate,
+                                                        mChannelCount,
+                                                        mFormat,
+                                                        callback);
+}
+
+void AudioFlinger::PlaybackThread::stopMelComputation() {
+    ALOGV("%s: stopping mel processor for thread %d", __func__, id());
+    mMelProcessor = nullptr;
 }
 
 void AudioFlinger::PlaybackThread::threadLoop_drain()
@@ -3455,9 +3479,15 @@ void AudioFlinger::PlaybackThread::cacheParameters_l()
     mActiveSleepTimeUs = activeSleepTimeUs();
     mIdleSleepTimeUs = idleSleepTimeUs();
 
+    mStandbyDelayNs = AudioFlinger::mStandbyTimeInNsecs;
+    // Shorten standby delay on VOIP RX output to avoid delayed routing updates
+    // after a call due to call end tone.
+    if (mOutput != nullptr && (mOutput->flags & AUDIO_OUTPUT_FLAG_VOIP_RX) != 0) {
+        const nsecs_t NS_PER_MS = 1000000;
+        mStandbyDelayNs = std::min(mStandbyDelayNs, latency_l() * NS_PER_MS);
+    }
     // make sure standby delay is not too short when connected to an A2DP sink to avoid
     // truncating audio when going to standby.
-    mStandbyDelayNs = AudioFlinger::mStandbyTimeInNsecs;
     if (!Intersection(outDeviceTypes(),  getAudioDeviceOutAllA2dpSet()).empty()) {
         if (mStandbyDelayNs < kDefaultStandbyTimeInNsecs) {
             mStandbyDelayNs = kDefaultStandbyTimeInNsecs;
