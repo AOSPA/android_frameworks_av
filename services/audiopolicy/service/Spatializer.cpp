@@ -87,6 +87,7 @@ public:
         kWhatOnFramesProcessed,    // AudioEffect::EVENT_FRAMES_PROCESSED
         kWhatOnHeadToStagePose,    // SpatializerPoseController::Listener::onHeadToStagePose
         kWhatOnActualModeChange,   // SpatializerPoseController::Listener::onActualModeChange
+        kWhatOnLatencyModesChanged, // Spatializer::onSupportedLatencyModesChanged
     };
     static constexpr const char *kNumFramesKey = "numFrames";
     static constexpr const char *kModeKey = "mode";
@@ -96,15 +97,27 @@ public:
     static constexpr const char *kRotation0Key = "rotation0";
     static constexpr const char *kRotation1Key = "rotation1";
     static constexpr const char *kRotation2Key = "rotation2";
+    static constexpr const char *kLatencyModesKey = "latencyModes";
+
+    class LatencyModes : public RefBase {
+    public:
+        LatencyModes(audio_io_handle_t output,
+                const std::vector<audio_latency_mode_t>& latencyModes)
+            : mOutput(output), mLatencyModes(latencyModes) {}
+        ~LatencyModes() = default;
+
+        audio_io_handle_t mOutput;
+        std::vector<audio_latency_mode_t> mLatencyModes;
+    };
 
     void onMessageReceived(const sp<AMessage> &msg) override {
+        sp<Spatializer> spatializer = mSpatializer.promote();
+        if (spatializer == nullptr) {
+            ALOGW("%s: Cannot promote spatializer", __func__);
+            return;
+        }
         switch (msg->what()) {
             case kWhatOnFramesProcessed: {
-                sp<Spatializer> spatializer = mSpatializer.promote();
-                if (spatializer == nullptr) {
-                    ALOGW("%s: Cannot promote spatializer", __func__);
-                    return;
-                }
                 int numFrames;
                 if (!msg->findInt32(kNumFramesKey, &numFrames)) {
                     ALOGE("%s: Cannot find num frames!", __func__);
@@ -115,11 +128,6 @@ public:
                 }
                 } break;
             case kWhatOnHeadToStagePose: {
-                sp<Spatializer> spatializer = mSpatializer.promote();
-                if (spatializer == nullptr) {
-                    ALOGW("%s: Cannot promote spatializer", __func__);
-                    return;
-                }
                 std::vector<float> headToStage(sHeadPoseKeys.size());
                 for (size_t i = 0 ; i < sHeadPoseKeys.size(); i++) {
                     if (!msg->findFloat(sHeadPoseKeys[i], &headToStage[i])) {
@@ -130,18 +138,25 @@ public:
                 spatializer->onHeadToStagePoseMsg(headToStage);
                 } break;
             case kWhatOnActualModeChange: {
-                sp<Spatializer> spatializer = mSpatializer.promote();
-                if (spatializer == nullptr) {
-                    ALOGW("%s: Cannot promote spatializer", __func__);
-                    return;
-                }
                 int mode;
-                if (!msg->findInt32(EngineCallbackHandler::kModeKey, &mode)) {
+                if (!msg->findInt32(kModeKey, &mode)) {
                     ALOGE("%s: Cannot find actualMode!", __func__);
                     return;
                 }
                 spatializer->onActualModeChangeMsg(static_cast<HeadTrackingMode>(mode));
                 } break;
+
+            case kWhatOnLatencyModesChanged: {
+                sp<RefBase> object;
+                if (!msg->findObject(kLatencyModesKey, &object)) {
+                    ALOGE("%s: Cannot find latency modes!", __func__);
+                    return;
+                }
+                sp<LatencyModes> latencyModes = static_cast<LatencyModes*>(object.get());
+                spatializer->onSupportedLatencyModesChangedMsg(
+                    latencyModes->mOutput, std::move(latencyModes->mLatencyModes));
+                } break;
+
             default:
                 LOG_ALWAYS_FATAL("Invalid callback message %d", msg->what());
         }
@@ -162,13 +177,13 @@ const std::vector<const char *> Spatializer::sHeadPoseKeys = {
 // ---------------------------------------------------------------------------
 
 // Convert recorded sensor data to string with level indentation.
-std::string Spatializer::HeadToStagePoseRecorder::toString_l(unsigned level) const {
+std::string Spatializer::HeadToStagePoseRecorder::toString(unsigned level) const {
     std::string prefixSpace(level, ' ');
     return mPoseRecordLog.dumpToString((prefixSpace + " ").c_str(), Spatializer::mMaxLocalLogLine);
 }
 
 // Compute sensor data, record into local log when it is time.
-void Spatializer::HeadToStagePoseRecorder::record_l(const std::vector<float>& headToStage) {
+void Spatializer::HeadToStagePoseRecorder::record(const std::vector<float>& headToStage) {
     if (headToStage.size() != mPoseVectorSize) return;
 
     if (mNumOfSampleSinceLastRecord++ == 0) {
@@ -178,12 +193,12 @@ void Spatializer::HeadToStagePoseRecorder::record_l(const std::vector<float>& he
     if (shouldRecordLog()) {
         poseSumToAverage();
         mPoseRecordLog.log(
-                "mean: %s, min: %s, max %s, calculated %d samples",
+                "mean: %s, min: %s, max %s, calculated %d samples in %0.4f second(s)",
                 Spatializer::toString<double>(mPoseRadianSum, true /* radianToDegree */).c_str(),
                 Spatializer::toString<float>(mMinPoseAngle, true /* radianToDegree */).c_str(),
                 Spatializer::toString<float>(mMaxPoseAngle, true /* radianToDegree */).c_str(),
-                mNumOfSampleSinceLastRecord);
-        resetRecord(headToStage);
+                mNumOfSampleSinceLastRecord, mNumOfSecondsSinceLastRecord.count());
+        resetRecord();
     }
     // update stream average.
     for (int i = 0; i < mPoseVectorSize; i++) {
@@ -262,6 +277,16 @@ Spatializer::~Spatializer() {
     }
     mLooper.clear();
     mHandler.clear();
+}
+
+static std::string channelMaskVectorToString(
+        const std::vector<audio_channel_mask_t>& masks) {
+    std::stringstream ss;
+    for (const auto &mask : masks) {
+        if (ss.tellp() != 0) ss << "|";
+        ss << mask;
+    }
+    return ss.str();
 }
 
 status_t Spatializer::loadEngineConfiguration(sp<EffectHalInterface> effect) {
@@ -353,13 +378,25 @@ status_t Spatializer::loadEngineConfiguration(sp<EffectHalInterface> effect) {
     }
     mediametrics::LogItem(mMetricsId)
         .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_CREATE)
-        .set(AMEDIAMETRICS_PROP_CHANNELMASK, (int32_t)getMaxChannelMask(mChannelMasks))
+        .set(AMEDIAMETRICS_PROP_CHANNELMASKS, channelMaskVectorToString(mChannelMasks))
         .set(AMEDIAMETRICS_PROP_LEVELS, aidl_utils::enumsToString(mLevels))
         .set(AMEDIAMETRICS_PROP_MODES, aidl_utils::enumsToString(mSpatializationModes))
         .set(AMEDIAMETRICS_PROP_HEADTRACKINGMODES, aidl_utils::enumsToString(mHeadTrackingModes))
         .set(AMEDIAMETRICS_PROP_STATUS, (int32_t)status)
         .record();
     return NO_ERROR;
+}
+
+/* static */
+void Spatializer::sendEmptyCreateSpatializerMetricWithStatus(status_t status) {
+    mediametrics::LogItem(kDefaultMetricsId)
+        .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_CREATE)
+        .set(AMEDIAMETRICS_PROP_CHANNELMASKS, "")
+        .set(AMEDIAMETRICS_PROP_LEVELS, "")
+        .set(AMEDIAMETRICS_PROP_MODES, "")
+        .set(AMEDIAMETRICS_PROP_HEADTRACKINGMODES, "")
+        .set(AMEDIAMETRICS_PROP_STATUS, (int32_t)status)
+        .record();
 }
 
 /** Gets the channel mask, sampling rate and format set for the spatializer input. */
@@ -376,6 +413,17 @@ status_t Spatializer::registerCallback(
     std::lock_guard lock(mLock);
     if (callback == nullptr) {
         return BAD_VALUE;
+    }
+
+    if (mSpatializerCallback != nullptr) {
+        if (IInterface::asBinder(callback) == IInterface::asBinder(mSpatializerCallback)) {
+            ALOGW("%s: Registering callback %p again",
+                __func__, mSpatializerCallback.get());
+            return NO_ERROR;
+        }
+        ALOGE("%s: Already one client registered with callback %p",
+            __func__, mSpatializerCallback.get());
+        return INVALID_OPERATION;
     }
 
     sp<IBinder> binder = IInterface::asBinder(callback);
@@ -531,7 +579,7 @@ Status Spatializer::setGlobalTransform(const std::vector<float>& screenToStage) 
     }
     std::lock_guard lock(mLock);
     if (mPoseController != nullptr) {
-        mLocalLog.log("%s with %s", __func__, toString<float>(screenToStage).c_str());
+        mLocalLog.log("%s with screenToStage %s", __func__, toString<float>(screenToStage).c_str());
         mPoseController->setScreenToStagePose(maybePose.value());
     }
     return Status::ok();
@@ -701,7 +749,8 @@ void Spatializer::onHeadToStagePoseMsg(const std::vector<float>& headToStage) {
         callback = mHeadTrackingCallback;
         if (mEngine != nullptr) {
             setEffectParameter_l(SPATIALIZER_PARAM_HEAD_TO_STAGE, headToStage);
-            mPoseRecorder.record_l(headToStage);
+            mPoseRecorder.record(headToStage);
+            mPoseDurableRecorder.record(headToStage);
         }
     }
 
@@ -711,11 +760,9 @@ void Spatializer::onHeadToStagePoseMsg(const std::vector<float>& headToStage) {
 }
 
 void Spatializer::onActualModeChange(HeadTrackingMode mode) {
-    std::string modeStr = SpatializerPoseController::toString(mode);
+    std::string modeStr = media::toString(mode);
     ALOGV("%s(%s)", __func__, modeStr.c_str());
-    mLocalLog.log("%s with %s", __func__, modeStr.c_str());
-    sp<AMessage> msg =
-            new AMessage(EngineCallbackHandler::kWhatOnActualModeChange, mHandler);
+    sp<AMessage> msg = new AMessage(EngineCallbackHandler::kWhatOnActualModeChange, mHandler);
     msg->setInt32(EngineCallbackHandler::kModeKey, static_cast<int>(mode));
     msg->post();
 }
@@ -749,8 +796,7 @@ void Spatializer::onActualModeChangeMsg(HeadTrackingMode mode) {
                                  std::vector<SpatializerHeadTrackingMode>{spatializerMode});
         }
         callback = mHeadTrackingCallback;
-        mLocalLog.log("%s: %s, spatializerMode %s", __func__,
-                      SpatializerPoseController::toString(mode).c_str(),
+        mLocalLog.log("%s: %s, spatializerMode %s", __func__, media::toString(mode).c_str(),
                       media::toString(spatializerMode).c_str());
     }
     if (callback != nullptr) {
@@ -773,7 +819,9 @@ status_t Spatializer::attachOutput(audio_io_handle_t output, size_t numActiveTra
             mEngine->setEnabled(false);
             mEngine.clear();
             mPoseController.reset();
+            AudioSystem::removeSupportedLatencyModesCallback(this);
         }
+
         // create FX instance on output
         AttributionSourceState attributionSource = AttributionSourceState();
         mEngine = new AudioEffect(attributionSource);
@@ -789,6 +837,13 @@ status_t Spatializer::attachOutput(audio_io_handle_t output, size_t numActiveTra
         outputChanged = mOutput != output;
         mOutput = output;
         mNumActiveTracks = numActiveTracks;
+        AudioSystem::addSupportedLatencyModesCallback(this);
+
+        std::vector<audio_latency_mode_t> latencyModes;
+        status = AudioSystem::getSupportedLatencyModes(mOutput, &latencyModes);
+        if (status == OK) {
+            mSupportedLatencyModes = latencyModes;
+        }
 
         checkEngineState_l();
         if (mSupportsHeadTracking) {
@@ -819,6 +874,7 @@ audio_io_handle_t Spatializer::detachOutput() {
         // remove FX instance
         mEngine->setEnabled(false);
         mEngine.clear();
+        AudioSystem::removeSupportedLatencyModesCallback(this);
         output = mOutput;
         mOutput = AUDIO_IO_HANDLE_NONE;
         mPoseController.reset();
@@ -829,6 +885,27 @@ audio_io_handle_t Spatializer::detachOutput() {
         callback->onOutputChanged(AUDIO_IO_HANDLE_NONE);
     }
     return output;
+}
+
+void Spatializer::onSupportedLatencyModesChanged(
+        audio_io_handle_t output, const std::vector<audio_latency_mode_t>& modes) {
+    ALOGV("%s output %d num modes %zu", __func__, (int)output, modes.size());
+    sp<AMessage> msg =
+            new AMessage(EngineCallbackHandler::kWhatOnLatencyModesChanged, mHandler);
+    msg->setObject(EngineCallbackHandler::kLatencyModesKey,
+        sp<EngineCallbackHandler::LatencyModes>::make(output, modes));
+    msg->post();
+}
+
+void Spatializer::onSupportedLatencyModesChangedMsg(
+        audio_io_handle_t output, std::vector<audio_latency_mode_t>&& modes) {
+    std::lock_guard lock(mLock);
+    ALOGV("%s output %d mOutput %d num modes %zu",
+            __func__, (int)output, (int)mOutput, modes.size());
+    if (output == mOutput) {
+        mSupportedLatencyModes = std::move(modes);
+        checkSensorsState_l();
+    }
 }
 
 void Spatializer::updateActiveTracks(size_t numActiveTracks) {
@@ -842,16 +919,24 @@ void Spatializer::updateActiveTracks(size_t numActiveTracks) {
 }
 
 void Spatializer::checkSensorsState_l() {
+    audio_latency_mode_t requestedLatencyMode = AUDIO_LATENCY_MODE_FREE;
+    bool lowLatencySupported = mSupportedLatencyModes.empty()
+            || (std::find(mSupportedLatencyModes.begin(), mSupportedLatencyModes.end(),
+                    AUDIO_LATENCY_MODE_LOW) != mSupportedLatencyModes.end());
     if (mSupportsHeadTracking && mPoseController != nullptr) {
-        if (mNumActiveTracks > 0 && mLevel != SpatializationLevel::NONE
+        if (lowLatencySupported && mNumActiveTracks > 0 && mLevel != SpatializationLevel::NONE
             && mDesiredHeadTrackingMode != HeadTrackingMode::STATIC
             && mHeadSensor != SpatializerPoseController::INVALID_SENSOR) {
             mPoseController->setHeadSensor(mHeadSensor);
             mPoseController->setScreenSensor(mScreenSensor);
+            requestedLatencyMode = AUDIO_LATENCY_MODE_LOW;
         } else {
             mPoseController->setHeadSensor(SpatializerPoseController::INVALID_SENSOR);
             mPoseController->setScreenSensor(SpatializerPoseController::INVALID_SENSOR);
         }
+    }
+    if (mOutput != AUDIO_IO_HANDLE_NONE) {
+        AudioSystem::setRequestedLatencyMode(mOutput, requestedLatencyMode);
     }
 }
 
@@ -949,7 +1034,7 @@ std::string Spatializer::toString(unsigned level) const {
         base::StringAppendF(&ss, " %s", media::toString(mode).c_str());
     }
     base::StringAppendF(&ss, "], Desired: %s, Actual %s\n",
-                        SpatializerPoseController::toString(mDesiredHeadTrackingMode).c_str(),
+                        media::toString(mDesiredHeadTrackingMode).c_str(),
                         media::toString(mActualHeadTrackingMode).c_str());
 
     base::StringAppendF(&ss, "%smSpatializationModes: [", prefixSpace.c_str());
@@ -977,12 +1062,17 @@ std::string Spatializer::toString(unsigned level) const {
 
     ss.append(prefixSpace + "CommandLog:\n");
     ss += mLocalLog.dumpToString((prefixSpace + " ").c_str(), mMaxLocalLogLine);
-    ss.append(prefixSpace + "SensorLog:\n");
-    ss += mPoseRecorder.toString_l(level + 1);
 
     // PostController dump.
     if (mPoseController != nullptr) {
         ss += mPoseController->toString(level + 1);
+        ss.append(prefixSpace +
+                  "Sensor data format - [rx, ry, rz, vx, vy, vz] (units-degree, "
+                  "r-transform, v-angular velocity, x-pitch, y-roll, z-yaw):\n");
+        ss.append(prefixSpace + " PerMinuteHistory:\n");
+        ss += mPoseDurableRecorder.toString(level + 1);
+        ss.append(prefixSpace + " PerSecondHistory:\n");
+        ss += mPoseRecorder.toString(level + 1);
     } else {
         ss.append(prefixSpace).append("SpatializerPoseController not exist\n");
     }
