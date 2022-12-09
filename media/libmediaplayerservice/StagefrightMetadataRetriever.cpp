@@ -214,6 +214,7 @@ sp<IMemory> StagefrightMetadataRetriever::getImageInternal(
         mime = MEDIA_MIMETYPE_VIDEO_AV1;
         trackMeta = new MetaData(*trackMeta);
         trackMeta->setCString(kKeyMIMEType, mime);
+        isHeif = true;
     }
 
     sp<AMessage> format = new AMessage;
