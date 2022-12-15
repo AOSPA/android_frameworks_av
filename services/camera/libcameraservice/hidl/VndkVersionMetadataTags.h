@@ -72,8 +72,10 @@ std::map<int, std::vector<camera_metadata_tag>> static_api_level_to_keys{
           ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP,
           ANDROID_REQUEST_RECOMMENDED_TEN_BIT_DYNAMIC_RANGE_PROFILE,
           ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES,
+          ANDROID_SENSOR_READOUT_TIMESTAMP,
         } },
       {34, {
+          ANDROID_CONTROL_AUTOFRAMING_AVAILABLE,
           ANDROID_CONTROL_AVAILABLE_SETTINGS_OVERRIDES,
           ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP,
         } },
@@ -94,6 +96,9 @@ std::map<int, std::vector<camera_metadata_tag>> dynamic_api_level_to_keys{
           ANDROID_SENSOR_RAW_BINNING_FACTOR_USED,
         }  },
       {34, {
+          ANDROID_CONTROL_AUTOFRAMING,
+          ANDROID_CONTROL_AUTOFRAMING_STATE,
           ANDROID_CONTROL_SETTINGS_OVERRIDE,
+          ANDROID_CONTROL_SETTINGS_OVERRIDING_FRAME_NUMBER,
         }  },
 };
