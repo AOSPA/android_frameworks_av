@@ -55,7 +55,7 @@ public:
     status_t getAudioPolicyMix(audio_devices_t deviceType,
             const String8& address, sp<AudioPolicyMix> &policyMix) const;
 
-    status_t registerMix(AudioMix mix, sp<SwAudioOutputDescriptor> desc);
+    status_t registerMix(const AudioMix& mix, const sp<SwAudioOutputDescriptor>& desc);
 
     status_t unregisterMix(const AudioMix& mix);
 
@@ -72,13 +72,16 @@ public:
      */
     status_t getOutputForAttr(const audio_attributes_t& attributes,
                               const audio_config_base_t& config,
-                              uid_t uid, audio_output_flags_t flags,
+                              uid_t uid,
+                              audio_session_t session,
+                              audio_output_flags_t flags,
                               sp<AudioPolicyMix> &primaryMix,
                               std::vector<sp<AudioPolicyMix>> *secondaryMixes);
 
-    sp<DeviceDescriptor> getDeviceAndMixForInputSource(audio_source_t inputSource,
+    sp<DeviceDescriptor> getDeviceAndMixForInputSource(const audio_attributes_t& attributes,
                                                        const DeviceVector &availableDeviceTypes,
                                                        uid_t uid,
+                                                       audio_session_t session,
                                                        sp<AudioPolicyMix> *policyMix) const;
 
     /**
@@ -124,11 +127,13 @@ public:
     void dump(String8 *dst) const;
 
 private:
-    enum class MixMatchStatus { MATCH, NO_MATCH, INVALID_MIX };
-    MixMatchStatus mixMatch(const AudioMix* mix, size_t mixIndex,
+    bool mixMatch(const AudioMix* mix, size_t mixIndex,
                             const audio_attributes_t& attributes,
                             const audio_config_base_t& config,
-                            uid_t uid);
+                            uid_t uid,
+                            audio_session_t session);
 };
+
+std::optional<std::string> extractAddressFromAudioAttributes(const audio_attributes_t& attr);
 
 } // namespace android

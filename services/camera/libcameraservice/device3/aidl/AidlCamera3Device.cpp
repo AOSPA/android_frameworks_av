@@ -51,6 +51,7 @@
 
 #include <aidl/android/hardware/camera/device/ICameraInjectionSession.h>
 #include <aidlcommonsupport/NativeHandle.h>
+#include <android/binder_ibinder_platform.h>
 #include <android/hardware/camera2/ICameraDeviceUser.h>
 
 #include "utils/CameraTraces.h"
@@ -373,7 +374,8 @@ status_t AidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this,
-        *this, *(mInterface), mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *this, *(mInterface), mLegacyClient, mMinExpectedDuration, mIsFixedFps},
+        mResultMetadataQueue
     };
 
     for (const auto& result : results) {
@@ -414,7 +416,8 @@ status_t AidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         mNumPartialResults, mVendorTagId, mDeviceInfo, mPhysicalDeviceInfoMap,
         mDistortionMappers, mZoomRatioMappers, mRotateAndCropMappers,
         mTagMonitor, mInputStream, mOutputStreams, mSessionStatsBuilder, listener, *this,
-        *this, *(mInterface), mLegacyClient, mMinExpectedDuration}, mResultMetadataQueue
+        *this, *(mInterface), mLegacyClient, mMinExpectedDuration, mIsFixedFps},
+        mResultMetadataQueue
     };
     for (const auto& msg : msgs) {
         camera3::notify(states, msg);
@@ -671,6 +674,12 @@ status_t AidlCamera3Device::switchToOffline(
     return p->returnStreamBuffers(buffers);
 }
 
+::ndk::SpAIBinder AidlCamera3Device::AidlCameraDeviceCallbacks::createBinder() {
+    auto binder = BnCameraDeviceCallback::createBinder();
+    AIBinder_setInheritRt(binder.get(), /*inheritRt*/ true);
+    return binder;
+}
+
 ::ndk::ScopedAStatus AidlCamera3Device::returnStreamBuffers(
         const std::vector<camera::device::StreamBuffer>& buffers) {
     ReturnBufferStates states {
@@ -904,6 +913,7 @@ status_t AidlCamera3Device::AidlHalInterface::configureStreams(
                     cam3stream->getOriginalFormat() : src->format);
         dst.dataSpace = mapToAidlDataspace(cam3stream->isDataSpaceOverridden() ?
                     cam3stream->getOriginalDataSpace() : src->data_space);
+        dst.colorSpace = src->color_space;
 
         dst.bufferSize = bufferSizes[i];
         if (src->physical_camera_id != nullptr) {

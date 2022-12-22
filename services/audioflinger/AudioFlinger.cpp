@@ -284,7 +284,6 @@ AttributionSourceState AudioFlinger::checkAttributionSourcePackage(
                 return opPackageLegacy == package; }) == packages.end()) {
             ALOGW("The package name(%s) provided does not correspond to the uid %d",
                     attributionSource.packageName.value_or("").c_str(), attributionSource.uid);
-            checkedAttributionSource.packageName = std::optional<std::string>();
         }
     }
     return checkedAttributionSource;
@@ -323,7 +322,9 @@ AudioFlinger::AudioFlinger()
       mClientSharedHeapSize(kMinimumClientSharedHeapSizeBytes),
       mGlobalEffectEnableTime(0),
       mPatchPanel(this),
-      mDeviceEffectManager(this),
+      mPatchCommandThread(sp<PatchCommandThread>::make()),
+      mDeviceEffectManager(sp<DeviceEffectManager>::make(*this)),
+      mMelReporter(sp<MelReporter>::make(*this)),
       mSystemReady(false)
 {
     // Move the audio session unique ID generator start base as time passes to limit risk of
@@ -583,6 +584,33 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
     audio_io_handle_t io = AUDIO_IO_HANDLE_NONE;
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
     audio_attributes_t localAttr = *attr;
+
+    // TODO b/182392553: refactor or make clearer
+    pid_t clientPid =
+        VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_pid_t(client.attributionSource.pid));
+    bool updatePid = (clientPid == (pid_t)-1);
+    const uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+    AttributionSourceState adjAttributionSource = client.attributionSource;
+    if (!isAudioServerOrMediaServerOrSystemServerOrRootUid(callingUid)) {
+        uid_t clientUid =
+            VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_uid_t(client.attributionSource.uid));
+        ALOGW_IF(clientUid != callingUid,
+                "%s uid %d tried to pass itself off as %d",
+                __FUNCTION__, callingUid, clientUid);
+        adjAttributionSource.uid = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(callingUid));
+        updatePid = true;
+    }
+    if (updatePid) {
+        const pid_t callingPid = IPCThreadState::self()->getCallingPid();
+        ALOGW_IF(clientPid != (pid_t)-1 && clientPid != callingPid,
+                 "%s uid %d pid %d tried to pass itself off as pid %d",
+                 __func__, callingUid, callingPid, clientPid);
+        adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
+    }
+    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+            adjAttributionSource);
+
     if (direction == MmapStreamInterface::DIRECTION_OUTPUT) {
         audio_config_t fullConfig = AUDIO_CONFIG_INITIALIZER;
         fullConfig.sample_rate = config->sample_rate;
@@ -592,7 +620,7 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
         bool isSpatialized;
         ret = AudioSystem::getOutputForAttr(&localAttr, &io,
                                             actualSessionId,
-                                            &streamType, client.attributionSource,
+                                            &streamType, adjAttributionSource,
                                             &fullConfig,
                                             (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_MMAP_NOIRQ |
                                                     AUDIO_OUTPUT_FLAG_DIRECT),
@@ -608,7 +636,7 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
         ret = AudioSystem::getInputForAttr(&localAttr, &io,
                                               RECORD_RIID_INVALID,
                                               actualSessionId,
-                                              client.attributionSource,
+                                              adjAttributionSource,
                                               config,
                                               AUDIO_INPUT_FLAG_MMAP_NOIRQ, deviceId, &portId);
     }
@@ -642,21 +670,22 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
 }
 
 /* static */
-int AudioFlinger::onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration) {
+os::HapticScale AudioFlinger::onExternalVibrationStart(
+        const sp<os::ExternalVibration>& externalVibration) {
     sp<os::IExternalVibratorService> evs = getExternalVibratorService();
     if (evs != nullptr) {
         int32_t ret;
         binder::Status status = evs->onExternalVibrationStart(*externalVibration, &ret);
         if (status.isOk()) {
             ALOGD("%s, start external vibration with intensity as %d", __func__, ret);
-            return ret;
+            return os::ExternalVibration::externalVibrationScaleToHapticScale(ret);
         }
     }
     ALOGD("%s, start external vibration with intensity as MUTE due to %s",
             __func__,
             evs == nullptr ? "external vibration service not found"
                            : "error when querying intensity");
-    return static_cast<int>(os::HapticScale::MUTE);
+    return os::HapticScale::MUTE;
 }
 
 /* static */
@@ -731,15 +760,14 @@ void AudioFlinger::dumpClients(int fd, const Vector<String16>& args __unused)
 {
     String8 result;
 
-    result.append("Clients:\n");
-    result.append("   pid    heap_size\n");
+    result.append("Client Allocators:\n");
     for (size_t i = 0; i < mClients.size(); ++i) {
         sp<Client> client = mClients.valueAt(i).promote();
         if (client != 0) {
-            result.appendFormat("%6d %12zu\n", client->pid(),
-                    client->heap()->getMemoryHeap()->getSize());
+          result.appendFormat("Client: %d\n", client->pid());
+          result.append(client->allocator().dump().c_str());
         }
-    }
+   }
 
     result.append("Notification Clients:\n");
     result.append("   pid    uid  name\n");
@@ -873,7 +901,10 @@ status_t AudioFlinger::dump(int fd, const Vector<String16>& args)
 
         mPatchPanel.dump(fd);
 
-        mDeviceEffectManager.dump(fd);
+        mDeviceEffectManager->dump(fd);
+
+        std::string melOutput = mMelReporter->dump();
+        write(fd, melOutput.c_str(), melOutput.size());
 
         // dump external setParameters
         auto dumpLogger = [fd](SimpleLog& logger, const char* name) {
@@ -1063,7 +1094,7 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
     audio_attributes_t localAttr = input.attr;
 
     AttributionSourceState adjAttributionSource = input.clientInfo.attributionSource;
-    if (!isAudioServerOrMediaServerUid(callingUid)) {
+    if (!isAudioServerOrMediaServerOrSystemServerOrRootUid(callingUid)) {
         ALOGW_IF(clientUid != callingUid,
                 "%s uid %d tried to pass itself off as %d",
                 __FUNCTION__, callingUid, clientUid);
@@ -1079,6 +1110,8 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         clientPid = callingPid;
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
+    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+            adjAttributionSource);
 
     audio_session_t sessionId = input.sessionId;
     if (sessionId == AUDIO_SESSION_ALLOCATE) {
@@ -2186,12 +2219,8 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::getEffectThread_l(audio_session_t ses
 AudioFlinger::Client::Client(const sp<AudioFlinger>& audioFlinger, pid_t pid)
     :   RefBase(),
         mAudioFlinger(audioFlinger),
-        mPid(pid)
-{
-    mMemoryDealer = new MemoryDealer(
-            audioFlinger->getClientSharedHeapSize(),
-            (std::string("AudioFlinger::Client(") + std::to_string(pid) + ")").c_str());
-}
+        mPid(pid),
+        mClientAllocator(AllocatorFactory::getClientAllocator()) {}
 
 // Client destructor must be called with AudioFlinger::mClientLock held
 AudioFlinger::Client::~Client()
@@ -2199,9 +2228,9 @@ AudioFlinger::Client::~Client()
     mAudioFlinger->removeClient_l(mPid);
 }
 
-sp<MemoryDealer> AudioFlinger::Client::heap() const
+AllocatorFactory::ClientAllocator& AudioFlinger::Client::allocator()
 {
-    return mMemoryDealer;
+    return mClientAllocator;
 }
 
 // ----------------------------------------------------------------------------
@@ -2285,7 +2314,7 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
     const uid_t currentUid = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(
            adjAttributionSource.uid));
-    if (!isAudioServerOrMediaServerUid(callingUid)) {
+    if (!isAudioServerOrMediaServerOrSystemServerOrRootUid(callingUid)) {
         ALOGW_IF(currentUid != callingUid,
                 "%s uid %d tried to pass itself off as %d",
                 __FUNCTION__, callingUid, currentUid);
@@ -2302,6 +2331,8 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
 
+    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+            adjAttributionSource);
     if (!audio_is_valid_format(input.config.format) ) {
         ALOGE("createRecord() invalid format %#x", input.config.format);
         lStatus = BAD_VALUE;
@@ -2710,7 +2741,8 @@ status_t AudioFlinger::systemReady()
 {
     Mutex::Autolock _l(mLock);
     ALOGI("%s", __FUNCTION__);
-    mediautils::TimeCheck::setSystemReadyTimeoutMs(mediautils::TimeCheck::kDefaultTimeOutMs);
+    mediautils::TimeCheck::setSystemReadyTimeoutMs(
+        mediautils::TimeCheck::kDefaultTimeoutDuration.count());
     if (mSystemReady) {
         ALOGW("%s called twice", __FUNCTION__);
         return NO_ERROR;
@@ -2871,13 +2903,15 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
                 ALOGV("openOutput_l() created spatializer output: ID %d thread %p",
                       *output, thread.get());
             } else if (flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
-                thread = new OffloadThread(this, outputStream, *output, mSystemReady);
+                thread = new OffloadThread(this, outputStream, *output,
+                        mSystemReady, halConfig->offload_info);
                 ALOGV("openOutput_l() created offload output: ID %d thread %p",
                       *output, thread.get());
             } else if ((flags & AUDIO_OUTPUT_FLAG_DIRECT)
                     || !isValidPcmSinkFormat(halConfig->format)
                     || !isValidPcmSinkChannelMask(halConfig->channel_mask)) {
-                thread = new DirectOutputThread(this, outputStream, *output, mSystemReady);
+                thread = new DirectOutputThread(this, outputStream, *output,
+                        mSystemReady, halConfig->offload_info);
                 ALOGV("openOutput_l() created direct output: ID %d thread %p",
                       *output, thread.get());
             } else {
@@ -3735,6 +3769,12 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
 
         using namespace std::chrono_literals;
         auto inChannelMask = audio_channel_mask_out_to_in(track->channelMask());
+        if (inChannelMask == AUDIO_CHANNEL_INVALID) {
+            // The downstream PatchTrack has the proper output channel mask,
+            // so if there is no input channel mask equivalent, we can just
+            // use an index mask here to create the PatchRecord.
+            inChannelMask = audio_channel_mask_out_to_in_index_mask(track->channelMask());
+        }
         sp patchRecord = new RecordThread::PatchRecord(nullptr /* thread */,
                                                        track->sampleRate(),
                                                        inChannelMask,
@@ -3937,7 +3977,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
     const uid_t callingUid = IPCThreadState::self()->getCallingUid();
     adjAttributionSource.uid = VALUE_OR_RETURN_STATUS(legacy2aidl_uid_t_int32_t(callingUid));
     pid_t currentPid = VALUE_OR_RETURN_STATUS(aidl2legacy_int32_t_pid_t(adjAttributionSource.pid));
-    if (currentPid == -1 || !isAudioServerOrMediaServerUid(callingUid)) {
+    if (currentPid == -1 || !isAudioServerOrMediaServerOrSystemServerOrRootUid(callingUid)) {
         const pid_t callingPid = IPCThreadState::self()->getCallingPid();
         ALOGW_IF(currentPid != -1 && currentPid != callingPid,
                  "%s uid %d pid %d tried to pass itself off as pid %d",
@@ -3945,6 +3985,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
         currentPid = callingPid;
     }
+    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(adjAttributionSource);
 
     ALOGV("createEffect pid %d, effectClient %p, priority %d, sessionId %d, io %d, factory %p",
           adjAttributionSource.pid, effectClient.get(), priority, sessionId, io,
@@ -4065,7 +4106,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
         if (sessionId == AUDIO_SESSION_DEVICE) {
             sp<Client> client = registerPid(currentPid);
             ALOGV("%s device type %#x address %s", __func__, device.mType, device.getAddress());
-            handle = mDeviceEffectManager.createEffect_l(
+            handle = mDeviceEffectManager->createEffect_l(
                     &descOut, device, client, effectClient, mPatchPanel.patches_l(),
                     &enabledOut, &lStatus, probe, request.notifyFramesProcessed);
             if (lStatus != NO_ERROR && lStatus != ALREADY_EXISTS) {
@@ -4633,7 +4674,9 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         } else {
             getIAudioFlingerStatistics().event(code, elapsedMs);
         }
-    });
+    }, mediautils::TimeCheck::kDefaultTimeoutDuration,
+    mediautils::TimeCheck::kDefaultSecondChanceDuration,
+    true /* crashOnTimeout */);
 
     // Make sure we connect to Audio Policy Service before calling into AudioFlinger:
     //  - AudioFlinger can call into Audio Policy Service with its global mutex held

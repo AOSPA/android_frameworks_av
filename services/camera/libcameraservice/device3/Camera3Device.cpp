@@ -14,6 +14,40 @@
  * limitations under the License.
  */
 
+/* Changes from Qualcomm Innovation Center are provided under the following license:
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted (subject to the limitations in the
+ * disclaimer below) provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *
+ *   * Redistributions in binary form must reproduce the above
+ *     copyright notice, this list of conditions and the following
+ *     disclaimer in the documentation and/or other materials provided
+ *     with the distribution.
+ *
+ *   * Neither the name of Qualcomm Innovation Center, Inc. nor the names of its
+ *     contributors may be used to endorse or promote products derived
+ *     from this software without specific prior written permission.
+ *
+ * NO EXPRESS OR IMPLIED LICENSES TO ANY PARTY'S PATENT RIGHTS ARE
+ * GRANTED BY THIS LICENSE. THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT
+ * HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
+ * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+ * IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+ * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+ * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #define LOG_TAG "Camera3-Device"
 #define ATRACE_TAG ATRACE_TAG_CAMERA
 //#define LOG_NDEBUG 0
@@ -423,6 +457,29 @@ ssize_t Camera3Device::getJpegBufferSize(const CameraMetadata &info, uint32_t wi
     }
     maxJpegBufferSize = jpegBufMaxSize.data.i32[0];
 
+    uint32_t tag = 0;
+    ssize_t jpegDebugSize = 0;
+    sp<VendorTagDescriptor> vTags;
+    sp<VendorTagDescriptorCache> cache = VendorTagDescriptorCache::getGlobalVendorTagCache();
+    if (NULL != cache.get()) {
+        metadata_vendor_id_t vendorId;
+        status_t res = info.getVendorId(&vendorId);
+        if (res == OK) {
+            cache->getVendorTagDescriptor(vendorId, &vTags);
+        }
+    }
+
+    if (NULL != vTags.get()) {
+        status_t res = CameraMetadata::getTagFromName("org.quic.camera.jpegdebugdata.size", vTags.get(), &tag);
+
+        if (res == OK) {
+            camera_metadata_ro_entry jpegdebugdatasize = info.find(tag);
+            if (jpegdebugdatasize.count != 0) {
+                jpegDebugSize = jpegdebugdatasize.data.i32[0];
+                ALOGE("%s: Camera %s: Jpeg debug data size %zd", __FUNCTION__, mId.string(), jpegDebugSize);
+            }
+        }
+    }
     camera3::Size chosenMaxJpegResolution = maxDefaultJpegResolution;
     if (useMaxSensorPixelModeThreshold) {
         maxJpegBufferSize =
@@ -432,11 +489,12 @@ ssize_t Camera3Device::getJpegBufferSize(const CameraMetadata &info, uint32_t wi
     }
     assert(kMinJpegBufferSize < maxJpegBufferSize);
 
+    ssize_t minJpegBufferSize = kMinJpegBufferSize + jpegDebugSize;
     // Calculate final jpeg buffer size for the given resolution.
     float scaleFactor = ((float) (width * height)) /
             (chosenMaxJpegResolution.width * chosenMaxJpegResolution.height);
-    ssize_t jpegBufferSize = scaleFactor * (maxJpegBufferSize - kMinJpegBufferSize) +
-            kMinJpegBufferSize;
+    ssize_t jpegBufferSize = scaleFactor * (maxJpegBufferSize - minJpegBufferSize) +
+            minJpegBufferSize;
     return jpegBufferSize;
 }
 
@@ -987,7 +1045,7 @@ status_t Camera3Device::createStream(sp<Surface> consumer,
             const std::unordered_set<int32_t> &sensorPixelModesUsed,
             std::vector<int> *surfaceIds, int streamSetId, bool isShared, bool isMultiResolution,
             uint64_t consumerUsage, int64_t dynamicRangeProfile, int64_t streamUseCase,
-            int timestampBase, int mirrorMode) {
+            int timestampBase, int mirrorMode, int32_t colorSpace) {
     ATRACE_CALL();
 
     if (consumer == nullptr) {
@@ -1001,7 +1059,7 @@ status_t Camera3Device::createStream(sp<Surface> consumer,
     return createStream(consumers, /*hasDeferredConsumer*/ false, width, height,
             format, dataSpace, rotation, id, physicalCameraId, sensorPixelModesUsed, surfaceIds,
             streamSetId, isShared, isMultiResolution, consumerUsage, dynamicRangeProfile,
-            streamUseCase, timestampBase, mirrorMode);
+            streamUseCase, timestampBase, mirrorMode, colorSpace);
 }
 
 static bool isRawFormat(int format) {
@@ -1022,7 +1080,7 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
         const String8& physicalCameraId, const std::unordered_set<int32_t> &sensorPixelModesUsed,
         std::vector<int> *surfaceIds, int streamSetId, bool isShared, bool isMultiResolution,
         uint64_t consumerUsage, int64_t dynamicRangeProfile, int64_t streamUseCase,
-        int timestampBase, int mirrorMode) {
+        int timestampBase, int mirrorMode, int32_t colorSpace) {
     ATRACE_CALL();
 
     Mutex::Autolock il(mInterfaceLock);
@@ -1031,10 +1089,10 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
     ALOGV("Camera %s: Creating new stream %d: %d x %d, format %d, dataspace %d rotation %d"
             " consumer usage %" PRIu64 ", isShared %d, physicalCameraId %s, isMultiResolution %d"
             " dynamicRangeProfile 0x%" PRIx64 ", streamUseCase %" PRId64 ", timestampBase %d,"
-            " mirrorMode %d",
+            " mirrorMode %d colorSpace %d",
             mId.string(), mNextStreamId, width, height, format, dataSpace, rotation,
             consumerUsage, isShared, physicalCameraId.string(), isMultiResolution,
-            dynamicRangeProfile, streamUseCase, timestampBase, mirrorMode);
+            dynamicRangeProfile, streamUseCase, timestampBase, mirrorMode, colorSpace);
 
     status_t res;
     bool wasActive = false;
@@ -1105,7 +1163,7 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
                 width, height, blobBufferSize, format, dataSpace, rotation,
                 mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
-                timestampBase, mirrorMode);
+                timestampBase, mirrorMode, colorSpace);
     } else if (format == HAL_PIXEL_FORMAT_RAW_OPAQUE) {
         bool maxResolution =
                 sensorPixelModesUsed.find(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION) !=
@@ -1120,25 +1178,25 @@ status_t Camera3Device::createStream(const std::vector<sp<Surface>>& consumers,
                 width, height, rawOpaqueBufferSize, format, dataSpace, rotation,
                 mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
-                timestampBase, mirrorMode);
+                timestampBase, mirrorMode, colorSpace);
     } else if (isShared) {
         newStream = new Camera3SharedOutputStream(mNextStreamId, consumers,
                 width, height, format, consumerUsage, dataSpace, rotation,
                 mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 mUseHalBufManager, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
-                timestampBase, mirrorMode);
+                timestampBase, mirrorMode, colorSpace);
     } else if (consumers.size() == 0 && hasDeferredConsumer) {
         newStream = new Camera3OutputStream(mNextStreamId,
                 width, height, format, consumerUsage, dataSpace, rotation,
                 mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
-                timestampBase, mirrorMode);
+                timestampBase, mirrorMode, colorSpace);
     } else {
         newStream = new Camera3OutputStream(mNextStreamId, consumers[0],
                 width, height, format, dataSpace, rotation,
                 mTimestampOffset, physicalCameraId, sensorPixelModesUsed, transport, streamSetId,
                 isMultiResolution, dynamicRangeProfile, streamUseCase, mDeviceTimeBaseIsRealtime,
-                timestampBase, mirrorMode);
+                timestampBase, mirrorMode, colorSpace);
     }
 
     size_t consumerCount = consumers.size();
@@ -1226,6 +1284,7 @@ status_t Camera3Device::getStreamInfo(int id, StreamInfo *streamInfo) {
     streamInfo->dataSpaceOverridden = stream->isDataSpaceOverridden();
     streamInfo->originalDataSpace = stream->getOriginalDataSpace();
     streamInfo->dynamicRangeProfile = stream->getDynamicRangeProfile();
+    streamInfo->colorSpace = stream->getColorSpace();
     return OK;
 }
 
@@ -1748,7 +1807,7 @@ status_t Camera3Device::flush(int64_t *frameNumber) {
     }
 
     // Calculate expected duration for flush with additional buffer time in ms for watchdog
-    uint64_t maxExpectedDuration = (getExpectedInFlightDuration() + kBaseGetBufferWait) / 1e6;
+    uint64_t maxExpectedDuration = ns2ms(getExpectedInFlightDuration() + kBaseGetBufferWait);
     status_t res = mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(mRequestThread->flush(),
             maxExpectedDuration / kCycleLengthMs, kCycleLengthMs);
 
@@ -1884,7 +1943,8 @@ void Camera3Device::notifyStatus(bool idle) {
                     stream->getFormat(), streamMaxPreviewFps, stream->getDataSpace(), usage,
                     stream->getMaxHalBuffers(),
                     stream->getMaxTotalBuffers() - stream->getMaxHalBuffers(),
-                    stream->getDynamicRangeProfile(), streamUseCase);
+                    stream->getDynamicRangeProfile(), streamUseCase,
+                    stream->getColorSpace());
             }
         }
     }
@@ -2684,7 +2744,7 @@ void Camera3Device::setErrorStateLockedV(const char *fmt, va_list args) {
 status_t Camera3Device::registerInFlight(uint32_t frameNumber,
         int32_t numBuffers, CaptureResultExtras resultExtras, bool hasInput,
         bool hasAppCallback, nsecs_t minExpectedDuration, nsecs_t maxExpectedDuration,
-        const std::set<std::set<String8>>& physicalCameraIds,
+        bool isFixedFps, const std::set<std::set<String8>>& physicalCameraIds,
         bool isStillCapture, bool isZslCapture, bool rotateAndCropAuto,
         const std::set<std::string>& cameraIdsWithZoom,
         const SurfaceMap& outputSurfaces, nsecs_t requestTimeNs) {
@@ -2693,7 +2753,7 @@ status_t Camera3Device::registerInFlight(uint32_t frameNumber,
 
     ssize_t res;
     res = mInFlightMap.add(frameNumber, InFlightRequest(numBuffers, resultExtras, hasInput,
-            hasAppCallback, minExpectedDuration, maxExpectedDuration, physicalCameraIds,
+            hasAppCallback, minExpectedDuration, maxExpectedDuration, isFixedFps, physicalCameraIds,
             isStillCapture, isZslCapture, rotateAndCropAuto, cameraIdsWithZoom, requestTimeNs,
             outputSurfaces));
     if (res < 0) return res;
@@ -3259,16 +3319,18 @@ bool Camera3Device::RequestThread::sendRequestsBatch() {
     return true;
 }
 
-std::pair<nsecs_t, nsecs_t> Camera3Device::RequestThread::calculateExpectedDurationRange(
-        const camera_metadata_t *request) {
-    std::pair<nsecs_t, nsecs_t> expectedRange(
+Camera3Device::RequestThread::ExpectedDurationInfo
+        Camera3Device::RequestThread::calculateExpectedDurationRange(
+                const camera_metadata_t *request) {
+    ExpectedDurationInfo expectedDurationInfo = {
             InFlightRequest::kDefaultMinExpectedDuration,
-            InFlightRequest::kDefaultMaxExpectedDuration);
+            InFlightRequest::kDefaultMaxExpectedDuration,
+            /*isFixedFps*/false};
     camera_metadata_ro_entry_t e = camera_metadata_ro_entry_t();
     find_camera_metadata_ro_entry(request,
             ANDROID_CONTROL_AE_MODE,
             &e);
-    if (e.count == 0) return expectedRange;
+    if (e.count == 0) return expectedDurationInfo;
 
     switch (e.data.u8[0]) {
         case ANDROID_CONTROL_AE_MODE_OFF:
@@ -3276,29 +3338,32 @@ std::pair<nsecs_t, nsecs_t> Camera3Device::RequestThread::calculateExpectedDurat
                     ANDROID_SENSOR_EXPOSURE_TIME,
                     &e);
             if (e.count > 0) {
-                expectedRange.first = e.data.i64[0];
-                expectedRange.second = expectedRange.first;
+                expectedDurationInfo.minDuration = e.data.i64[0];
+                expectedDurationInfo.maxDuration = expectedDurationInfo.minDuration;
             }
             find_camera_metadata_ro_entry(request,
                     ANDROID_SENSOR_FRAME_DURATION,
                     &e);
             if (e.count > 0) {
-                expectedRange.first = std::max(e.data.i64[0], expectedRange.first);
-                expectedRange.second = expectedRange.first;
+                expectedDurationInfo.minDuration =
+                        std::max(e.data.i64[0], expectedDurationInfo.minDuration);
+                expectedDurationInfo.maxDuration = expectedDurationInfo.minDuration;
             }
+            expectedDurationInfo.isFixedFps = false;
             break;
         default:
             find_camera_metadata_ro_entry(request,
                     ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
                     &e);
             if (e.count > 1) {
-                expectedRange.first = 1e9 / e.data.i32[1];
-                expectedRange.second = 1e9 / e.data.i32[0];
+                expectedDurationInfo.minDuration = 1e9 / e.data.i32[1];
+                expectedDurationInfo.maxDuration = 1e9 / e.data.i32[0];
             }
+            expectedDurationInfo.isFixedFps = (e.data.i32[1] == e.data.i32[0]);
             break;
     }
 
-    return expectedRange;
+    return expectedDurationInfo;
 }
 
 bool Camera3Device::RequestThread::skipHFRTargetFPSUpdate(int32_t tag,
@@ -3917,13 +3982,14 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                 isZslCapture = true;
             }
         }
-        auto expectedDurationRange = calculateExpectedDurationRange(settings);
+        auto expectedDurationInfo = calculateExpectedDurationRange(settings);
         res = parent->registerInFlight(halRequest->frame_number,
                 totalNumBuffers, captureRequest->mResultExtras,
                 /*hasInput*/halRequest->input_buffer != NULL,
                 hasCallback,
-                /*min*/expectedDurationRange.first,
-                /*max*/expectedDurationRange.second,
+                expectedDurationInfo.minDuration,
+                expectedDurationInfo.maxDuration,
+                expectedDurationInfo.isFixedFps,
                 requestedPhysicalCameras, isStillCapture, isZslCapture,
                 captureRequest->mRotateAndCropAuto, mPrevCameraIdsWithZoom,
                 (mUseHalBufManager) ? uniqueSurfaceIdMap :

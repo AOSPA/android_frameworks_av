@@ -43,7 +43,7 @@ namespace {
 constexpr float kMaxTranslationalVelocity = 2;
 
 // This is how fast, in rad/s, we allow rotation angle to shift during rate-limiting.
-constexpr float kMaxRotationalVelocity = 8;
+constexpr float kMaxRotationalVelocity = 0.8f;
 
 // This is how far into the future we predict the head pose, using linear extrapolation based on
 // twist (velocity). It should be set to a value that matches the characteristic durations of moving
@@ -52,7 +52,9 @@ constexpr float kMaxRotationalVelocity = 8;
 constexpr auto kPredictionDuration = 50ms;
 
 // After not getting a pose sample for this long, we would treat the measurement as stale.
-constexpr auto kFreshnessTimeout = 50ms;
+// The max connection interval is 50ms, and HT sensor event interval can differ depending on the
+// sampling rate, scheduling, sensor eventQ FIFO etc. 120 (2 * 50 + 20) ms seems reasonable for now.
+constexpr auto kFreshnessTimeout = 120ms;
 
 // Auto-recenter kicks in after the head has been still for this long.
 constexpr auto kAutoRecenterWindowDuration = 6s;
@@ -65,13 +67,13 @@ constexpr float kAutoRecenterRotationThreshold = 10.5f / 180 * M_PI;
 
 // Screen is considered to be unstable (not still) if it has moved significantly within the last
 // time window of this duration.
-constexpr auto kScreenStillnessWindowDuration = 3s;
+constexpr auto kScreenStillnessWindowDuration = 750ms;
 
 // Screen is considered to have moved significantly if translated by this much (in meter, approx).
 constexpr float kScreenStillnessTranslationThreshold = 0.1f;
 
 // Screen is considered to have moved significantly if rotated by this much (in radians, approx).
-constexpr float kScreenStillnessRotationThreshold = 7.0f / 180 * M_PI;
+constexpr float kScreenStillnessRotationThreshold = 15.0f / 180 * M_PI;
 
 // Time units for system clock ticks. This is what the Sensor Framework timestamps represent and
 // what we use for pose filtering.
@@ -310,14 +312,14 @@ std::string SpatializerPoseController::toString(unsigned level) const {
     }
 
     ss += prefixSpace;
-    if (mHeadSensor == media::SensorPoseProvider::INVALID_HANDLE) {
-        ss.append("HeadSensor: INVALID\n");
+    if (mHeadSensor == INVALID_SENSOR) {
+        ss += "HeadSensor: INVALID\n";
     } else {
         base::StringAppendF(&ss, "HeadSensor: 0x%08x\n", mHeadSensor);
     }
 
     ss += prefixSpace;
-    if (mScreenSensor == media::SensorPoseProvider::INVALID_HANDLE) {
+    if (mScreenSensor == INVALID_SENSOR) {
         ss += "ScreenSensor: INVALID\n";
     } else {
         base::StringAppendF(&ss, "ScreenSensor: 0x%08x\n", mScreenSensor);
@@ -325,7 +327,7 @@ std::string SpatializerPoseController::toString(unsigned level) const {
 
     ss += prefixSpace;
     if (mActualMode.has_value()) {
-        base::StringAppendF(&ss, "ActualMode: %s", toString(mActualMode.value()).c_str());
+        base::StringAppendF(&ss, "ActualMode: %s\n", media::toString(mActualMode.value()).c_str());
     } else {
         ss += "ActualMode NOTEXIST\n";
     }

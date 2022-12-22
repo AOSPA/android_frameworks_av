@@ -134,7 +134,7 @@ public:
                                                   int32_t* _aidl_return) override;
     binder::Status getStrategyForStream(AudioStreamType stream,
                                         int32_t* _aidl_return) override;
-    binder::Status getDevicesForAttributes(const media::AudioAttributesEx& attr,
+    binder::Status getDevicesForAttributes(const media::AudioAttributesInternal& attr,
                                            bool forVolume,
                                            std::vector<AudioDevice>* _aidl_return) override;
     binder::Status getOutputForEffect(const media::EffectDescriptor& desc,
@@ -226,12 +226,12 @@ public:
           status_t doStartOutput(audio_port_handle_t portId);
     binder::Status listAudioProductStrategies(
             std::vector<media::AudioProductStrategy>* _aidl_return) override;
-    binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesEx& aa,
+    binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesInternal& aa,
                                                          bool fallbackOnDefault,
                                                          int32_t* _aidl_return) override;
     binder::Status listAudioVolumeGroups(
             std::vector<media::AudioVolumeGroup>* _aidl_return) override;
-    binder::Status getVolumeGroupFromAudioAttributes(const media::AudioAttributesEx& aa,
+    binder::Status getVolumeGroupFromAudioAttributes(const media::AudioAttributesInternal& aa,
                                                      bool fallbackOnDefault,
                                                      int32_t* _aidl_return) override;
     binder::Status setRttEnabled(bool enabled) override;
@@ -477,8 +477,8 @@ private:
         Mutex mLock;
         ActivityManager mAm;
         bool mObserverRegistered = false;
-        std::unordered_map<uid_t, std::pair<bool, int>> mOverrideUids;
-        std::unordered_map<uid_t, std::pair<bool, int>> mCachedUids;
+        std::unordered_map<uid_t, std::pair<bool, int>> mOverrideUids GUARDED_BY(mLock);
+        std::unordered_map<uid_t, std::pair<bool, int>> mCachedUids GUARDED_BY(mLock);
         std::vector<uid_t> mAssistantUids;
         std::vector<uid_t> mActiveAssistantUids;
         std::vector<uid_t> mA11yUids;

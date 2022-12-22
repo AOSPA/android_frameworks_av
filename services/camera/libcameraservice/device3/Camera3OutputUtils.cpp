@@ -128,12 +128,41 @@ status_t fixupMonochromeTags(
     return res;
 }
 
+void correctMeteringRegions(camera_metadata_t *meta) {
+    if (meta == nullptr) return;
+
+    uint32_t meteringRegionKeys[] = {
+            ANDROID_CONTROL_AE_REGIONS,
+            ANDROID_CONTROL_AWB_REGIONS,
+            ANDROID_CONTROL_AF_REGIONS };
+
+    for (uint32_t key : meteringRegionKeys) {
+        camera_metadata_entry_t entry;
+        int res = find_camera_metadata_entry(meta, key, &entry);
+        if (res != OK) continue;
+
+        for (size_t i = 0; i < entry.count; i += 5) {
+            if (entry.data.i32[0] > entry.data.i32[2]) {
+                ALOGW("%s: Invalid metering region (%d): left: %d, right: %d",
+                        __FUNCTION__, key, entry.data.i32[0], entry.data.i32[2]);
+                entry.data.i32[2] = entry.data.i32[0];
+            }
+            if (entry.data.i32[1] > entry.data.i32[3]) {
+                ALOGW("%s: Invalid metering region (%d): top: %d, bottom: %d",
+                        __FUNCTION__, key, entry.data.i32[1], entry.data.i32[3]);
+                entry.data.i32[3] = entry.data.i32[1];
+            }
+        }
+    }
+}
+
 void insertResultLocked(CaptureOutputStates& states, CaptureResult *result, uint32_t frameNumber) {
     if (result == nullptr) return;
 
     camera_metadata_t *meta = const_cast<camera_metadata_t *>(
             result->mMetadata.getAndLock());
     set_camera_metadata_vendor_id(meta, states.vendorTagId);
+    correctMeteringRegions(meta);
     result->mMetadata.unlock(meta);
 
     if (result->mMetadata.update(ANDROID_REQUEST_FRAME_COUNT,
@@ -152,6 +181,7 @@ void insertResultLocked(CaptureOutputStates& states, CaptureResult *result, uint
         camera_metadata_t *pmeta = const_cast<camera_metadata_t *>(
                 physicalMetadata.mPhysicalCameraMetadata.getAndLock());
         set_camera_metadata_vendor_id(pmeta, states.vendorTagId);
+        correctMeteringRegions(pmeta);
         physicalMetadata.mPhysicalCameraMetadata.unlock(pmeta);
     }
 
@@ -858,12 +888,14 @@ void notifyShutter(CaptureOutputStates& states, const camera_shutter_msg_t &msg)
                 r.resultExtras.hasReadoutTimestamp = true;
                 r.resultExtras.readoutTimestamp = msg.readout_timestamp;
             }
-            if (r.minExpectedDuration != states.minFrameDuration) {
+            if (r.minExpectedDuration != states.minFrameDuration ||
+                    r.isFixedFps != states.isFixedFps) {
                 for (size_t i = 0; i < states.outputStreams.size(); i++) {
                     auto outputStream = states.outputStreams[i];
-                    outputStream->onMinDurationChanged(r.minExpectedDuration);
+                    outputStream->onMinDurationChanged(r.minExpectedDuration, r.isFixedFps);
                 }
                 states.minFrameDuration = r.minExpectedDuration;
+                states.isFixedFps = r.isFixedFps;
             }
             if (r.hasCallback) {
                 ALOGVV("Camera %s: %s: Shutter fired for frame %d (id %d) at %" PRId64,

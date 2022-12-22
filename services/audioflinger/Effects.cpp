@@ -278,8 +278,8 @@ status_t AudioFlinger::EffectBase::updatePolicyState()
         if (!doRegister && !(registered && doEnable)) {
             return NO_ERROR;
         }
-        mPolicyLock.lock();
     }
+    mPolicyLock.lock();
     ALOGV("%s name %s id %d session %d doRegister %d registered %d doEnable %d enabled %d",
         __func__, mDescriptor.name, mId, mSessionId, doRegister, registered, doEnable, enabled);
     if (doRegister) {
@@ -1597,7 +1597,7 @@ bool AudioFlinger::EffectModule::isHapticGenerator() const {
     return isHapticGenerator(&mDescriptor.type);
 }
 
-status_t AudioFlinger::EffectModule::setHapticIntensity(int id, int intensity)
+status_t AudioFlinger::EffectModule::setHapticIntensity(int id, os::HapticScale intensity)
 {
     if (mStatus != NO_ERROR) {
         return mStatus;
@@ -1613,7 +1613,7 @@ status_t AudioFlinger::EffectModule::setHapticIntensity(int id, int intensity)
     param->vsize = sizeof(int32_t) * 2;
     *(int32_t*)param->data = HG_PARAM_HAPTIC_INTENSITY;
     *((int32_t*)param->data + 1) = id;
-    *((int32_t*)param->data + 2) = intensity;
+    *((int32_t*)param->data + 2) = static_cast<int32_t>(intensity);
     std::vector<uint8_t> response;
     status_t status = command(EFFECT_CMD_SET_PARAM, request, sizeof(int32_t), &response);
     if (status == NO_ERROR) {
@@ -1761,7 +1761,14 @@ AudioFlinger::EffectHandle::EffectHandle(const sp<EffectBase>& effect,
         return;
     }
     int bufOffset = ((sizeof(effect_param_cblk_t) - 1) / sizeof(int) + 1) * sizeof(int);
-    mCblkMemory = client->heap()->allocate(EFFECT_PARAM_BUFFER_SIZE + bufOffset);
+    mCblkMemory = client->allocator().allocate(mediautils::NamedAllocRequest{
+            {static_cast<size_t>(EFFECT_PARAM_BUFFER_SIZE + bufOffset)},
+            std::string("Effect ID: ")
+                    .append(std::to_string(effect->id()))
+                    .append(" Session ID: ")
+                    .append(std::to_string(static_cast<int>(effect->sessionId())))
+                    .append(" \n")
+            });
     if (mCblkMemory == 0 ||
             (mCblk = static_cast<effect_param_cblk_t *>(mCblkMemory->unsecurePointer())) == NULL) {
         ALOGE("not enough memory for Effect size=%zu", EFFECT_PARAM_BUFFER_SIZE +
@@ -1817,7 +1824,7 @@ status_t AudioFlinger::EffectHandle::onTransact(
         } else {
             getIEffectStatistics().event(code, elapsedMs);
         }
-    }, 0 /* timeoutMs */);
+    }, {} /* timeoutDuration */, {} /* secondChanceDuration */, false /* crashOnTimeout */);
     return BnEffect::onTransact(code, data, reply, flags);
 }
 
@@ -2669,7 +2676,7 @@ bool AudioFlinger::EffectChain::containsHapticGeneratingEffect_l()
     return false;
 }
 
-void AudioFlinger::EffectChain::setHapticIntensity_l(int id, int intensity)
+void AudioFlinger::EffectChain::setHapticIntensity_l(int id, os::HapticScale intensity)
 {
     Mutex::Autolock _l(mLock);
     for (size_t i = 0; i < mEffects.size(); ++i) {

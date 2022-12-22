@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "MediaCodecSource"
 #define DEBUG_DRIFT_TIME 0
 
@@ -555,12 +555,15 @@ status_t MediaCodecSource::initEncoder() {
             mEncoderActivityNotify = new AMessage(kWhatEncoderActivity, mReflector);
             mEncoder->setCallback(mEncoderActivityNotify);
 
+            AString codecName = matchingCodecs[ix];
+            bool isHWEnc = codecName.startsWith("c2.qti");
+
             err = mEncoder->configure(
                         mOutputFormat,
                         NULL /* nativeWindow */,
                         NULL /* crypto */,
                         MediaCodec::CONFIGURE_FLAG_ENCODE |
-                        (mIsVideo ? MediaCodec::CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
+                        ((mIsVideo && isHWEnc) ? MediaCodec::CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
 
             if (err == OK) {
                 break;

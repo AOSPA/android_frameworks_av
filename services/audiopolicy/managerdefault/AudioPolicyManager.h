@@ -357,11 +357,10 @@ public:
         }
 
         virtual status_t getProductStrategyFromAudioAttributes(
-                const AudioAttributes &aa, product_strategy_t &productStrategy,
+                const audio_attributes_t &aa, product_strategy_t &productStrategy,
                 bool fallbackOnDefault)
         {
-            productStrategy = mEngine->getProductStrategyForAttributes(
-                    aa.getAttributes(), fallbackOnDefault);
+            productStrategy = mEngine->getProductStrategyForAttributes(aa, fallbackOnDefault);
             return (fallbackOnDefault && productStrategy == PRODUCT_STRATEGY_NONE) ?
                     BAD_VALUE : NO_ERROR;
         }
@@ -372,10 +371,9 @@ public:
         }
 
         virtual status_t getVolumeGroupFromAudioAttributes(
-                const AudioAttributes &aa, volume_group_t &volumeGroup, bool fallbackOnDefault)
+                const audio_attributes_t &aa, volume_group_t &volumeGroup, bool fallbackOnDefault)
         {
-            volumeGroup = mEngine->getVolumeGroupForAttributes(
-                        aa.getAttributes(), fallbackOnDefault);
+            volumeGroup = mEngine->getVolumeGroupForAttributes(aa, fallbackOnDefault);
             return (fallbackOnDefault && volumeGroup == VOLUME_GROUP_NONE) ?
                     BAD_VALUE : NO_ERROR;
         }
@@ -638,6 +636,10 @@ protected:
 
         bool isCallRxAudioSource(const sp<SourceClientDescriptor> &source) {
             return mCallRxSourceClient != nullptr && source == mCallRxSourceClient;
+        }
+
+        bool isCallTxAudioSource(const sp<SourceClientDescriptor> &source) {
+            return mCallTxSourceClient != nullptr && source == mCallTxSourceClient;
         }
 
         void connectTelephonyRxAudioSource();

@@ -151,7 +151,9 @@ class Camera3Device :
             ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD,
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
-            int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO) override;
+            int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            override;
 
     status_t createStream(const std::vector<sp<Surface>>& consumers,
             bool hasDeferredConsumer, uint32_t width, uint32_t height, int format,
@@ -166,7 +168,9 @@ class Camera3Device :
             ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD,
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
-            int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO) override;
+            int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            override;
 
     status_t createInputStream(
             uint32_t width, uint32_t height, int format, bool isMultiResolution,
@@ -993,8 +997,13 @@ class Camera3Device :
         // send request in mNextRequests to HAL in a batch. Return true = sucssess
         bool sendRequestsBatch();
 
-        // Calculate the expected (minimum, maximum) duration range for a request
-        std::pair<nsecs_t, nsecs_t> calculateExpectedDurationRange(
+        // Calculate the expected (minimum, maximum, isFixedFps) duration info for a request
+        struct ExpectedDurationInfo {
+            nsecs_t minDuration;
+            nsecs_t maxDuration;
+            bool isFixedFps;
+        };
+        ExpectedDurationInfo calculateExpectedDurationRange(
                 const camera_metadata_t *request);
 
         // Check and update latest session parameters based on the current request settings.
@@ -1113,7 +1122,7 @@ class Camera3Device :
     status_t registerInFlight(uint32_t frameNumber,
             int32_t numBuffers, CaptureResultExtras resultExtras, bool hasInput,
             bool callback, nsecs_t minExpectedDuration, nsecs_t maxExpectedDuration,
-            const std::set<std::set<String8>>& physicalCameraIds,
+            bool isFixedFps, const std::set<std::set<String8>>& physicalCameraIds,
             bool isStillCapture, bool isZslCapture, bool rotateAndCropAuto,
             const std::set<std::string>& cameraIdsWithZoom, const SurfaceMap& outputSurfaces,
             nsecs_t requestTimeNs);
@@ -1365,6 +1374,9 @@ class Camera3Device :
 
     // The current minimum expected frame duration based on AE_TARGET_FPS_RANGE
     nsecs_t mMinExpectedDuration = 0;
+    // Whether the camera device runs at fixed frame rate based on AE_MODE and
+    // AE_TARGET_FPS_RANGE
+    bool mIsFixedFps = false;
 
     // Injection camera related methods.
     class Camera3DeviceInjectionMethods : public virtual RefBase {

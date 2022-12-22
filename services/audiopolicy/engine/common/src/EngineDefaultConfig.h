@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <EngineConfig.h>
+
 #include <system/audio.h>
 
 namespace android {
@@ -138,19 +140,19 @@ const engineConfig::ProductStrategies gOrderedStrategies = {
  * For compatibility reason why apm volume config file, volume group name is the stream type.
  */
 const engineConfig::ProductStrategies gOrderedSystemStrategies = {
-    {"rerouting",
+    {"STRATEGY_REROUTING",
      {
          {AUDIO_STREAM_REROUTING, "AUDIO_STREAM_REROUTING",
           {{AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_VIRTUAL_SOURCE, AUDIO_SOURCE_DEFAULT,
-            AUDIO_FLAG_NONE, ""}}
+            AUDIO_FLAG_NONE, AUDIO_TAG_APM_RESERVED_INTERNAL}}
          }
      },
     },
-    {"patch",
+    {"STRATEGY_PATCH",
      {
          {AUDIO_STREAM_PATCH, "AUDIO_STREAM_PATCH",
           {{AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_DEFAULT,
-            AUDIO_FLAG_NONE, ""}}
+            AUDIO_FLAG_NONE, AUDIO_TAG_APM_RESERVED_INTERNAL}}
          }
      },
     }

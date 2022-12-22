@@ -277,14 +277,19 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
         break;
 
     case STRATEGY_PHONE: {
-        devices = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_HEARING_AID);
-        if (!devices.isEmpty()) break;
+        // TODO(b/243670205): remove this logic that gives preference to last removable devices
+        // once a UX decision has been made
         if (getDpConnAndAllowedForVoice() && isInCall()) {
             devices = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_AUX_DIGITAL);
             if (!devices.isEmpty()) break;
         }
         devices = availableOutputDevices.getFirstDevicesFromTypes(
-                        getLastRemovableMediaDevices(GROUP_NONE, {AUDIO_DEVICE_OUT_BLE_HEADSET}));
+                        getLastRemovableMediaDevices(GROUP_NONE, {
+                            // excluding HEARING_AID and BLE_HEADSET because Dialer uses
+                            // setCommunicationDevice to select them explicitly
+                            AUDIO_DEVICE_OUT_HEARING_AID,
+                            AUDIO_DEVICE_OUT_BLE_HEADSET
+                            }));
         if (!devices.isEmpty()) break;
         devices = availableOutputDevices.getFirstDevicesFromTypes({
                 AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET, AUDIO_DEVICE_OUT_EARPIECE});
@@ -490,7 +495,7 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
     }
 
     if (devices.isEmpty()) {
-        ALOGV("%s no device found for strategy %d", __func__, strategy);
+        ALOGI("%s no device found for strategy %d", __func__, strategy);
         sp<DeviceDescriptor> defaultOutputDevice = getApmObserver()->getDefaultOutputDevice();
         if (defaultOutputDevice != nullptr) {
             devices.add(defaultOutputDevice);
@@ -742,6 +747,18 @@ DeviceVector Engine::getPreferredAvailableDevicesForProductStrategy(
     return preferredAvailableDevVec;
 }
 
+DeviceVector Engine::getDisabledDevicesForProductStrategy(
+        const DeviceVector &availableOutputDevices, product_strategy_t strategy) const {
+    DeviceVector disabledDevices = {};
+    AudioDeviceTypeAddrVector disabledDevicesTypeAddr;
+    const status_t status = getDevicesForRoleAndStrategy(
+            strategy, DEVICE_ROLE_DISABLED, disabledDevicesTypeAddr);
+    if (status == NO_ERROR) {
+        disabledDevices =
+                availableOutputDevices.getDevicesFromDeviceTypeAddrVec(disabledDevicesTypeAddr);
+    }
+    return disabledDevices;
+}
 
 DeviceVector Engine::getDevicesForProductStrategy(product_strategy_t strategy) const {
     const SwAudioOutputCollection& outputs = getApmObserver()->getOutputs();
@@ -764,6 +781,11 @@ DeviceVector Engine::getDevicesForProductStrategy(product_strategy_t strategy) c
     if (!preferredAvailableDevVec.isEmpty()) {
         return preferredAvailableDevVec;
     }
+
+    // Remove all disabled devices from the available device list.
+    DeviceVector disabledDevVec =
+            getDisabledDevicesForProductStrategy(availableOutputDevices, strategy);
+    availableOutputDevices.remove(disabledDevVec);
 
     return getDevicesForStrategyInt(legacyStrategy,
                                     availableOutputDevices,
@@ -804,6 +826,7 @@ DeviceVector Engine::getOutputDevicesForStream(audio_stream_type_t stream, bool 
 
 sp<DeviceDescriptor> Engine::getInputDeviceForAttributes(const audio_attributes_t &attr,
                                                          uid_t uid,
+                                                         audio_session_t session,
                                                          sp<AudioPolicyMix> *mix) const
 {
     const auto &policyMixes = getApmObserver()->getAudioPolicyMixCollection();
@@ -823,9 +846,10 @@ sp<DeviceDescriptor> Engine::getInputDeviceForAttributes(const audio_attributes_
         return device;
     }
 
-    device = policyMixes.getDeviceAndMixForInputSource(attr.source,
+    device = policyMixes.getDeviceAndMixForInputSource(attr,
                                                        availableInputDevices,
                                                        uid,
+                                                       session,
                                                        mix);
     if (device != nullptr) {
         return device;

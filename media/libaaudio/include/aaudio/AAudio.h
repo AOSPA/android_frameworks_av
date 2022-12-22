@@ -277,6 +277,7 @@ enum
     AAUDIO_STREAM_STATE_CLOSED,
     /**
      * The stream is disconnected from audio device.
+     * @deprecated
      */
     AAUDIO_STREAM_STATE_DISCONNECTED
 };
@@ -885,6 +886,12 @@ AAUDIO_API void AAudioStreamBuilder_setSampleRate(AAudioStreamBuilder* builder,
  * of channel mask used in {@link AAudioStreamBuilder_setChannelMask}, the last called function
  * will be respected if both this function and {@link AAudioStreamBuilder_setChannelMask} are
  * called.
+ *
+ * Note that if the channel count is two then it may get mixed to mono when the device only supports
+ * one channel. If the channel count is greater than two but the device's supported channel count is
+ * less than the requested value, the channels higher than the device channel will be dropped. If
+ * higher channels should be mixed or spatialized, use {@link AAudioStreamBuilder_setChannelMask}
+ * instead.
  *
  * Available since API level 26.
  *

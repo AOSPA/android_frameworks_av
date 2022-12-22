@@ -75,12 +75,15 @@
 #include <media/ExtendedAudioBufferProvider.h>
 #include <media/VolumeShaper.h>
 #include <mediautils/ServiceUtilities.h>
+#include <mediautils/SharedMemoryAllocator.h>
 #include <mediautils/Synchronization.h>
 #include <mediautils/ThreadSnapshot.h>
 
 #include <audio_utils/clock.h>
 #include <audio_utils/FdToString.h>
 #include <audio_utils/LinearMap.h>
+#include <audio_utils/MelAggregator.h>
+#include <audio_utils/MelProcessor.h>
 #include <audio_utils/SimpleLog.h>
 #include <audio_utils/TimestampVerifier.h>
 
@@ -94,7 +97,7 @@
 #include "NBAIO_Tee.h"
 #include "ThreadMetrics.h"
 #include "TrackMetrics.h"
-
+#include "AllocatorFactory.h"
 #include <android/os/IPowerManager.h>
 
 #include <media/nblog/NBLog.h>
@@ -319,7 +322,8 @@ public:
                             sp<MmapStreamInterface>& interface,
                             audio_port_handle_t *handle);
 
-    static int onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration);
+    static os::HapticScale onExternalVibrationStart(
+        const sp<os::ExternalVibration>& externalVibration);
     static void onExternalVibrationStop(const sp<os::ExternalVibration>& externalVibration);
 
     status_t addEffectToHal(audio_port_handle_t deviceId,
@@ -499,19 +503,19 @@ private:
 
     // --- Client ---
     class Client : public RefBase {
-    public:
-                            Client(const sp<AudioFlinger>& audioFlinger, pid_t pid);
+      public:
+        Client(const sp<AudioFlinger>& audioFlinger, pid_t pid);
         virtual             ~Client();
-        sp<MemoryDealer>    heap() const;
+        AllocatorFactory::ClientAllocator& allocator();
         pid_t               pid() const { return mPid; }
         sp<AudioFlinger>    audioFlinger() const { return mAudioFlinger; }
 
     private:
         DISALLOW_COPY_AND_ASSIGN(Client);
 
-        const sp<AudioFlinger> mAudioFlinger;
-              sp<MemoryDealer> mMemoryDealer;
+        const sp<AudioFlinger>    mAudioFlinger;
         const pid_t         mPid;
+        AllocatorFactory::ClientAllocator mClientAllocator;
     };
 
     // --- Notification Client ---
@@ -630,9 +634,13 @@ using effect_buffer_t = int16_t;
 
 #include "PatchPanel.h"
 
+#include "PatchCommandThread.h"
+
 #include "Effects.h"
 
 #include "DeviceEffectManager.h"
+
+#include "MelReporter.h"
 
     // Find io handle by session id.
     // Preference is given to an io handle with a matching effect chain to session id.
@@ -1010,7 +1018,9 @@ private:
     PatchPanel mPatchPanel;
     sp<EffectsFactoryHalInterface> mEffectsFactoryHal;
 
-    DeviceEffectManager mDeviceEffectManager;
+    const sp<PatchCommandThread> mPatchCommandThread;
+    sp<DeviceEffectManager> mDeviceEffectManager;
+    sp<MelReporter> mMelReporter;
 
     bool       mSystemReady;
     std::atomic_bool mAudioPolicyReady{};

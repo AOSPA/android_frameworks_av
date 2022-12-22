@@ -162,11 +162,12 @@ AudioFlinger::ThreadBase::TrackBase::TrackBase(
     }
 
     if (client != 0) {
-        mCblkMemory = client->heap()->allocate(size);
+        mCblkMemory = client->allocator().allocate(mediautils::NamedAllocRequest{{size},
+                std::string("Track ID: ").append(std::to_string(mId))});
         if (mCblkMemory == 0 ||
                 (mCblk = static_cast<audio_track_cblk_t *>(mCblkMemory->unsecurePointer())) == NULL) {
             ALOGE("%s(%d): not enough memory for AudioTrack size=%zu", __func__, mId, size);
-            client->heap()->dump("AudioTrack");
+            ALOGE("%s", client->allocator().dump().c_str());
             mCblkMemory.clear();
             return;
         }
@@ -529,10 +530,7 @@ AudioFlinger::PlaybackThread::OpPlayAudioMonitor::createIfNeeded(
             id, attr.flags);
         return nullptr;
     }
-
-    AttributionSourceState checkedAttributionSource = AudioFlinger::checkAttributionSourcePackage(
-            attributionSource);
-    return new OpPlayAudioMonitor(checkedAttributionSource, attr.usage, id);
+    return new OpPlayAudioMonitor(attributionSource, attr.usage, id);
 }
 
 AudioFlinger::PlaybackThread::OpPlayAudioMonitor::OpPlayAudioMonitor(
@@ -1480,7 +1478,7 @@ void AudioFlinger::PlaybackThread::Track::copyMetadataTo(MetadataInserter& backI
         }
     }
 
-    metadata.channel_mask = mChannelMask,
+    metadata.channel_mask = mChannelMask;
     strncpy(metadata.tags, mAttr.tags, AUDIO_ATTRIBUTES_TAGS_MAX_SIZE);
     *backInserter++ = metadata;
 }
@@ -2056,7 +2054,6 @@ ssize_t AudioFlinger::PlaybackThread::OutputTrack::write(void* data, uint32_t fr
 {
     Buffer *pInBuffer;
     Buffer inBuffer;
-    bool outputBufferFull = false;
     inBuffer.frameCount = frames;
     inBuffer.raw = data;
 
@@ -2086,7 +2083,6 @@ ssize_t AudioFlinger::PlaybackThread::OutputTrack::write(void* data, uint32_t fr
                 ALOGV("%s(%d): thread %d no more output buffers; status %d",
                         __func__, mId,
                         (int)mThreadIoHandle, status);
-                outputBufferFull = true;
                 break;
             }
             uint32_t waitTimeMs = (uint32_t)ns2ms(systemTime() - startTime);
@@ -2782,6 +2778,25 @@ status_t AudioFlinger::RecordThread::RecordTrack::shareAudioHistory(
     }
 }
 
+void AudioFlinger::RecordThread::RecordTrack::copyMetadataTo(MetadataInserter& backInserter) const
+{
+
+    // Do not forward PatchRecord metadata with unspecified audio source
+    if (mAttr.source == AUDIO_SOURCE_DEFAULT) {
+        return;
+    }
+
+    // No track is invalid as this is called after prepareTrack_l in the same critical section
+    record_track_metadata_v7_t metadata;
+    metadata.base = {
+            .source = mAttr.source,
+            .gain = 1, // capture tracks do not have volumes
+    };
+    metadata.channel_mask = mChannelMask;
+    strncpy(metadata.tags, mAttr.tags, AUDIO_ATTRIBUTES_TAGS_MAX_SIZE);
+
+    *backInserter++ = metadata;
+}
 
 // ----------------------------------------------------------------------------
 #undef LOG_TAG
@@ -2795,9 +2810,10 @@ AudioFlinger::RecordThread::PatchRecord::PatchRecord(RecordThread *recordThread,
                                                      void *buffer,
                                                      size_t bufferSize,
                                                      audio_input_flags_t flags,
-                                                     const Timeout& timeout)
+                                                     const Timeout& timeout,
+                                                     audio_source_t source)
     :   RecordTrack(recordThread, NULL,
-                audio_attributes_t{} /* currently unused for patch track */,
+                audio_attributes_t{ .source = source } ,
                 sampleRate, format, channelMask, frameCount,
                 buffer, bufferSize, AUDIO_SESSION_NONE, getpid(),
                 audioServerAttributionSource(getpid()), flags, TYPE_PATCH),
@@ -2908,9 +2924,10 @@ AudioFlinger::RecordThread::PassthruPatchRecord::PassthruPatchRecord(
         audio_channel_mask_t channelMask,
         audio_format_t format,
         size_t frameCount,
-        audio_input_flags_t flags)
+        audio_input_flags_t flags,
+        audio_source_t source)
         : PatchRecord(recordThread, sampleRate, channelMask, format, frameCount,
-                nullptr /*buffer*/, 0 /*bufferSize*/, flags),
+                nullptr /*buffer*/, 0 /*bufferSize*/, flags, {} /* timeout */, source),
           mPatchRecordAudioBufferProvider(*this),
           mSinkBuffer(allocAligned(32, mFrameCount * mFrameSize)),
           mStubBuffer(allocAligned(32, mFrameCount * mFrameSize))
@@ -3135,6 +3152,38 @@ int64_t AudioFlinger::MmapThread::MmapTrack::framesReleased() const
 
 void AudioFlinger::MmapThread::MmapTrack::onTimestamp(const ExtendedTimestamp &timestamp __unused)
 {
+}
+
+void AudioFlinger::MmapThread::MmapTrack::processMuteEvent_l(const sp<
+    IAudioManager>& audioManager, mute_state_t muteState)
+{
+    if (mMuteState == muteState) {
+        // mute state did not change, do nothing
+        return;
+    }
+
+    status_t result = UNKNOWN_ERROR;
+    if (audioManager && mPortId != AUDIO_PORT_HANDLE_NONE) {
+        if (mMuteEventExtras == nullptr) {
+            mMuteEventExtras = std::make_unique<os::PersistableBundle>();
+        }
+        mMuteEventExtras->putInt(String16(kExtraPlayerEventMuteKey),
+                                 static_cast<int>(muteState));
+
+        result = audioManager->portEvent(mPortId,
+                                         PLAYER_UPDATE_MUTED,
+                                         mMuteEventExtras);
+    }
+
+    if (result == OK) {
+        mMuteState = muteState;
+    } else {
+        ALOGW("%s(%d): cannot process mute state for port ID %d, status error %d",
+              __func__,
+              id(),
+              mPortId,
+              result);
+    }
 }
 
 void AudioFlinger::MmapThread::MmapTrack::appendDumpHeader(String8& result)

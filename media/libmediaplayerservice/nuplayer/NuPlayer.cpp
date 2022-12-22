@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "NuPlayer"
 
 #include <inttypes.h>
@@ -60,7 +60,7 @@
 #include <gui/Surface.h>
 
 
-#include "ESDS.h"
+#include <media/esds/ESDS.h>
 #include <media/stagefright/Utils.h>
 #include "mediaplayerservice/AVNuExtensions.h"
 
@@ -579,6 +579,13 @@ void NuPlayer::writeTrackInfo(
         reply->writeInt32(isAuto);
         reply->writeInt32(isDefault);
         reply->writeInt32(isForced);
+    } else if (trackType == MEDIA_TRACK_TYPE_AUDIO) {
+        int32_t hapticChannelCount;
+        bool hasHapticChannels = format->findInt32("haptic-channel-count", &hapticChannelCount);
+        reply->writeInt32(hasHapticChannels);
+        if (hasHapticChannels) {
+            reply->writeInt32(hapticChannelCount);
+        }
     }
 }
 

@@ -101,6 +101,7 @@ binder::Status createSurfaceFromGbp(
         int64_t streamUseCase,
         int timestampBase,
         int mirrorMode,
+        int32_t colorSpace,
         bool isPriviledgedClient=false);
 
 //check if format is 10-bit output compatible
@@ -111,6 +112,11 @@ bool is10bitDynamicRangeProfile(int64_t dynamicRangeProfile);
 
 // Check if the device supports a given dynamicRangeProfile
 bool isDynamicRangeProfileSupported(int64_t dynamicRangeProfile, const CameraMetadata& staticMeta);
+
+bool deviceReportsColorSpaces(const CameraMetadata& staticMeta);
+
+bool isColorSpaceSupported(int32_t colorSpace, int32_t format, android_dataspace dataSpace,
+        int64_t dynamicRangeProfile, const CameraMetadata& staticMeta);
 
 bool isStreamUseCaseSupported(int64_t streamUseCase, const CameraMetadata &deviceInfo);
 

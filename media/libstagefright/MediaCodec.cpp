@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #include "hidl/HidlSupport.h"
 #define LOG_TAG "MediaCodec"
 #include <utils/Log.h>
@@ -3374,8 +3374,8 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     MediaCodecInfo::Attributes attr = mCodecInfo
                             ? mCodecInfo->getAttributes()
                             : MediaCodecInfo::Attributes(0);
-                    if (!(attr & MediaCodecInfo::kFlagIsSoftwareOnly)) {
-                        // software codec is currently ignored.
+                    if (mDomain == DOMAIN_VIDEO || !(attr & MediaCodecInfo::kFlagIsSoftwareOnly)) {
+                        // software audio codecs are currently ignored.
                         mResourceManagerProxy->addResource(MediaResource::CodecResource(
                             mFlags & kFlagIsSecure, toMediaResourceSubType(mDomain)));
                     }
@@ -5314,7 +5314,7 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
 MediaCodec::BufferInfo *MediaCodec::peekNextPortBuffer(int32_t portIndex) {
     CHECK(portIndex == kPortIndexInput || portIndex == kPortIndexOutput);
 
-    List<size_t> *availBuffers = &mAvailPortBuffers[portIndex];
+    std::list<size_t> *availBuffers = &mAvailPortBuffers[portIndex];
 
     if (availBuffers->empty()) {
         return nullptr;
@@ -5331,7 +5331,7 @@ ssize_t MediaCodec::dequeuePortBuffer(int32_t portIndex) {
         return -EAGAIN;
     }
 
-    List<size_t> *availBuffers = &mAvailPortBuffers[portIndex];
+    std::list<size_t> *availBuffers = &mAvailPortBuffers[portIndex];
     size_t index = *availBuffers->begin();
     CHECK_EQ(info, &mPortBuffers[portIndex][index]);
     availBuffers->erase(availBuffers->begin());

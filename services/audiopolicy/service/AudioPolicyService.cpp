@@ -272,6 +272,11 @@ void AudioPolicyService::onFirstRef()
         if (hasSpatializer) {
             mSpatializer = Spatializer::create(this);
         }
+        if (mSpatializer == nullptr) {
+            // No spatializer created, signal the reason: NO_INIT a failure, OK means intended.
+            const status_t createStatus = hasSpatializer ? NO_INIT : OK;
+            Spatializer::sendEmptyCreateSpatializerMetricWithStatus(createStatus);
+        }
     }
     AudioSystem::audioPolicyReady();
 }
@@ -516,7 +521,8 @@ void AudioPolicyService::onCheckSpatializer_l()
 
 void AudioPolicyService::doOnCheckSpatializer()
 {
-    ALOGI("%s mSpatializer %p level %d", __func__, mSpatializer.get(), (int)mSpatializer->getLevel());
+    ALOGV("%s mSpatializer %p level %d",
+        __func__, mSpatializer.get(), (int)mSpatializer->getLevel());
 
     if (mSpatializer != nullptr) {
         // Note: mSpatializer != nullptr =>  mAudioPolicyManager != nullptr
@@ -1000,10 +1006,11 @@ void AudioPolicyService::updateUidStates_l()
         //     AND is on TOP or latest started
         //     AND there is no active privacy sensitive capture or call
         //             OR client has CAPTURE_AUDIO_OUTPUT privileged permission
+        bool allowSensitiveCapture =
+            !isSensitiveActive || isTopOrLatestSensitive || current->canCaptureOutput;
         bool allowCapture = !isAssistantOnTop
                 && (isTopOrLatestActive || isTopOrLatestSensitive)
-                && !(isSensitiveActive
-                    && !(isTopOrLatestSensitive || current->canCaptureOutput))
+                && allowSensitiveCapture
                 && canCaptureIfInCallOrCommunication(current);
 
         if (!current->hasOp()) {
@@ -1026,7 +1033,7 @@ void AudioPolicyService::updateUidStates_l()
                 if (source == AUDIO_SOURCE_HOTWORD || source == AUDIO_SOURCE_VOICE_RECOGNITION) {
                     allowCapture = true;
                 }
-            } else if (!(isSensitiveActive && !current->canCaptureOutput)
+            } else if (allowSensitiveCapture
                     && canCaptureIfInCallOrCommunication(current)) {
                 if (isTopOrLatestAssistant
                     && (source == AUDIO_SOURCE_VOICE_RECOGNITION
@@ -1047,7 +1054,7 @@ void AudioPolicyService::updateUidStates_l()
                 if (source == AUDIO_SOURCE_HOTWORD || source == AUDIO_SOURCE_VOICE_RECOGNITION) {
                     allowCapture = true;
                 }
-            } else if (!(isSensitiveActive && !current->canCaptureOutput)
+            } else if (allowSensitiveCapture
                         && canCaptureIfInCallOrCommunication(current)) {
                 if ((source == AUDIO_SOURCE_VOICE_RECOGNITION) || (source == AUDIO_SOURCE_HOTWORD))
                 {
@@ -1062,7 +1069,7 @@ void AudioPolicyService::updateUidStates_l()
             //     OR
             //         Is on TOP AND the source is VOICE_RECOGNITION or HOTWORD
             if (!isAssistantOnTop
-                    && !(isSensitiveActive && !current->canCaptureOutput)
+                    && allowSensitiveCapture
                     && canCaptureIfInCallOrCommunication(current)) {
                 allowCapture = true;
             }
@@ -1341,7 +1348,9 @@ status_t AudioPolicyService::onTransact(
         } else {
             getIAudioPolicyServiceStatistics().event(code, elapsedMs);
         }
-    });
+    }, mediautils::TimeCheck::kDefaultTimeoutDuration,
+    mediautils::TimeCheck::kDefaultSecondChanceDuration,
+    true /* crashOnTimeout */);
 
     switch (code) {
         case SHELL_COMMAND_TRANSACTION: {
@@ -1724,6 +1733,7 @@ void AudioPolicyService::UidPolicy::updateUidLocked(std::unordered_map<uid_t,
 }
 
 bool AudioPolicyService::UidPolicy::isA11yOnTop() {
+    Mutex::Autolock _l(mLock);
     for (const auto &uid : mCachedUids) {
         if (!isA11yUid(uid.first)) {
             continue;

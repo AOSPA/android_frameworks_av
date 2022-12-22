@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cstring>
 #include <memory>
 #include <string>
 #include <sys/wait.h>
@@ -41,6 +42,40 @@
 using namespace android;
 using testing::UnorderedElementsAre;
 using android::content::AttributionSourceState;
+
+namespace {
+
+AudioMixMatchCriterion createUidCriterion(uint32_t uid, bool exclude = false) {
+    AudioMixMatchCriterion criterion;
+    criterion.mValue.mUid = uid;
+    criterion.mRule = exclude ? RULE_EXCLUDE_UID : RULE_MATCH_UID;
+    return criterion;
+}
+
+AudioMixMatchCriterion createUsageCriterion(audio_usage_t usage, bool exclude = false) {
+    AudioMixMatchCriterion criterion;
+    criterion.mValue.mUsage = usage;
+    criterion.mRule = exclude ? RULE_EXCLUDE_ATTRIBUTE_USAGE : RULE_MATCH_ATTRIBUTE_USAGE;
+    return criterion;
+}
+
+AudioMixMatchCriterion createCapturePresetCriterion(audio_source_t source, bool exclude = false) {
+    AudioMixMatchCriterion criterion;
+    criterion.mValue.mSource = source;
+    criterion.mRule = exclude ?
+        RULE_EXCLUDE_ATTRIBUTE_CAPTURE_PRESET : RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET;
+    return criterion;
+}
+
+AudioMixMatchCriterion createSessionIdCriterion(audio_session_t session, bool exclude = false) {
+    AudioMixMatchCriterion criterion;
+    criterion.mValue.mAudioSessionId = session;
+    criterion.mRule = exclude ?
+        RULE_EXCLUDE_AUDIO_SESSION_ID : RULE_MATCH_AUDIO_SESSION_ID;
+    return criterion;
+}
+
+} // namespace
 
 TEST(AudioPolicyManagerTestInit, EngineFailure) {
     AudioPolicyTestClient client;
@@ -125,9 +160,11 @@ class AudioPolicyManagerTest : public testing::Test {
             audio_output_flags_t flags = AUDIO_OUTPUT_FLAG_NONE,
             audio_io_handle_t *output = nullptr,
             audio_port_handle_t *portId = nullptr,
-            audio_attributes_t attr = {});
+            audio_attributes_t attr = {},
+            audio_session_t session = AUDIO_SESSION_NONE);
     void getInputForAttr(
             const audio_attributes_t &attr,
+            audio_session_t session,
             audio_unique_id_t riid,
             audio_port_handle_t *selectedDeviceId,
             audio_format_t format,
@@ -207,7 +244,8 @@ void AudioPolicyManagerTest::getOutputForAttr(
         audio_output_flags_t flags,
         audio_io_handle_t *output,
         audio_port_handle_t *portId,
-        audio_attributes_t attr) {
+        audio_attributes_t attr,
+        audio_session_t session) {
     audio_io_handle_t localOutput;
     if (!output) output = &localOutput;
     *output = AUDIO_IO_HANDLE_NONE;
@@ -226,7 +264,7 @@ void AudioPolicyManagerTest::getOutputForAttr(
     attributionSource.uid = 0;
     attributionSource.token = sp<BBinder>::make();
     ASSERT_EQ(OK, mManager->getOutputForAttr(
-                    &attr, output, AUDIO_SESSION_NONE, &stream, attributionSource, &config, &flags,
+                    &attr, output, session, &stream, attributionSource, &config, &flags,
                     selectedDeviceId, portId, {}, &outputType, &isSpatialized));
     ASSERT_NE(AUDIO_PORT_HANDLE_NONE, *portId);
     ASSERT_NE(AUDIO_IO_HANDLE_NONE, *output);
@@ -234,6 +272,7 @@ void AudioPolicyManagerTest::getOutputForAttr(
 
 void AudioPolicyManagerTest::getInputForAttr(
         const audio_attributes_t &attr,
+        const audio_session_t session,
         audio_unique_id_t riid,
         audio_port_handle_t *selectedDeviceId,
         audio_format_t format,
@@ -255,7 +294,7 @@ void AudioPolicyManagerTest::getInputForAttr(
     attributionSource.uid = 0;
     attributionSource.token = sp<BBinder>::make();
     ASSERT_EQ(OK, mManager->getInputForAttr(
-            &attr, &input, riid, AUDIO_SESSION_NONE, attributionSource, &config, flags,
+            &attr, &input, riid, session, attributionSource, &config, flags,
             selectedDeviceId, &inputType, portId));
     ASSERT_NE(AUDIO_PORT_HANDLE_NONE, *portId);
 }
@@ -888,8 +927,8 @@ TEST_F(AudioPolicyManagerTestWithConfigurationFile, ListAudioPortsHasFlags) {
     audio_source_t source = AUDIO_SOURCE_VOICE_COMMUNICATION;
     audio_attributes_t attr = {
         AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN, source, AUDIO_FLAG_NONE, ""};
-    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, 1, &selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT,
-                    AUDIO_CHANNEL_IN_MONO, 8000, AUDIO_INPUT_FLAG_VOIP_TX, &mixPortId));
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, AUDIO_SESSION_NONE, 1, &selectedDeviceId,
+     AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_MONO, 8000, AUDIO_INPUT_FLAG_VOIP_TX, &mixPortId));
 
     std::vector<audio_port_v7> ports;
     ASSERT_NO_FATAL_FAILURE(
@@ -943,15 +982,13 @@ TEST_F(AudioPolicyManagerTestWithConfigurationFile, HandleDeviceConfigChange) {
     }
 }
 
-using PolicyMixTuple = std::tuple<audio_usage_t, audio_source_t, uint32_t>;
-
 class AudioPolicyManagerTestDynamicPolicy : public AudioPolicyManagerTestWithConfigurationFile {
 protected:
     void TearDown() override;
 
     status_t addPolicyMix(int mixType, int mixFlag, audio_devices_t deviceType,
             std::string mixAddress, const audio_config_t& audioConfig,
-            const std::vector<PolicyMixTuple>& rules);
+            const std::vector<AudioMixMatchCriterion>& matchCriteria);
     void clearPolicyMix();
 
     Vector<AudioMix> mAudioMixes;
@@ -965,15 +1002,8 @@ void AudioPolicyManagerTestDynamicPolicy::TearDown() {
 
 status_t AudioPolicyManagerTestDynamicPolicy::addPolicyMix(int mixType, int mixFlag,
         audio_devices_t deviceType, std::string mixAddress, const audio_config_t& audioConfig,
-        const std::vector<PolicyMixTuple>& rules) {
-    Vector<AudioMixMatchCriterion> myMixMatchCriteria;
-
-    for(const auto &rule: rules) {
-        myMixMatchCriteria.add(AudioMixMatchCriterion(
-                std::get<0>(rule), std::get<1>(rule), std::get<2>(rule)));
-    }
-
-    AudioMix myAudioMix(myMixMatchCriteria, mixType, audioConfig, mixFlag,
+        const std::vector<AudioMixMatchCriterion>& matchCriteria = {}) {
+    AudioMix myAudioMix(matchCriteria, mixType, audioConfig, mixFlag,
             String8(mixAddress.c_str()), 0);
     myAudioMix.mDeviceType = deviceType;
     // Clear mAudioMix before add new one to make sure we don't add already exist mixes.
@@ -1007,13 +1037,13 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, RegisterPolicyMixes) {
 
     // Only capture of playback is allowed in LOOP_BACK &RENDER mode
     ret = addPolicyMix(MIX_TYPE_RECORDERS, MIX_ROUTE_FLAG_LOOP_BACK_AND_RENDER,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig);
     ASSERT_EQ(INVALID_OPERATION, ret);
 
     // Fail due to the device is already connected.
     clearPolicyMix();
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig);
     ASSERT_EQ(INVALID_OPERATION, ret);
 
     // The first time to register policy mixes with valid parameter should succeed.
@@ -1022,8 +1052,7 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, RegisterPolicyMixes) {
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
     audioConfig.sample_rate = k48000SamplingRate;
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig,
-            std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig);
     ASSERT_EQ(NO_ERROR, ret);
     // Registering the same policy mixes should fail.
     ret = mManager->registerPolicyMixes(mAudioMixes);
@@ -1034,19 +1063,19 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, RegisterPolicyMixes) {
     // This will need to be updated if earpiece is added in the test configuration file.
     clearPolicyMix();
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER,
-            AUDIO_DEVICE_OUT_EARPIECE, "", audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_EARPIECE, "", audioConfig);
     ASSERT_EQ(INVALID_OPERATION, ret);
 
     // Registration should fail due to output not found.
     clearPolicyMix();
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig);
     ASSERT_EQ(INVALID_OPERATION, ret);
 
     // The first time to register valid policy mixes should succeed.
     clearPolicyMix();
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER,
-            AUDIO_DEVICE_OUT_SPEAKER, "", audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_SPEAKER, "", audioConfig);
     ASSERT_EQ(NO_ERROR, ret);
     // Registering the same policy mixes should fail.
     ret = mManager->registerPolicyMixes(mAudioMixes);
@@ -1061,8 +1090,7 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, UnregisterPolicyMixes) {
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
     audioConfig.sample_rate = k48000SamplingRate;
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig,
-            std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig);
     ASSERT_EQ(NO_ERROR, ret);
 
     // After successfully registering policy mixes, it should be able to unregister.
@@ -1072,6 +1100,37 @@ TEST_F(AudioPolicyManagerTestDynamicPolicy, UnregisterPolicyMixes) {
     // After unregistering policy mixes successfully, it should fail unregistering
     // the same policy mixes as they are not registered.
     ret = mManager->unregisterPolicyMixes(mAudioMixes);
+    ASSERT_EQ(INVALID_OPERATION, ret);
+}
+
+TEST_F(AudioPolicyManagerTestDynamicPolicy, RegisterPolicyWithConsistentMixSucceeds) {
+    audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
+    audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
+    audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
+    audioConfig.sample_rate = k48000SamplingRate;
+
+    std::vector<AudioMixMatchCriterion> mixMatchCriteria = {
+        createUidCriterion(/*uid=*/42),
+        createUsageCriterion(AUDIO_USAGE_MEDIA, /*exclude=*/true)};
+    status_t ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
+                                AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig,
+                                mixMatchCriteria);
+    ASSERT_EQ(NO_ERROR, ret);
+}
+
+TEST_F(AudioPolicyManagerTestDynamicPolicy, RegisterPolicyWithInconsistentMixFails) {
+    audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
+    audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
+    audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
+    audioConfig.sample_rate = k48000SamplingRate;
+
+    std::vector<AudioMixMatchCriterion> mixMatchCriteria = {
+        createUidCriterion(/*uid=*/42),
+        createUidCriterion(/*uid=*/1235, /*exclude=*/true),
+        createUsageCriterion(AUDIO_USAGE_MEDIA, /*exclude=*/true)};
+    status_t ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
+                                AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig,
+                                mixMatchCriteria);
     ASSERT_EQ(INVALID_OPERATION, ret);
 }
 
@@ -1299,26 +1358,52 @@ TEST_F(AudioPolicyManagerTestDPNoRemoteSubmixModule, RegistrationFailure) {
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
     audioConfig.sample_rate = k48000SamplingRate;
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, "", audioConfig);
     ASSERT_EQ(INVALID_OPERATION, ret);
 
     ret = mManager->unregisterPolicyMixes(mAudioMixes);
     ASSERT_EQ(INVALID_OPERATION, ret);
 }
 
+struct DPTestParam {
+    DPTestParam(const std::vector<AudioMixMatchCriterion>& mixCriteria,
+                bool expected_match = false)
+     : mixCriteria(mixCriteria), attributes(defaultAttr), session(AUDIO_SESSION_NONE),
+       expected_match(expected_match) {}
+
+    DPTestParam& withUsage(audio_usage_t usage) {
+        attributes.usage = usage;
+        return *this;
+    }
+
+    DPTestParam& withTags(const char *tags) {
+        std::strncpy(attributes.tags, tags, sizeof(attributes.tags));
+        return *this;
+    }
+
+    DPTestParam& withSource(audio_source_t source) {
+        attributes.source = source;
+        return *this;
+    }
+
+    DPTestParam& withSessionId(audio_session_t sessionId) {
+        session = sessionId;
+        return *this;
+    }
+
+    std::vector<AudioMixMatchCriterion> mixCriteria;
+    audio_attributes_t attributes;
+    audio_session_t session;
+    bool expected_match;
+};
+
 class AudioPolicyManagerTestDPPlaybackReRouting : public AudioPolicyManagerTestDynamicPolicy,
-        public testing::WithParamInterface<audio_attributes_t> {
+        public testing::WithParamInterface<DPTestParam> {
 protected:
     void SetUp() override;
     void TearDown() override;
 
     std::unique_ptr<RecordingActivityTracker> mTracker;
-
-    std::vector<PolicyMixTuple> mUsageRules = {
-            {AUDIO_USAGE_MEDIA, AUDIO_SOURCE_DEFAULT, RULE_MATCH_ATTRIBUTE_USAGE},
-            {AUDIO_USAGE_ALARM, AUDIO_SOURCE_DEFAULT, RULE_MATCH_ATTRIBUTE_USAGE}
-    };
-
     struct audio_port_v7 mInjectionPort;
     audio_port_handle_t mPortId = AUDIO_PORT_HANDLE_NONE;
 };
@@ -1332,8 +1417,10 @@ void AudioPolicyManagerTestDPPlaybackReRouting::SetUp() {
     audioConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
     audioConfig.sample_rate = k48000SamplingRate;
+
+    DPTestParam param = GetParam();
     status_t ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_LOOP_BACK,
-            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig, mUsageRules);
+            AUDIO_DEVICE_OUT_REMOTE_SUBMIX, mMixAddress, audioConfig, param.mixCriteria);
     ASSERT_EQ(NO_ERROR, ret);
 
     struct audio_port_v7 extractionPort;
@@ -1346,8 +1433,9 @@ void AudioPolicyManagerTestDPPlaybackReRouting::SetUp() {
         AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN, source, AUDIO_FLAG_NONE, ""};
     std::string tags = "addr=" + mMixAddress;
     strncpy(attr.tags, tags.c_str(), AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - 1);
-    getInputForAttr(attr, mTracker->getRiid(), &selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT,
-            AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate, AUDIO_INPUT_FLAG_NONE, &mPortId);
+    getInputForAttr(attr, param.session, mTracker->getRiid(), &selectedDeviceId,
+                    AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate,
+                    AUDIO_INPUT_FLAG_NONE, &mPortId);
     ASSERT_EQ(NO_ERROR, mManager->startInput(mPortId));
     ASSERT_EQ(extractionPort.id, selectedDeviceId);
 
@@ -1360,151 +1448,169 @@ void AudioPolicyManagerTestDPPlaybackReRouting::TearDown() {
     AudioPolicyManagerTestDynamicPolicy::TearDown();
 }
 
-TEST_F(AudioPolicyManagerTestDPPlaybackReRouting, InitSuccess) {
-    // SetUp must finish with no assertions
-}
-
-TEST_F(AudioPolicyManagerTestDPPlaybackReRouting, Dump) {
-    dumpToLog();
-}
-
 TEST_P(AudioPolicyManagerTestDPPlaybackReRouting, PlaybackReRouting) {
-    const audio_attributes_t attr = GetParam();
-    const audio_usage_t usage = attr.usage;
+    const DPTestParam param = GetParam();
+    const audio_attributes_t& attr = param.attributes;
 
     audio_port_handle_t playbackRoutedPortId = AUDIO_PORT_HANDLE_NONE;
     getOutputForAttr(&playbackRoutedPortId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
             k48000SamplingRate, AUDIO_OUTPUT_FLAG_NONE, nullptr /*output*/, nullptr /*portId*/,
-            attr);
-    if (std::find_if(begin(mUsageRules), end(mUsageRules), [&usage](const auto &usageRule) {
-            return (std::get<0>(usageRule) == usage) &&
-            (std::get<2>(usageRule) == RULE_MATCH_ATTRIBUTE_USAGE);}) != end(mUsageRules) ||
-            (strncmp(attr.tags, "addr=", strlen("addr=")) == 0 &&
-                    strncmp(attr.tags + strlen("addr="), mMixAddress.c_str(),
-                    AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - strlen("addr=") - 1) == 0)) {
+            attr, param.session);
+    if (param.expected_match) {
         EXPECT_EQ(mInjectionPort.id, playbackRoutedPortId);
     } else {
         EXPECT_NE(mInjectionPort.id, playbackRoutedPortId);
     }
 }
 
-INSTANTIATE_TEST_CASE_P(
-        PlaybackReroutingUsageMatch,
-        AudioPolicyManagerTestDPPlaybackReRouting,
-        testing::Values(
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_MEDIA,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_ALARM,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""}
-                )
-        );
+const std::vector<AudioMixMatchCriterion> USAGE_MEDIA_ALARM_CRITERIA = {
+            createUsageCriterion(AUDIO_USAGE_MEDIA),
+            createUsageCriterion(AUDIO_USAGE_ALARM)
+};
 
-INSTANTIATE_TEST_CASE_P(
-        PlaybackReroutingAddressPriorityMatch,
-        AudioPolicyManagerTestDPPlaybackReRouting,
-        testing::Values(
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_MEDIA,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_VOICE_COMMUNICATION,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_ALARM,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_NOTIFICATION,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_NOTIFICATION_COMMUNICATION_REQUEST,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_NOTIFICATION_COMMUNICATION_INSTANT,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_NOTIFICATION_COMMUNICATION_DELAYED,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_NOTIFICATION_EVENT,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                    AUDIO_USAGE_ASSISTANCE_SONIFICATION,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_GAME,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_VIRTUAL_SOURCE,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_ASSISTANT,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_SPEECH, AUDIO_USAGE_ASSISTANT,
-                    AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, "addr=remote_submix_media"}
-                )
-        );
+INSTANTIATE_TEST_SUITE_P(
+    PlaybackReroutingUsageMatch,
+    AudioPolicyManagerTestDPPlaybackReRouting,
+    testing::Values(
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_MEDIA),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_MEDIA).withTags("addr=other"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ALARM),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_VOICE_COMMUNICATION),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_NOTIFICATION),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_COMMUNICATION_REQUEST),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_COMMUNICATION_INSTANT),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_COMMUNICATION_DELAYED),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_EVENT),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_ASSISTANCE_SONIFICATION),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_GAME),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ false)
+            .withUsage(AUDIO_USAGE_ASSISTANT)));
 
-INSTANTIATE_TEST_CASE_P(
-        PlaybackReroutingUnHandledUsages,
-        AudioPolicyManagerTestDPPlaybackReRouting,
-        testing::Values(
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_VOICE_COMMUNICATION,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_NOTIFICATION,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_NOTIFICATION_COMMUNICATION_REQUEST,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_NOTIFICATION_COMMUNICATION_INSTANT,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_NOTIFICATION_COMMUNICATION_DELAYED,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_NOTIFICATION_EVENT,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC,
-                                     AUDIO_USAGE_ASSISTANCE_SONIFICATION,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_GAME,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_MUSIC, AUDIO_USAGE_ASSISTANT,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_SPEECH, AUDIO_USAGE_ASSISTANT,
-                                     AUDIO_SOURCE_DEFAULT, AUDIO_FLAG_NONE, ""}
-                )
-        );
+INSTANTIATE_TEST_SUITE_P(
+    PlaybackReroutingAddressPriorityMatch,
+    AudioPolicyManagerTestDPPlaybackReRouting,
+    testing::Values(
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_MEDIA).withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_VOICE_COMMUNICATION).withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ALARM)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_NOTIFICATION)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_COMMUNICATION_REQUEST)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_COMMUNICATION_DELAYED)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_NOTIFICATION_EVENT)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANCE_SONIFICATION)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_GAME)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_VIRTUAL_SOURCE)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANT)
+            .withTags("addr=remote_submix_media"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANT)
+            .withTags("sometag;addr=remote_submix_media;othertag=somevalue"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANT)
+            .withTags("addr=remote_submix_media;othertag"),
+        DPTestParam(USAGE_MEDIA_ALARM_CRITERIA, /*expected_match=*/ true)
+            .withUsage(AUDIO_USAGE_ASSISTANT)
+            .withTags("sometag;othertag;addr=remote_submix_media")));
+
+static constexpr audio_session_t TEST_SESSION_ID = static_cast<audio_session_t>(42);
+static constexpr audio_session_t OTHER_SESSION_ID = static_cast<audio_session_t>(77);
+
+INSTANTIATE_TEST_SUITE_P(
+    PlaybackReRoutingWithSessionId,
+    AudioPolicyManagerTestDPPlaybackReRouting,
+    testing::Values(
+        // Mix is matched because the session id matches the one specified by the mix rule.
+        DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID)},
+                    /*expected_match=*/ true)
+            .withSessionId(TEST_SESSION_ID),
+        // Mix is not matched because the session id doesn't match the one specified
+        // by the mix rule.
+        DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID)},
+                    /*expected_match=*/ false)
+            .withSessionId(OTHER_SESSION_ID),
+        // Mix is matched, the session id doesn't match the one specified by rule,
+        // but there's address specified in the tags which takes precedence.
+        DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID)},
+                    /*expected_match=*/ true)
+            .withSessionId(OTHER_SESSION_ID).withTags("addr=remote_submix_media"),
+        // Mix is matched, both the session id and the usage match ones specified by mix rule.
+        DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID),
+                                      createUsageCriterion(AUDIO_USAGE_MEDIA)},
+                    /*expected_match=*/ true)
+            .withSessionId(TEST_SESSION_ID).withUsage(AUDIO_USAGE_MEDIA),
+        // Mix is not matched, the session id matches the one specified by mix rule,
+        // but usage does not.
+        DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID),
+                                      createUsageCriterion(AUDIO_USAGE_MEDIA)},
+                    /*expected_match=*/ false)
+                    .withSessionId(TEST_SESSION_ID).withUsage(AUDIO_USAGE_GAME),
+        // Mix is not matched, the usage matches the one specified by mix rule,
+        // but the session id is excluded.
+        DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID, /*exclude=*/ true),
+                                     createUsageCriterion(AUDIO_USAGE_MEDIA)},
+                    /*expected_match=*/ false)
+                    .withSessionId(TEST_SESSION_ID).withUsage(AUDIO_USAGE_MEDIA)));
 
 class AudioPolicyManagerTestDPMixRecordInjection : public AudioPolicyManagerTestDynamicPolicy,
-        public testing::WithParamInterface<audio_attributes_t> {
+        public testing::WithParamInterface<DPTestParam> {
 protected:
     void SetUp() override;
     void TearDown() override;
 
     std::unique_ptr<RecordingActivityTracker> mTracker;
-
-    std::vector<PolicyMixTuple> mSourceRules = {
-        {AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_CAMCORDER, RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET},
-        {AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_MIC, RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET},
-        {AUDIO_USAGE_UNKNOWN, AUDIO_SOURCE_VOICE_COMMUNICATION, RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET}
-    };
-
     struct audio_port_v7 mExtractionPort;
     audio_port_handle_t mPortId = AUDIO_PORT_HANDLE_NONE;
 };
@@ -1518,8 +1624,10 @@ void AudioPolicyManagerTestDPMixRecordInjection::SetUp() {
     audioConfig.channel_mask = AUDIO_CHANNEL_IN_STEREO;
     audioConfig.format = AUDIO_FORMAT_PCM_16_BIT;
     audioConfig.sample_rate = k48000SamplingRate;
+
+    DPTestParam param = GetParam();
     status_t ret = addPolicyMix(MIX_TYPE_RECORDERS, MIX_ROUTE_FLAG_LOOP_BACK,
-            AUDIO_DEVICE_IN_REMOTE_SUBMIX, mMixAddress, audioConfig, mSourceRules);
+            AUDIO_DEVICE_IN_REMOTE_SUBMIX, mMixAddress, audioConfig, param.mixCriteria);
     ASSERT_EQ(NO_ERROR, ret);
 
     struct audio_port_v7 injectionPort;
@@ -1546,72 +1654,94 @@ void AudioPolicyManagerTestDPMixRecordInjection::TearDown() {
     AudioPolicyManagerTestDynamicPolicy::TearDown();
 }
 
-TEST_F(AudioPolicyManagerTestDPMixRecordInjection, InitSuccess) {
-    // SetUp mush finish with no assertions.
-}
-
-TEST_F(AudioPolicyManagerTestDPMixRecordInjection, Dump) {
-    dumpToLog();
-}
-
 TEST_P(AudioPolicyManagerTestDPMixRecordInjection, RecordingInjection) {
-    const audio_attributes_t attr = GetParam();
-    const audio_source_t source = attr.source;
+    const DPTestParam param = GetParam();
 
     audio_port_handle_t captureRoutedPortId = AUDIO_PORT_HANDLE_NONE;
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
-    getInputForAttr(attr, mTracker->getRiid(), &captureRoutedPortId, AUDIO_FORMAT_PCM_16_BIT,
-            AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate, AUDIO_INPUT_FLAG_NONE, &portId);
-    if (std::find_if(begin(mSourceRules), end(mSourceRules), [&source](const auto &sourceRule) {
-            return (std::get<1>(sourceRule) == source) &&
-            (std::get<2>(sourceRule) == RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET);})
-            != end(mSourceRules)) {
+    getInputForAttr(param.attributes, param.session, mTracker->getRiid(), &captureRoutedPortId,
+        AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate,
+        AUDIO_INPUT_FLAG_NONE, &portId);
+    if (param.expected_match) {
         EXPECT_EQ(mExtractionPort.id, captureRoutedPortId);
     } else {
         EXPECT_NE(mExtractionPort.id, captureRoutedPortId);
     }
 }
 
+const std::vector<AudioMixMatchCriterion> SOURCE_CAM_MIC_VOICE_CRITERIA = {
+        createCapturePresetCriterion(AUDIO_SOURCE_CAMCORDER),
+        createCapturePresetCriterion(AUDIO_SOURCE_MIC),
+        createCapturePresetCriterion(AUDIO_SOURCE_VOICE_COMMUNICATION)
+};
+
 // No address priority rule for remote recording, address is a "don't care"
 INSTANTIATE_TEST_CASE_P(
-        RecordInjectionSourceMatch,
+        RecordInjectionSource,
         AudioPolicyManagerTestDPMixRecordInjection,
         testing::Values(
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_CAMCORDER, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_CAMCORDER, AUDIO_FLAG_NONE,
-                                     "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_MIC, AUDIO_FLAG_NONE,
-                                     "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_MIC, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_VOICE_COMMUNICATION, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_VOICE_COMMUNICATION, AUDIO_FLAG_NONE,
-                                     "addr=remote_submix_media"}
-                )
-        );
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ true)
+                .withSource(AUDIO_SOURCE_CAMCORDER),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ true)
+                .withSource(AUDIO_SOURCE_CAMCORDER)
+                .withTags("addr=remote_submix_media"),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ true)
+                .withSource(AUDIO_SOURCE_MIC),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ true)
+                .withSource(AUDIO_SOURCE_MIC)
+                .withTags("addr=remote_submix_media"),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ true)
+                .withSource(AUDIO_SOURCE_VOICE_COMMUNICATION),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ true)
+                .withSource(AUDIO_SOURCE_VOICE_COMMUNICATION)
+                .withTags("addr=remote_submix_media"),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ false)
+                .withSource(AUDIO_SOURCE_VOICE_RECOGNITION),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ false)
+                .withSource(AUDIO_SOURCE_VOICE_RECOGNITION)
+                .withTags("addr=remote_submix_media"),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ false)
+                .withSource(AUDIO_SOURCE_HOTWORD),
+            DPTestParam(SOURCE_CAM_MIC_VOICE_CRITERIA, /*expected_match=*/ false)
+                .withSource(AUDIO_SOURCE_HOTWORD)
+                .withTags("addr=remote_submix_media")));
 
-// No address priority rule for remote recording
 INSTANTIATE_TEST_CASE_P(
-        RecordInjectionSourceNotMatch,
+        RecordInjectionWithSessionId,
         AudioPolicyManagerTestDPMixRecordInjection,
         testing::Values(
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_VOICE_RECOGNITION, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_HOTWORD, AUDIO_FLAG_NONE, ""},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_VOICE_RECOGNITION, AUDIO_FLAG_NONE,
-                                     "addr=remote_submix_media"},
-                (audio_attributes_t){AUDIO_CONTENT_TYPE_UNKNOWN, AUDIO_USAGE_UNKNOWN,
-                                     AUDIO_SOURCE_HOTWORD, AUDIO_FLAG_NONE,
-                                     "addr=remote_submix_media"}
-                )
-        );
+            // Mix is matched because the session id matches the one specified by the mix rule.
+            DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID)},
+                        /*expected_match=*/ true)
+                .withSessionId(TEST_SESSION_ID),
+            // Mix is not matched because the session id doesn't match the one specified
+            // by the mix rule.
+            DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID)},
+                        /*expected_match=*/ false)
+                .withSessionId(OTHER_SESSION_ID),
+            // Mix is not matched, the session id doesn't match the one specified by rule,
+            // but tand address specified in the tags is ignored for recorder mix.
+            DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID)},
+                        /*expected_match=*/ false)
+                .withSessionId(OTHER_SESSION_ID).withTags("addr=remote_submix_media"),
+            // Mix is matched, both the session id and the source match ones specified by mix rule
+            DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID),
+                                          createCapturePresetCriterion(AUDIO_SOURCE_CAMCORDER)},
+                        /*expected_match=*/ true)
+                .withSessionId(TEST_SESSION_ID).withSource(AUDIO_SOURCE_CAMCORDER),
+            // Mix is not matched, the session id matches the one specified by mix rule,
+            // but source does not.
+            DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID),
+                                          createCapturePresetCriterion(AUDIO_SOURCE_CAMCORDER)},
+                        /*expected_match=*/ false)
+                .withSessionId(TEST_SESSION_ID).withSource(AUDIO_SOURCE_MIC),
+            // Mix is not matched, the source matches the one specified by mix rule,
+            // but the session id is excluded.
+            DPTestParam(/*mixCriteria=*/ {createSessionIdCriterion(TEST_SESSION_ID,
+                                                                       /*exclude=*/ true),
+                                          createCapturePresetCriterion(AUDIO_SOURCE_MIC)},
+                        /*expected_match=*/ false)
+                .withSessionId(TEST_SESSION_ID).withSource(AUDIO_SOURCE_MIC)));
 
 using DeviceConnectionTestParams =
         std::tuple<audio_devices_t /*type*/, std::string /*name*/, std::string /*address*/>;
@@ -1714,8 +1844,9 @@ TEST_P(AudioPolicyManagerTestDeviceConnection, ExplicitlyRoutingAfterConnection)
                 k48000SamplingRate, AUDIO_OUTPUT_FLAG_NONE);
     } else if (audio_is_input_device(type)) {
         RecordingActivityTracker tracker;
-        getInputForAttr({}, tracker.getRiid(), &routedPortId, AUDIO_FORMAT_PCM_16_BIT,
-                AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate, AUDIO_INPUT_FLAG_NONE);
+        getInputForAttr({}, AUDIO_SESSION_NONE, tracker.getRiid(), &routedPortId,
+         AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate,
+         AUDIO_INPUT_FLAG_NONE);
     }
     ASSERT_EQ(devicePort.id, routedPortId);
 
@@ -1801,7 +1932,7 @@ TEST_F(AudioPolicyManagerCarTest, GetOutputForAttrAtmosOutputAfterRegisteringPol
     audio_config_t audioConfig = AUDIO_CONFIG_INITIALIZER;
     const std::string kTestBusMediaOutput = "bus0_media_out";
     ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER,
-            AUDIO_DEVICE_OUT_BUS, kTestBusMediaOutput, audioConfig, std::vector<PolicyMixTuple>());
+            AUDIO_DEVICE_OUT_BUS, kTestBusMediaOutput, audioConfig);
     ASSERT_EQ(NO_ERROR, ret);
 
     audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;

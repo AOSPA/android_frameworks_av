@@ -33,75 +33,6 @@ cc_library_headers {
     },
 }
 
-cc_library_static {
-    name: "libstagefright_esds",
-    apex_available: [
-        "//apex_available:platform",
-        "com.android.media",
-    ],
-    min_sdk_version: "29",
-
-    srcs: ["ESDS.cpp"],
-
-    cflags: [
-        "-Werror",
-        "-Wall",
-    ],
-    sanitize: {
-        misc_undefined: [
-            "signed-integer-overflow",
-        ],
-        cfi: true,
-    },
-    shared_libs: [
-        "libstagefright_foundation",
-        "libutils"
-    ],
-    host_supported: true,
-    target: {
-        darwin: {
-            enabled: false,
-        },
-    },
-}
-
-cc_library_static {
-    name: "libstagefright_metadatautils",
-    apex_available: [
-        "//apex_available:platform",
-        "com.android.media",
-    ],
-    min_sdk_version: "29",
-
-    srcs: ["MetaDataUtils.cpp"],
-
-    cflags: [
-        "-Werror",
-        "-Wall",
-    ],
-    sanitize: {
-        misc_undefined: [
-            "signed-integer-overflow",
-        ],
-        cfi: true,
-    },
-
-    header_libs: [
-        "libaudioclient_headers",
-        "libstagefright_foundation_headers",
-        "media_ndk_headers",
-    ],
-
-    host_supported: true,
-    target: {
-        darwin: {
-            enabled: false,
-        },
-    },
-
-    export_include_dirs: ["include"],
-}
-
 cc_library_shared {
     name: "libstagefright_codecbase",
 
@@ -164,6 +95,10 @@ cc_library_static {
 
     shared_libs: [
         "liblog",
+    ],
+
+    static_libs: [
+        "libstagefright_esds",
     ],
 
     export_include_dirs: [
@@ -389,7 +324,6 @@ cc_library {
         "libstagefright_webm",
         "libstagefright_timedtext",
         "libogg",
-        "libwebm",
         "libstagefright_id3",
         "framework-permission-aidl-cpp",
         "libmediandk_format",
@@ -425,7 +359,7 @@ cc_library {
     include_dirs: [
         "frameworks/av/media/libavextensions",
         "frameworks/av/media/libmediaextractor",
-        "frameworks/av/media/libstagefright/mpeg2ts",
+        "frameworks/av/media/module/mpeg2ts",
     ],
 
     cflags: [

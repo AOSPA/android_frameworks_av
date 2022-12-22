@@ -850,7 +850,8 @@ void AudioPolicyManager::connectTelephonyTxAudioSource(
     ALOGV("%s between source %s and sink %s", __func__,
             srcDevice->toString().c_str(), sinkDevice->toString().c_str());
     auto callTxSourceClientPortId = PolicyAudioPort::getNextUniqueId();
-    const audio_attributes_t aa = { .source = AUDIO_SOURCE_VOICE_COMMUNICATION };
+    const auto aa = mEngine->getAttributesForStreamType(AUDIO_STREAM_VOICE_CALL);
+
     struct audio_port_config source = {};
     srcDevice->toAudioPortConfig(&source);
     mCallTxSourceClient = new InternalSourceClientDescriptor(
@@ -1252,8 +1253,8 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         .channel_mask = config->channel_mask,
         .format = config->format,
     };
-    status = mPolicyMixes.getOutputForAttr(*resultAttr, clientConfig, uid, *flags, primaryMix,
-                                           secondaryMixes);
+    status = mPolicyMixes.getOutputForAttr(*resultAttr, clientConfig, uid, session, *flags,
+                                           primaryMix, secondaryMixes);
     if (status != OK) {
         return status;
     }
@@ -2715,7 +2716,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
     *inputType = API_INPUT_INVALID;
 
     if (attributes.source == AUDIO_SOURCE_REMOTE_SUBMIX &&
-            strncmp(attributes.tags, "addr=", strlen("addr=")) == 0) {
+            extractAddressFromAudioAttributes(attributes).has_value()) {
         status = mPolicyMixes.getInputMixForAttr(attributes, &policyMix);
         if (status != NO_ERROR) {
             ALOGW("%s could not find input mix for attr %s",
@@ -2743,7 +2744,7 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
         } else {
             // Prevent from storing invalid requested device id in clients
             requestedDeviceId = AUDIO_PORT_HANDLE_NONE;
-            device = mEngine->getInputDeviceForAttributes(attributes, uid, &policyMix);
+            device = mEngine->getInputDeviceForAttributes(attributes, uid, session, &policyMix);
             ALOGV_IF(device != nullptr, "%s found device type is 0x%X",
                 __FUNCTION__, device->type());
         }
@@ -3153,7 +3154,8 @@ void AudioPolicyManager::checkCloseInputs() {
             bool close = false;
             for (const auto& client : input->clientsList()) {
                 sp<DeviceDescriptor> device =
-                    mEngine->getInputDeviceForAttributes(client->attributes(), client->uid());
+                    mEngine->getInputDeviceForAttributes(client->attributes(), client->uid(),
+                                                         client->session());
                 if (!input->supportedDevices().contains(device)) {
                     close = true;
                     break;
@@ -4389,6 +4391,9 @@ audio_direct_mode_t AudioPolicyManager::getDirectPlaybackSupport(const audio_att
 
 status_t AudioPolicyManager::getDirectProfilesForAttributes(const audio_attributes_t* attr,
                                                 AudioProfileVector& audioProfilesVector) {
+    if (mEffects.isNonOffloadableEffectEnabled()) {
+        return OK;
+    }
     DeviceVector devices;
     status_t status = getDevicesForAttributes(*attr, devices, false /* forVolume */);
     if (status != OK) {
@@ -4791,7 +4796,7 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
                 // In case of Hw bridge, it is a Work Around. The mixPort used is the one declared
                 // in config XML to reach the sink so that is can be declared as available.
                 audio_io_handle_t output = AUDIO_IO_HANDLE_NONE;
-                sp<SwAudioOutputDescriptor> outputDesc = nullptr;
+                sp<SwAudioOutputDescriptor> outputDesc;
                 if (!sourceDesc->isInternal()) {
                     // take care of dynamic routing for SwOutput selection,
                     audio_attributes_t attributes = sourceDesc->attributes();
@@ -4824,7 +4829,8 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
                         ALOGE("%s output is duplicated", __func__);
                         return INVALID_OPERATION;
                     }
-                    sourceDesc->setSwOutput(outputDesc);
+                    bool closeOutput = outputDesc->mDirectOpenCount != 0;
+                    sourceDesc->setSwOutput(outputDesc, closeOutput);
                 } else {
                     // Same for "raw patches" aka created from createAudioPatch API
                     SortedVector<audio_io_handle_t> outputs =
@@ -4843,7 +4849,7 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
                               __func__, sinkDevice->toString().c_str());
                         return INVALID_OPERATION;
                     }
-                    sourceDesc->setSwOutput(outputDesc);
+                    sourceDesc->setSwOutput(outputDesc, /* closeOutput= */ false);
                 }
                 // create a software bridge in PatchPanel if:
                 // - source and sink devices are on different HW modules OR
@@ -4865,7 +4871,8 @@ status_t AudioPolicyManager::createAudioPatchInternal(const struct audio_patch *
                         audio_port_config srcMixPortConfig = {};
                         outputDesc->toAudioPortConfig(&srcMixPortConfig, nullptr);
                         // for volume control, we may need a valid stream
-                        srcMixPortConfig.ext.mix.usecase.stream = !sourceDesc->isInternal() ?
+                        srcMixPortConfig.ext.mix.usecase.stream =
+                            (!sourceDesc->isInternal() || isCallTxAudioSource(sourceDesc)) ?
                                     mEngine->getStreamTypeForAttributes(sourceDesc->attributes()) :
                                     AUDIO_STREAM_PATCH;
                         patchBuilder.addSource(srcMixPortConfig);
@@ -4972,17 +4979,29 @@ status_t AudioPolicyManager::releaseAudioPatchInternal(audio_patch_handle_t hand
                 // releaseOutput has already called closeOutput in case of direct output
                 return NO_ERROR;
             }
-            if (!outputDesc->isActive() && !sourceDesc->useSwBridge()) {
-                resetOutputDevice(outputDesc);
-            } else {
-                // Reuse patch handle if still valid / do not force rerouting if still routed
-                patchHandle = outputDesc->getPatchHandle();
-                setOutputDevices(outputDesc,
-                                 getNewOutputDevices(outputDesc, true /*fromCache*/),
-                                 patchHandle == AUDIO_PATCH_HANDLE_NONE, /*force*/
-                                 0,
-                                 patchHandle == AUDIO_PATCH_HANDLE_NONE ? nullptr : &patchHandle);
-            }
+            patchHandle = outputDesc->getPatchHandle();
+            // When a Sw bridge is released, the mixer used by this bridge will release its
+            // patch at AudioFlinger side. Hence, the mixer audio patch must be recreated
+            // Reuse patch handle to force audio flinger removing initial mixer patch removal
+            // updating hal patch handle (prevent leaks).
+            // While using a HwBridge, force reconsidering device only if not reusing an existing
+            // output and no more activity on output (will force to close).
+            bool force = sourceDesc->useSwBridge() ||
+                    (sourceDesc->canCloseOutput() && !outputDesc->isActive());
+            // APM pattern is to have always outputs opened / patch realized for reachable devices.
+            // Update device may result to NONE (empty), coupled with force, it releases the patch.
+            // Reconsider device only for cases:
+            //      1 / Active Output
+            //      2 / Inactive Output previously hosting HwBridge
+            //      3 / Inactive Output previously hosting SwBridge that can be closed.
+            bool updateDevice = outputDesc->isActive() || !sourceDesc->useSwBridge() ||
+                    sourceDesc->canCloseOutput();
+            setOutputDevices(outputDesc,
+                             updateDevice ? getNewOutputDevices(outputDesc, true /*fromCache*/) :
+                                            outputDesc->devices(),
+                             force,
+                             0,
+                             patchHandle == AUDIO_PATCH_HANDLE_NONE ? nullptr : &patchHandle);
         } else {
             return BAD_VALUE;
         }
@@ -6623,7 +6642,7 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
             }
             sp<AudioPolicyMix> primaryMix;
             status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->config(),
-                    client->uid(), client->flags(), primaryMix, nullptr);
+                    client->uid(), client->session(), client->flags(), primaryMix, nullptr);
             if (status != OK) {
                 continue;
             }
@@ -6738,7 +6757,7 @@ void AudioPolicyManager::checkSecondaryOutputs() {
             sp<AudioPolicyMix> primaryMix;
             std::vector<sp<AudioPolicyMix>> secondaryMixes;
             status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->config(),
-                    client->uid(), client->flags(), primaryMix, &secondaryMixes);
+                    client->uid(), client->session(), client->flags(), primaryMix, &secondaryMixes);
             std::vector<sp<SwAudioOutputDescriptor>> secondaryDescs;
             for (auto &secondaryMix : secondaryMixes) {
                 sp<SwAudioOutputDescriptor> outputDesc = secondaryMix->getOutput();
@@ -6949,22 +6968,23 @@ sp<DeviceDescriptor> AudioPolicyManager::getNewInputDevice(
     // a null sp<>, causing the patch on the input stream to be released.
     audio_attributes_t attributes;
     uid_t uid;
+    audio_session_t session;
     sp<RecordClientDescriptor> topClient = inputDesc->getHighestPriorityClient();
     if (topClient != nullptr) {
         attributes = topClient->attributes();
         uid = topClient->uid();
+        session = topClient->session();
     } else {
         attributes = { .source = AUDIO_SOURCE_DEFAULT };
         uid = 0;
+        session = AUDIO_SESSION_NONE;
     }
 
-    if ((attributes.source == AUDIO_SOURCE_DEFAULT ||
-        attributes.source != AUDIO_SOURCE_ECHO_REFERENCE)
-        && isInCall()) {
+    if (attributes.source == AUDIO_SOURCE_DEFAULT && isInCall()) {
         attributes.source = AUDIO_SOURCE_VOICE_COMMUNICATION;
     }
     if (attributes.source != AUDIO_SOURCE_DEFAULT) {
-        device = mEngine->getInputDeviceForAttributes(attributes, uid);
+        device = mEngine->getInputDeviceForAttributes(attributes, uid, session);
     }
 
     return device;
@@ -8198,7 +8218,7 @@ status_t AudioPolicyManager::getDevicesForAttributes(
     // audio routing, only used for duplication for playback capture)
     sp<AudioPolicyMix> policyMix;
     status_t status = mPolicyMixes.getOutputForAttr(attr, AUDIO_CONFIG_BASE_INITIALIZER,
-            0 /*uid unknown here*/, AUDIO_OUTPUT_FLAG_NONE, policyMix,
+            0 /*uid unknown here*/, AUDIO_SESSION_NONE, AUDIO_OUTPUT_FLAG_NONE, policyMix,
             nullptr /* secondaryMixes */);
     if (status != OK) {
         return status;

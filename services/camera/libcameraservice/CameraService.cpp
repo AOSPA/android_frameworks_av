@@ -206,6 +206,7 @@ status_t CameraService::enumerateProviders() {
     status_t res;
 
     std::vector<std::string> deviceIds;
+    std::unordered_map<std::string, std::set<std::string>> unavailPhysicalIds;
     {
         Mutex::Autolock l(mServiceLock);
 
@@ -236,7 +237,7 @@ status_t CameraService::enumerateProviders() {
             ALOGE("Failed to enumerate flash units: %s (%d)", strerror(-res), res);
         }
 
-        deviceIds = mCameraProviderManager->getCameraDeviceIds();
+        deviceIds = mCameraProviderManager->getCameraDeviceIds(&unavailPhysicalIds);
     }
 
 
@@ -244,6 +245,12 @@ status_t CameraService::enumerateProviders() {
         String8 id8 = String8(cameraId.c_str());
         if (getCameraState(id8) == nullptr) {
             onDeviceStatusChanged(id8, CameraDeviceStatus::PRESENT);
+        }
+        if (unavailPhysicalIds.count(cameraId) > 0) {
+            for (const auto& physicalId : unavailPhysicalIds[cameraId]) {
+                String8 physicalId8 = String8(physicalId.c_str());
+                onDeviceStatusChanged(id8, physicalId8, CameraDeviceStatus::NOT_PRESENT);
+            }
         }
     }
 
@@ -501,7 +508,7 @@ void CameraService::onDeviceStatusChanged(const String8& id,
 
     if (state == nullptr) {
         ALOGE("%s: Physical camera id %s status change on a non-present ID %s",
-                __FUNCTION__, id.string(), physicalId.string());
+                __FUNCTION__, physicalId.string(), id.string());
         return;
     }
 
@@ -1767,20 +1774,68 @@ Status CameraService::connectDevice(
     return ret;
 }
 
+String16 CameraService::getPackageNameFromUid(int clientUid) {
+    String16 packageName("");
+
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> binder = sm->getService(String16(kPermissionServiceName));
+    if (binder == 0) {
+        ALOGE("Cannot get permission service");
+        // Return empty package name and the further interaction
+        // with camera will likely fail
+        return packageName;
+    }
+
+    sp<IPermissionController> permCtrl = interface_cast<IPermissionController>(binder);
+    Vector<String16> packages;
+
+    permCtrl->getPackagesForUid(clientUid, packages);
+
+    if (packages.isEmpty()) {
+        ALOGE("No packages for calling UID %d", clientUid);
+        // Return empty package name and the further interaction
+        // with camera will likely fail
+        return packageName;
+    }
+
+    // Arbitrarily pick the first name in the list
+    packageName = packages[0];
+
+    return packageName;
+}
+
 template<class CALLBACK, class CLIENT>
 Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8& cameraId,
-        int api1CameraId, const String16& clientPackageName, bool systemNativeClient,
+        int api1CameraId, const String16& clientPackageNameMaybe, bool systemNativeClient,
         const std::optional<String16>& clientFeatureId, int clientUid, int clientPid,
         apiLevel effectiveApiLevel, bool shimUpdateOnly, int oomScoreOffset, int targetSdkVersion,
         /*out*/sp<CLIENT>& device) {
     binder::Status ret = binder::Status::ok();
 
+    bool isNonSystemNdk = false;
+    String16 clientPackageName;
+    if (clientPackageNameMaybe.size() <= 0) {
+        // NDK calls don't come with package names, but we need one for various cases.
+        // Generally, there's a 1:1 mapping between UID and package name, but shared UIDs
+        // do exist. For all authentication cases, all packages under the same UID get the
+        // same permissions, so picking any associated package name is sufficient. For some
+        // other cases, this may give inaccurate names for clients in logs.
+        isNonSystemNdk = true;
+        int packageUid = (clientUid == USE_CALLING_UID) ?
+            CameraThreadState::getCallingUid() : clientUid;
+        clientPackageName = getPackageNameFromUid(packageUid);
+    } else {
+        clientPackageName = clientPackageNameMaybe;
+    }
+
     String8 clientName8(clientPackageName);
 
     int originalClientPid = 0;
 
+    int packagePid = (clientPid == USE_CALLING_PID) ?
+        CameraThreadState::getCallingPid() : clientPid;
     ALOGI("CameraService::connect call (PID %d \"%s\", camera ID %s) and "
-            "Camera API version %d", clientPid, clientName8.string(), cameraId.string(),
+            "Camera API version %d", packagePid, clientName8.string(), cameraId.string(),
             static_cast<int>(effectiveApiLevel));
 
     nsecs_t openTimeNs = systemTime();
@@ -1788,7 +1843,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const String8&
     sp<CLIENT> client = nullptr;
     int facing = -1;
     int orientation = 0;
-    bool isNonSystemNdk = (clientPackageName.size() == 0);
+
     {
         // Acquire mServiceLock and prevent other clients from connecting
         std::unique_ptr<AutoConditionLock> lock =
@@ -2046,6 +2101,10 @@ status_t CameraService::addOfflineClient(String8 cameraId, sp<BasicClient> offli
                 onlineClientDesc->getOwnerId(), onlinePriority.getState(),
                 // native clients don't have offline processing support.
                 /*ommScoreOffset*/ 0, /*systemNativeClient*/false);
+        if (offlineClientDesc == nullptr) {
+            ALOGE("%s: Offline client descriptor was NULL", __FUNCTION__);
+            return BAD_VALUE;
+        }
 
         // Allow only one offline device per camera
         auto incompatibleClients = mActiveClientManager.getIncompatibleClients(offlineClientDesc);
@@ -3278,37 +3337,6 @@ CameraService::BasicClient::BasicClient(const sp<CameraService>& cameraService,
 {
     if (sCameraService == nullptr) {
         sCameraService = cameraService;
-    }
-
-    // In some cases the calling code has no access to the package it runs under.
-    // For example, NDK camera API.
-    // In this case we will get the packages for the calling UID and pick the first one
-    // for attributing the app op. This will work correctly for runtime permissions
-    // as for legacy apps we will toggle the app op for all packages in the UID.
-    // The caveat is that the operation may be attributed to the wrong package and
-    // stats based on app ops may be slightly off.
-    if (mClientPackageName.size() <= 0) {
-        sp<IServiceManager> sm = defaultServiceManager();
-        sp<IBinder> binder = sm->getService(String16(kPermissionServiceName));
-        if (binder == 0) {
-            ALOGE("Cannot get permission service");
-            // Leave mClientPackageName unchanged (empty) and the further interaction
-            // with camera will fail in BasicClient::startCameraOps
-            return;
-        }
-
-        sp<IPermissionController> permCtrl = interface_cast<IPermissionController>(binder);
-        Vector<String16> packages;
-
-        permCtrl->getPackagesForUid(mClientUid, packages);
-
-        if (packages.isEmpty()) {
-            ALOGE("No packages for calling UID");
-            // Leave mClientPackageName unchanged (empty) and the further interaction
-            // with camera will fail in BasicClient::startCameraOps
-            return;
-        }
-        mClientPackageName = packages[0];
     }
 
     // There are 2 scenarios in which a client won't have AppOps operations

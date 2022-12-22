@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "FrameDecoder"
 
 #include "include/FrameDecoder.h"
@@ -86,14 +86,16 @@ sp<IMemory> allocVideoFrame(const sp<MetaData>& trackMeta,
         displayHeight = height;
     }
 
-    if (allocRotated && (rotationAngle == 90 || rotationAngle == 270)) {
-        int32_t tmp;
-        tmp = width; width = height; height = tmp;
-        tmp = displayWidth; displayWidth = displayHeight; displayHeight = tmp;
-        tmp = tileWidth; tileWidth = tileHeight; tileHeight = tmp;
-    }
-    if (allocRotated)
+    if (allocRotated) {
+        if (rotationAngle == 90 || rotationAngle == 270) {
+            // swap width and height for 90 & 270 degrees rotation
+            std::swap(width, height);
+            std::swap(displayWidth, displayHeight);
+            std::swap(tileWidth, tileHeight);
+        }
+        // Rotation is already applied.
         rotationAngle = 0;
+    }
 
     if (!metaOnly) {
         int32_t multVal;
@@ -916,7 +918,9 @@ sp<AMessage> MediaImageDecoder::onGetFormatAndSeekOptions(
     } else {
         videoFormat->setInt32("color-format", OMX_COLOR_FormatYUV420Planar);
     }
-    videoFormat->setInt32("vendor.qti-ext-dec-heif-mode.value", 1);
+    if (!isAvif(trackMeta())) {
+        videoFormat->setInt32("vendor.qti-ext-dec-heif-mode.value", 1);
+    }
 
     if ((mGridRows == 1) && (mGridCols == 1)) {
         videoFormat->setInt32("android._num-input-buffers", 1);
