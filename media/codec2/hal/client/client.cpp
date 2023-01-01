@@ -2373,6 +2373,11 @@ void Codec2Client::Component::stopUsingOutputSurface(
     mOutputBufferQueue->expireOldWaiters();
 }
 
+void Codec2Client::Component::onBufferReleasedFromOutputSurface(
+        uint32_t generation) {
+    mOutputBufferQueue->onBufferReleased(generation);
+}
+
 c2_status_t Codec2Client::Component::connectToInputSurface(
         const std::shared_ptr<InputSurface>& inputSurface,
         std::shared_ptr<InputSurfaceConnection>* connection) {
