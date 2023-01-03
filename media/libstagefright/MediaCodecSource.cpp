@@ -563,7 +563,8 @@ status_t MediaCodecSource::initEncoder() {
                         NULL /* nativeWindow */,
                         NULL /* crypto */,
                         MediaCodec::CONFIGURE_FLAG_ENCODE |
-                        ((mIsVideo && isHWEnc) ? MediaCodec::CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
+                        ((mIsVideo && isHWEnc && (mFlags & FLAG_USE_SURFACE_INPUT)) ?
+                         MediaCodec::CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
 
             if (err == OK) {
                 break;
