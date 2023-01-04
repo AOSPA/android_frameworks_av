@@ -300,6 +300,8 @@ public:
 
     virtual bool     isUltrasoundSupported() = 0;
 
+    virtual bool     isHotwordStreamSupported(bool lookbackAudio) = 0;
+
     virtual status_t getHwOffloadFormatsSupportedForBluetoothMedia(
                 audio_devices_t device, std::vector<audio_format_t> *formats) = 0;
 
@@ -323,8 +325,11 @@ public:
                                                const AudioDeviceTypeAddrVector &devices) = 0;
 
     virtual status_t removeDevicesRoleForStrategy(product_strategy_t strategy,
-                                                  device_role_t role) = 0;
+                                                  device_role_t role,
+                                                  const AudioDeviceTypeAddrVector &devices) = 0;
 
+    virtual status_t clearDevicesRoleForStrategy(product_strategy_t strategy,
+                                                     device_role_t role) = 0;
 
     virtual status_t getDevicesForRoleAndStrategy(product_strategy_t strategy,
                                                   device_role_t role,

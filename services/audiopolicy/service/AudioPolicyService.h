@@ -223,6 +223,7 @@ public:
     binder::Status setCurrentImeUid(int32_t uid) override;
     binder::Status isHapticPlaybackSupported(bool* _aidl_return) override;
     binder::Status isUltrasoundSupported(bool* _aidl_return) override;
+    binder::Status isHotwordStreamSupported(bool lookbackAudio, bool* _aidl_return) override;
     binder::Status listAudioProductStrategies(
             std::vector<media::AudioProductStrategy>* _aidl_return) override;
     binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesInternal& aa,
@@ -238,7 +239,12 @@ public:
     binder::Status setDevicesRoleForStrategy(
             int32_t strategy, media::DeviceRole role,
             const std::vector<AudioDevice>& devices) override;
-    binder::Status removeDevicesRoleForStrategy(int32_t strategy, media::DeviceRole role) override;
+    binder::Status removeDevicesRoleForStrategy(
+            int32_t strategy, media::DeviceRole role,
+            const std::vector<AudioDevice>& devices) override;
+    binder::Status clearDevicesRoleForStrategy(
+            int32_t strategy,
+            media::DeviceRole role) override;
     binder::Status getDevicesForRoleAndStrategy(
             int32_t strategy, media::DeviceRole role,
             std::vector<AudioDevice>* _aidl_return) override;
