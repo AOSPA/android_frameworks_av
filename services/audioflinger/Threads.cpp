@@ -7443,6 +7443,27 @@ void AudioFlinger::SpatializerThread::onFirstRef() {
     if (status != INVALID_OPERATION) {
         updateHalSupportedLatencyModes_l();
     }
+
+    // update priority if specified.
+    constexpr int32_t kRTPriorityMin = 1;
+    constexpr int32_t kRTPriorityMax = 3;
+    const int32_t priorityBoost =
+            property_get_int32("audio.spatializer.priority", kRTPriorityMin);
+    if (priorityBoost >= kRTPriorityMin && priorityBoost <= kRTPriorityMax) {
+        const pid_t pid = getpid();
+        const pid_t tid = getTid();
+
+        if (tid == -1) {
+            // Unusual: PlaybackThread::onFirstRef() should set the threadLoop running.
+            ALOGW("%s: audio.spatializer.priority %d ignored, thread not running",
+                    __func__, priorityBoost);
+        } else {
+            ALOGD("%s: audio.spatializer.priority %d, allowing real time for pid %d  tid %d",
+                    __func__, priorityBoost, pid, tid);
+            sendPrioConfigEvent_l(pid, tid, priorityBoost, false /*forApp*/);
+            stream()->setHalThreadPriority(priorityBoost);
+        }
+    }
 }
 
 status_t AudioFlinger::SpatializerThread::createAudioPatch_l(const struct audio_patch *patch,
@@ -8437,8 +8458,6 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
     audio_input_flags_t inputFlags = mInput->flags;
     audio_input_flags_t requestedFlags = *flags;
     uint32_t sampleRate;
-    AttributionSourceState checkedAttributionSource = AudioFlinger::checkAttributionSourcePackage(
-            attributionSource);
 
     lStatus = initCheck();
     if (lStatus != NO_ERROR) {
@@ -8453,7 +8472,7 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
     }
 
     if (maxSharedAudioHistoryMs != 0) {
-        if (!captureHotwordAllowed(checkedAttributionSource)) {
+        if (!captureHotwordAllowed(attributionSource)) {
             lStatus = PERMISSION_DENIED;
             goto Exit;
         }
@@ -8574,16 +8593,16 @@ sp<AudioFlinger::RecordThread::RecordTrack> AudioFlinger::RecordThread::createRe
         Mutex::Autolock _l(mLock);
         int32_t startFrames = -1;
         if (!mSharedAudioPackageName.empty()
-                && mSharedAudioPackageName == checkedAttributionSource.packageName
+                && mSharedAudioPackageName == attributionSource.packageName
                 && mSharedAudioSessionId == sessionId
-                && captureHotwordAllowed(checkedAttributionSource)) {
+                && captureHotwordAllowed(attributionSource)) {
             startFrames = mSharedAudioStartFrames;
         }
 
         track = new RecordTrack(this, client, attr, sampleRate,
                       format, channelMask, frameCount,
                       nullptr /* buffer */, (size_t)0 /* bufferSize */, sessionId, creatorPid,
-                      checkedAttributionSource, *flags, TrackBase::TYPE_DEFAULT, portId,
+                      attributionSource, *flags, TrackBase::TYPE_DEFAULT, portId,
                       startFrames);
 
         lStatus = track->initCheck();
