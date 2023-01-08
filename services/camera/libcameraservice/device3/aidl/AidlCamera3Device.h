@@ -39,8 +39,8 @@ class AidlCamera3Device :
     using AidlRequestMetadataQueue = AidlMessageQueue<int8_t, SynchronizedReadWrite>;
     class AidlCameraDeviceCallbacks;
     friend class AidlCameraDeviceCallbacks;
-    explicit AidlCamera3Device(const String8& id, bool overrideForPerfClass,
-            bool legacyClient = false);
+    explicit AidlCamera3Device(const String8& id, const String16& clientPackageName,
+            bool overrideForPerfClass, bool legacyClient = false);
 
     virtual ~AidlCamera3Device() { }
 

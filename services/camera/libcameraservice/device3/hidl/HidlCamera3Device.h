@@ -31,8 +31,9 @@ class HidlCamera3Device :
             public Camera3Device {
   public:
 
-   explicit HidlCamera3Device(const String8& id, bool overrideForPerfClass,
-          bool legacyClient = false) : Camera3Device(id, overrideForPerfClass, legacyClient) { }
+    explicit HidlCamera3Device(const String8& id, const String16& clientPackageName,
+            bool overrideForPerfClass, bool legacyClient = false)
+            : Camera3Device(id, clientPackageName, overrideForPerfClass, legacyClient) { }
 
     virtual ~HidlCamera3Device() {}
 

@@ -82,7 +82,8 @@ class Camera3Device :
   friend class AidlCamera3Device;
   public:
 
-    explicit Camera3Device(const String8& id, bool overrideForPerfClass, bool legacyClient = false);
+    explicit Camera3Device(const String8& id, const String16& clientPackageName,
+            bool overrideForPerfClass, bool legacyClient = false);
 
     virtual ~Camera3Device();
     // Delete and optionally close native handles and clear the input vector afterward
@@ -337,6 +338,9 @@ class Camera3Device :
 
     // Camera device ID
     const String8              mId;
+
+    // Current camera client package name
+    const String16             mClientPackageName;
 
     // Legacy camera client flag
     bool                       mLegacyClient;

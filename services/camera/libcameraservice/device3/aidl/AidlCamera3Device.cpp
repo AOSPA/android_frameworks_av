@@ -162,8 +162,9 @@ uint64_t AidlCamera3Device::mapProducerToFrameworkUsage(
     return (uint64_t)usage;
 }
 
-AidlCamera3Device::AidlCamera3Device(const String8& id, bool overrideForPerfClass,
-            bool legacyClient) : Camera3Device(id, overrideForPerfClass, legacyClient) {
+AidlCamera3Device::AidlCamera3Device(const String8& id, const String16& clientPackageName,
+            bool overrideForPerfClass, bool legacyClient)
+            : Camera3Device(id, clientPackageName, overrideForPerfClass, legacyClient) {
         mCallbacks = ndk::SharedRefBase::make<AidlCameraDeviceCallbacks>(this);
 }
 
