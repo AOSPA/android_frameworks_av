@@ -107,8 +107,10 @@ using namespace android::hardware::camera;
 
 namespace android {
 
-Camera3Device::Camera3Device(const String8 &id, bool overrideForPerfClass, bool legacyClient):
+Camera3Device::Camera3Device(const String8 &id, const String16 &clientPackageName,
+            bool overrideForPerfClass, bool legacyClient):
         mId(id),
+        mClientPackageName(clientPackageName),
         mLegacyClient(legacyClient),
         mOperatingMode(NO_MODE),
         mIsConstrainedHighSpeedConfiguration(false),
@@ -2479,9 +2481,36 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
     // max_buffers, usage, and priv fields, as well as data_space and format
     // fields for IMPLEMENTATION_DEFINED formats.
 
-    const camera_metadata_t *sessionBuffer = sessionParams.getAndLock();
+    CameraMetadata params(sessionParams);
+
+    // Configure Nothing Camera Mode
+    ALOGE("JAKE: Package name is %s", mClientPackageName.string());
+    sp<VendorTagDescriptor> vTags;
+    sp<VendorTagDescriptorCache> cache = VendorTagDescriptorCache::getGlobalVendorTagCache();
+    if (cache.get() != NULL) {
+        metadata_vendor_id_t vendorId;
+        status_t res = params.getVendorId(&vendorId);
+        if (res == OK) {
+            ALOGE("JAKE1");
+            cache->getVendorTagDescriptor(vendorId, &vTags);
+        }
+    }
+
+    if (vTags.get() != NULL) {
+        ALOGE("JAKE2");
+        uint32_t tag = 0;
+        status_t res = CameraMetadata::getTagFromName(
+                "com.nothing.device.package_name", vTags.get(), &tag);
+        if (res == OK) {
+            ALOGE("JAKE3");
+            params.update(tag, String8(mClientPackageName));
+        }
+    }
+
+    const camera_metadata_t *sessionBuffer = const_cast<camera_metadata_t *>(
+            params.getAndLock());
     res = mInterface->configureStreams(sessionBuffer, &config, bufferSizes);
-    sessionParams.unlock(sessionBuffer);
+    params.unlock(sessionBuffer);
 
     if (res == BAD_VALUE) {
         // HAL rejected this set of streams as unsupported, clean up config

@@ -116,13 +116,13 @@ status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr
     switch (providerTransport) {
         case IPCTransport::HIDL:
             mDevice =
-                    new HidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
-                            mLegacyClient);
+                    new HidlCamera3Device(TClientBase::mCameraIdStr, TClientBase::mClientPackageName,
+                            mOverrideForPerfClass, mLegacyClient);
             break;
         case IPCTransport::AIDL:
             mDevice =
-                    new AidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
-                            mLegacyClient);
+                    new AidlCamera3Device(TClientBase::mCameraIdStr, TClientBase::mClientPackageName,
+                            mOverrideForPerfClass, mLegacyClient);
              break;
         default:
             ALOGE("%s Invalid transport for camera id %s", __FUNCTION__,
