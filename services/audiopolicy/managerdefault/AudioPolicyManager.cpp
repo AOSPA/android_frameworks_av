@@ -1244,7 +1244,12 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     //       otherwise, fallback to the dynamic policies, if none match, query the engine.
     // Secondary outputs are always found by dynamic policies as the engine do not support them
     sp<AudioPolicyMix> primaryMix;
-    status = mPolicyMixes.getOutputForAttr(*resultAttr, uid, *flags, primaryMix, secondaryMixes);
+    const audio_config_base_t clientConfig = {.sample_rate = config->sample_rate,
+        .channel_mask = config->channel_mask,
+        .format = config->format,
+    };
+    status = mPolicyMixes.getOutputForAttr(*resultAttr, clientConfig, uid, *flags, primaryMix,
+                                           secondaryMixes);
     if (status != OK) {
         return status;
     }
@@ -1253,10 +1258,9 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     bool usePrimaryOutputFromPolicyMixes = requestedDevice == nullptr && primaryMix != nullptr;
 
     // FIXME: in case of RENDER policy, the output capabilities should be checked
-    if ((usePrimaryOutputFromPolicyMixes
-            || (secondaryMixes != nullptr && !secondaryMixes->empty()))
-        && !audio_is_linear_pcm(config->format)) {
-        ALOGD("%s: rejecting request as dynamic audio policy only support pcm", __func__);
+    if ((secondaryMixes != nullptr && !secondaryMixes->empty())
+            && !audio_is_linear_pcm(config->format)) {
+        ALOGD("%s: rejecting request as secondary mixes only support pcm", __func__);
         return BAD_VALUE;
     }
     if (usePrimaryOutputFromPolicyMixes) {
@@ -1265,19 +1269,27 @@ status_t AudioPolicyManager::getOutputForAttrInt(
                                                   primaryMix->mDeviceAddress,
                                                   AUDIO_FORMAT_DEFAULT);
         sp<SwAudioOutputDescriptor> policyDesc = primaryMix->getOutput();
-        if (deviceDesc != nullptr
-                && (policyDesc == nullptr || (policyDesc->mFlags & AUDIO_OUTPUT_FLAG_DIRECT))) {
+        bool tryDirectForFlags = policyDesc == nullptr ||
+                (policyDesc->mFlags & AUDIO_OUTPUT_FLAG_DIRECT);
+        // if a direct output can be opened to deliver the track's multi-channel content to the
+        // output rather than being downmixed by the primary output, then use this direct
+        // output by by-passing the primary mix if possible, otherwise fall-through to primary
+        // mix.
+        bool tryDirectForChannelMask = policyDesc != nullptr
+                    && (audio_channel_count_from_out_mask(policyDesc->getConfig().channel_mask) <
+                        audio_channel_count_from_out_mask(config->channel_mask));
+        if (deviceDesc != nullptr && (tryDirectForFlags || tryDirectForChannelMask)) {
             audio_io_handle_t newOutput;
             status = openDirectOutput(
                     *stream, session, config,
                     (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_DIRECT),
                     DeviceVector(deviceDesc), &newOutput);
-            if (status != NO_ERROR) {
-                policyDesc = nullptr;
-            } else {
+            if (status == NO_ERROR) {
                 policyDesc = mOutputs.valueFor(newOutput);
                 primaryMix->setOutput(policyDesc);
-            }
+            } else if (tryDirectForFlags) {
+                policyDesc = nullptr;
+            } // otherwise use primary if available.
         }
         if (policyDesc != nullptr) {
             policyDesc->mPolicyMix = primaryMix;
@@ -2070,7 +2082,8 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
     //    (see b/200293124, the incorrect selection of AUDIO_OUTPUT_FLAG_VOIP_RX).
     // 3: the output supporting the exact channel mask
     // 4: the output with a higher channel count than requested
-    // 5: the output with a higher sampling rate than requested
+    // 5: the output with the highest sampling rate if the requested sample rate is
+    //    greater than default sampling rate
     // 6: the output with the highest number of requested performance flags
     // 7: the output with the bit depth the closest to the requested one
     // 8: the primary output
@@ -2130,8 +2143,7 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
         }
 
         // sampling rate match
-        if (samplingRate > SAMPLE_RATE_HZ_DEFAULT &&
-                samplingRate <= outputDesc->getSamplingRate()) {
+        if (samplingRate > SAMPLE_RATE_HZ_DEFAULT) {
             currentMatchCriteria[4] = outputDesc->getSamplingRate();
         }
 
@@ -4366,6 +4378,9 @@ audio_direct_mode_t AudioPolicyManager::getDirectPlaybackSupport(const audio_att
 
 status_t AudioPolicyManager::getDirectProfilesForAttributes(const audio_attributes_t* attr,
                                                 AudioProfileVector& audioProfilesVector) {
+    if (mEffects.isNonOffloadableEffectEnabled()) {
+        return OK;
+    }
     AudioDeviceTypeAddrVector devices;
     status_t status = getDevicesForAttributes(*attr, &devices, false /* forVolume */);
     if (status != OK) {
@@ -6639,8 +6654,8 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
                 continue;
             }
             sp<AudioPolicyMix> primaryMix;
-            status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->uid(),
-                    client->flags(), primaryMix, nullptr);
+            status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->config(),
+                    client->uid(), client->flags(), primaryMix, nullptr);
             if (status != OK) {
                 continue;
             }
@@ -6754,8 +6769,8 @@ void AudioPolicyManager::checkSecondaryOutputs() {
         for (const sp<TrackClientDescriptor>& client : outputDescriptor->getClientIterable()) {
             sp<AudioPolicyMix> primaryMix;
             std::vector<sp<AudioPolicyMix>> secondaryMixes;
-            status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->uid(),
-                    client->flags(), primaryMix, &secondaryMixes);
+            status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->config(),
+                    client->uid(), client->flags(), primaryMix, &secondaryMixes);
             std::vector<sp<SwAudioOutputDescriptor>> secondaryDescs;
             for (auto &secondaryMix : secondaryMixes) {
                 sp<SwAudioOutputDescriptor> outputDesc = secondaryMix->getOutput();
@@ -7016,8 +7031,8 @@ status_t AudioPolicyManager::getDevicesForAttributes(
     // check dynamic policies but only for primary descriptors (secondary not used for audible
     // audio routing, only used for duplication for playback capture)
     sp<AudioPolicyMix> policyMix;
-    status_t status = mPolicyMixes.getOutputForAttr(attr, 0 /*uid unknown here*/,
-            AUDIO_OUTPUT_FLAG_NONE, policyMix, nullptr /* secondaryMixes */);
+    status_t status = mPolicyMixes.getOutputForAttr(attr, AUDIO_CONFIG_BASE_INITIALIZER,
+            0 /*uid unknown here*/, AUDIO_OUTPUT_FLAG_NONE, policyMix, nullptr);
     if (status != OK) {
         return status;
     }
