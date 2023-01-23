@@ -81,6 +81,7 @@ cc_library_shared {
         "camera2/SubmitInfo.cpp",
         "CameraBase.cpp",
         "CameraUtils.cpp",
+        "OfflineParameters.cpp",
         "VendorTagDescriptor.cpp",
     ],
 
@@ -144,6 +145,7 @@ filegroup {
         "aidl/android/hardware/ICameraService.aidl",
         "aidl/android/hardware/ICameraServiceListener.aidl",
         "aidl/android/hardware/ICameraServiceProxy.aidl",
+        "aidl/android/hardware/OfflineParameters.aidl",
         "aidl/android/hardware/camera2/ICameraDeviceCallbacks.aidl",
         "aidl/android/hardware/camera2/ICameraDeviceUser.aidl",
         "aidl/android/hardware/camera2/ICameraOfflineSession.aidl",
