@@ -512,7 +512,7 @@ void AudioTrack::createDummyAudioSessionForBluetooth() {
    p = static_cast<uint8_t*>(iMem->unsecurePointer());
    memset(p, '\0', DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
 
-   dummyTrack = new AudioTrack(AUDIO_STREAM_MUSIC,// stream type
+   dummyTrack = new AudioTrack(AUDIO_STREAM_SYSTEM,// stream type
                                48000, AUDIO_FORMAT_PCM_16_BIT,
                                AUDIO_CHANNEL_OUT_STEREO, iMem,
                                AUDIO_OUTPUT_FLAG_FAST);
