@@ -808,9 +808,7 @@ MediaCodec::MediaCodec(
       mWidth(0),
       mHeight(0),
       mRotationDegrees(0),
-      mConfigColorTransfer(-1),
-      mHDRStaticInfo(false),
-      mHDR10PlusInfo(false),
+      mHdrInfoFlags(0),
       mDequeueInputTimeoutGeneration(0),
       mDequeueInputReplyID(0),
       mDequeueOutputTimeoutGeneration(0),
@@ -956,29 +954,73 @@ void MediaCodec::updateMediametrics() {
                               mIndexOfFirstFrameWhenLowLatencyOn);
     }
 
-    mediametrics_setInt32(mMetricsHandle, kCodecHDRStaticInfo, mHDRStaticInfo ? 1 : 0);
-    mediametrics_setInt32(mMetricsHandle, kCodecHDR10PlusInfo, mHDR10PlusInfo ? 1 : 0);
 #if 0
     // enable for short term, only while debugging
     updateEphemeralMediametrics(mMetricsHandle);
 #endif
 }
 
-void MediaCodec::updateHDRFormatMetric() {
+void MediaCodec::updateHdrMetrics(bool isConfig) {
+    if ((mDomain != DOMAIN_VIDEO && mDomain != DOMAIN_IMAGE) || mMetricsHandle == 0) {
+        return;
+    }
+
+    int32_t colorStandard = -1;
+    if (mOutputFormat->findInt32(KEY_COLOR_STANDARD, &colorStandard)) {
+        mediametrics_setInt32(mMetricsHandle,
+                isConfig ? kCodecConfigColorStandard : kCodecParsedColorStandard, colorStandard);
+    }
+    int32_t colorRange = -1;
+    if (mOutputFormat->findInt32(KEY_COLOR_RANGE, &colorRange)) {
+        mediametrics_setInt32(mMetricsHandle,
+                isConfig ? kCodecConfigColorRange : kCodecParsedColorRange, colorRange);
+    }
+    int32_t colorTransfer = -1;
+    if (mOutputFormat->findInt32(KEY_COLOR_TRANSFER, &colorTransfer)) {
+        mediametrics_setInt32(mMetricsHandle,
+                isConfig ? kCodecConfigColorTransfer : kCodecParsedColorTransfer, colorTransfer);
+    }
+    HDRStaticInfo info;
+    if (ColorUtils::getHDRStaticInfoFromFormat(mOutputFormat, &info)
+            && ColorUtils::isHDRStaticInfoValid(&info)) {
+        mHdrInfoFlags |= kFlagHasHdrStaticInfo;
+    }
+    mediametrics_setInt32(mMetricsHandle, kCodecHDRStaticInfo,
+            (mHdrInfoFlags & kFlagHasHdrStaticInfo) ? 1 : 0);
+    sp<ABuffer> hdr10PlusInfo;
+    if (mOutputFormat->findBuffer("hdr10-plus-info", &hdr10PlusInfo)
+            && hdr10PlusInfo != nullptr && hdr10PlusInfo->size() > 0) {
+        mHdrInfoFlags |= kFlagHasHdr10PlusInfo;
+    }
+    mediametrics_setInt32(mMetricsHandle, kCodecHDR10PlusInfo,
+            (mHdrInfoFlags & kFlagHasHdr10PlusInfo) ? 1 : 0);
+
+    // hdr format
+    sp<AMessage> codedFormat = (mFlags & kFlagIsEncoder) ? mOutputFormat : mInputFormat;
+
+    AString mime;
     int32_t profile = -1;
-    AString mediaType;
-    if (mOutputFormat->findInt32(KEY_PROFILE, &profile)
-            && mOutputFormat->findString("mime", &mediaType)) {
-        hdr_format hdrFormat = getHDRFormat(profile, mConfigColorTransfer, mediaType);
+
+    if (codedFormat->findString("mime", &mime)
+            && codedFormat->findInt32(KEY_PROFILE, &profile)
+            && colorTransfer != -1) {
+        hdr_format hdrFormat = getHdrFormat(mime, profile, colorTransfer);
         mediametrics_setInt32(mMetricsHandle, kCodecHDRFormat, static_cast<int>(hdrFormat));
     }
 }
 
-hdr_format MediaCodec::getHDRFormat(const int32_t profile, const int32_t transfer,
-        const AString &mediaType) {
-    switch (transfer) {
+hdr_format MediaCodec::getHdrFormat(const AString &mime, const int32_t profile,
+        const int32_t colorTransfer) {
+    return (mFlags & kFlagIsEncoder)
+            ? getHdrFormatForEncoder(mime, profile, colorTransfer)
+            : getHdrFormatForDecoder(mime, profile, colorTransfer);
+}
+
+hdr_format MediaCodec::getHdrFormatForEncoder(const AString &mime, const int32_t profile,
+        const int32_t colorTransfer) {
+    switch (colorTransfer) {
         case COLOR_TRANSFER_ST2084:
-            if (mediaType.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_VP9)) {
+            if (mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_VP9)) {
                 switch (profile) {
                     case VP9Profile2HDR:
                         return HDR_FORMAT_HDR10;
@@ -987,7 +1029,7 @@ hdr_format MediaCodec::getHDRFormat(const int32_t profile, const int32_t transfe
                     default:
                         return HDR_FORMAT_NONE;
                 }
-            } else if (mediaType.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_AV1)) {
+            } else if (mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_AV1)) {
                 switch (profile) {
                     case AV1ProfileMain10HDR10:
                         return HDR_FORMAT_HDR10;
@@ -996,7 +1038,7 @@ hdr_format MediaCodec::getHDRFormat(const int32_t profile, const int32_t transfe
                     default:
                         return HDR_FORMAT_NONE;
                 }
-            } else if (mediaType.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_HEVC)) {
+            } else if (mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_HEVC)) {
                 switch (profile) {
                     case HEVCProfileMain10HDR10:
                         return HDR_FORMAT_HDR10;
@@ -1009,7 +1051,7 @@ hdr_format MediaCodec::getHDRFormat(const int32_t profile, const int32_t transfe
                 return HDR_FORMAT_NONE;
             }
         case COLOR_TRANSFER_HLG:
-            if (!mediaType.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+            if (!mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
                 return HDR_FORMAT_HLG;
             } else {
                 // TODO: DOLBY format
@@ -1018,6 +1060,47 @@ hdr_format MediaCodec::getHDRFormat(const int32_t profile, const int32_t transfe
         default:
             return HDR_FORMAT_NONE;
     }
+}
+
+hdr_format MediaCodec::getHdrFormatForDecoder(const AString &mime, const int32_t profile,
+        const int32_t colorTransfer) {
+    switch (colorTransfer) {
+        case COLOR_TRANSFER_ST2084:
+            if (!(mHdrInfoFlags & kFlagHasHdrStaticInfo) || !profileSupport10Bits(mime, profile)) {
+                return HDR_FORMAT_NONE;
+            }
+            return mHdrInfoFlags & kFlagHasHdr10PlusInfo ? HDR_FORMAT_HDR10PLUS : HDR_FORMAT_HDR10;
+        case COLOR_TRANSFER_HLG:
+            if (!mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_DOLBY_VISION)) {
+                return HDR_FORMAT_HLG;
+            }
+            // TODO: DOLBY format
+    }
+    return HDR_FORMAT_NONE;
+}
+
+bool MediaCodec::profileSupport10Bits(const AString &mime, const int32_t profile) {
+    if (mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_AV1)) {
+        return true;
+    } else if (mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_VP9)) {
+        switch (profile) {
+            case VP9Profile2:
+            case VP9Profile3:
+            case VP9Profile2HDR:
+            case VP9Profile3HDR:
+            case VP9Profile2HDR10Plus:
+            case VP9Profile3HDR10Plus:
+                return true;
+        }
+    } else if (mime.equalsIgnoreCase(MEDIA_MIMETYPE_VIDEO_HEVC)) {
+        switch (profile) {
+            case HEVCProfileMain10:
+            case HEVCProfileMain10HDR10:
+            case HEVCProfileMain10HDR10Plus:
+                return true;
+        }
+    }
+    return false;
 }
 
 
@@ -1061,6 +1144,7 @@ void MediaCodec::updateEphemeralMediametrics(mediametrics_handle_t item) {
 
 void MediaCodec::flushMediametrics() {
     updateMediametrics();
+    mHdrInfoFlags = 0;
     if (mMetricsHandle != 0) {
         if (mediametrics_count(mMetricsHandle) > 0) {
             mediametrics_selfRecord(mMetricsHandle);
@@ -1717,24 +1801,6 @@ status_t MediaCodec::configure(
                 if (format->findInt32("priority", &priority)) {
                     mediametrics_setInt32(mMetricsHandle, kCodecPriority, priority);
                 }
-            }
-            int32_t colorStandard = -1;
-            if (format->findInt32(KEY_COLOR_STANDARD, &colorStandard)) {
-                mediametrics_setInt32(mMetricsHandle, kCodecConfigColorStandard, colorStandard);
-            }
-            int32_t colorRange = -1;
-            if (format->findInt32(KEY_COLOR_RANGE, &colorRange)) {
-                mediametrics_setInt32(mMetricsHandle, kCodecConfigColorRange, colorRange);
-            }
-            int32_t colorTransfer = -1;
-            if (format->findInt32(KEY_COLOR_TRANSFER, &colorTransfer)) {
-                mConfigColorTransfer = colorTransfer;
-                mediametrics_setInt32(mMetricsHandle, kCodecConfigColorTransfer, colorTransfer);
-            }
-            HDRStaticInfo info;
-            if (ColorUtils::getHDRStaticInfoFromFormat(format, &info)
-                    && ColorUtils::isHDRStaticInfoValid(&info)) {
-                mHDRStaticInfo = true;
             }
         }
 
@@ -3401,8 +3467,6 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     CHECK(msg->findMessage("input-format", &mInputFormat));
                     CHECK(msg->findMessage("output-format", &mOutputFormat));
 
-                    updateHDRFormatMetric();
-
                     // limit to confirming the opt-in behavior to minimize any behavioral change
                     if (mSurface != nullptr && !mAllowFrameDroppingBySurface) {
                         // signal frame dropping mode in the input format as this may also be
@@ -3445,6 +3509,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         if (interestingFormat->findInt32("level", &level)) {
                             mediametrics_setInt32(mMetricsHandle, kCodecLevel, level);
                         }
+                        updateHdrMetrics(true /* isConfig */);
                         // bitrate and bitrate mode, encoder only
                         if (mFlags & kFlagIsEncoder) {
                             // encoder specific values
@@ -3484,7 +3549,6 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                 mComponentName.c_str(),
                                 mInputFormat->debugString(4).c_str(),
                                 mOutputFormat->debugString(4).c_str());
-                        updateHDRFormatMetric();
                         CHECK(obj != NULL);
                         response->setObject("input-surface", obj);
                         mHaveInputSurface = true;
@@ -3509,7 +3573,6 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                     if (!msg->findInt32("err", &err)) {
                         CHECK(msg->findMessage("input-format", &mInputFormat));
                         CHECK(msg->findMessage("output-format", &mOutputFormat));
-                        updateHDRFormatMetric();
                         mHaveInputSurface = true;
                     } else {
                         response->setInt32("err", err);
@@ -4704,7 +4767,6 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
         buffer->meta()->setObject("changedKeys", changedKeys);
     }
     mOutputFormat = format;
-    updateHDRFormatMetric();
     mapFormat(mComponentName, format, nullptr, true);
     ALOGV("[%s] output format changed to: %s",
             mComponentName.c_str(), mOutputFormat->debugString(4).c_str());
@@ -4720,7 +4782,7 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
         // rendering.
         int32_t dataSpace;
         if (mOutputFormat->findInt32("android._dataspace", &dataSpace)) {
-            ALOGD("[%s] setting dataspace on output surface to #%x",
+            ALOGD("[%s] setting dataspace on output surface to %#x",
                     mComponentName.c_str(), dataSpace);
             int err = native_window_set_buffers_data_space(
                     mSurface.get(), (android_dataspace)dataSpace);
@@ -4730,9 +4792,6 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
             HDRStaticInfo info;
             if (ColorUtils::getHDRStaticInfoFromFormat(mOutputFormat, &info)) {
                 setNativeWindowHdrMetadata(mSurface.get(), &info);
-                if (ColorUtils::isHDRStaticInfoValid(&info)) {
-                    mHDRStaticInfo = true;
-                }
             }
         }
 
@@ -4741,7 +4800,6 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
                 && hdr10PlusInfo != nullptr && hdr10PlusInfo->size() > 0) {
             native_window_set_buffers_hdr10_plus_metadata(mSurface.get(),
                     hdr10PlusInfo->size(), hdr10PlusInfo->data());
-            mHDR10PlusInfo = true;
         }
 
         if (mime.startsWithIgnoreCase("video/")) {
@@ -4787,21 +4845,8 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
         }
     }
 
-    if (mMetricsHandle != 0) {
-        int32_t colorStandard = -1;
-        if (format->findInt32(KEY_COLOR_STANDARD, &colorStandard)) {
-            mediametrics_setInt32(mMetricsHandle, kCodecParsedColorStandard, colorStandard);
-        }
-        int32_t colorRange = -1;
-        if (format->findInt32( KEY_COLOR_RANGE, &colorRange)) {
-            mediametrics_setInt32(mMetricsHandle, kCodecParsedColorRange, colorRange);
-        }
-        int32_t colorTransfer = -1;
-        if (format->findInt32(KEY_COLOR_TRANSFER, &colorTransfer)) {
-            mediametrics_setInt32(mMetricsHandle, kCodecParsedColorTransfer, colorTransfer);
-        }
-    }
-}
+    updateHdrMetrics(false /* isConfig */);
+ }
 
 void MediaCodec::extractCSD(const sp<AMessage> &format) {
     mCSD.clear();
