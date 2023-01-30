@@ -107,7 +107,7 @@ using namespace android::hardware::camera;
 namespace android {
 
 Camera3Device::Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraServiceProxyWrapper,
-        const String8 &id, bool overrideForPerfClass, bool legacyClient):
+        const String8 &id, bool overrideForPerfClass, bool overrideToPortrait, bool legacyClient):
         mCameraServiceProxyWrapper(cameraServiceProxyWrapper),
         mId(id),
         mLegacyClient(legacyClient),
@@ -129,7 +129,8 @@ Camera3Device::Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraS
         mVendorTagId(CAMERA_METADATA_INVALID_VENDOR_ID),
         mLastTemplateId(-1),
         mNeedFixupMonochromeTags(false),
-        mOverrideForPerfClass(overrideForPerfClass)
+        mOverrideForPerfClass(overrideForPerfClass),
+        mOverrideToPortrait(overrideToPortrait)
 {
     ATRACE_CALL();
     ALOGV("%s: Created device for camera %s", __FUNCTION__, mId.string());
@@ -201,7 +202,7 @@ status_t Camera3Device::initializeCommonLocked() {
     /** Start up request queue thread */
     mRequestThread = createNewRequestThread(
             this, mStatusTracker, mInterface, sessionParamKeys,
-            mUseHalBufManager, mSupportCameraMute);
+            mUseHalBufManager, mSupportCameraMute, mOverrideToPortrait);
     res = mRequestThread->run(String8::format("C3Dev-%s-ReqQueue", mId.string()).string());
     if (res != OK) {
         SET_ERR_L("Unable to start request queue thread: %s (%d)",
@@ -2968,7 +2969,8 @@ Camera3Device::RequestThread::RequestThread(wp<Camera3Device> parent,
         sp<StatusTracker> statusTracker,
         sp<HalInterface> interface, const Vector<int32_t>& sessionParamKeys,
         bool useHalBufManager,
-        bool supportCameraMute) :
+        bool supportCameraMute,
+        bool overrideToPortrait) :
         Thread(/*canCallJava*/false),
         mParent(parent),
         mStatusTracker(statusTracker),
@@ -2998,7 +3000,8 @@ Camera3Device::RequestThread::RequestThread(wp<Camera3Device> parent,
         mSessionParamKeys(sessionParamKeys),
         mLatestSessionParams(sessionParamKeys.size()),
         mUseHalBufManager(useHalBufManager),
-        mSupportCameraMute(supportCameraMute){
+        mSupportCameraMute(supportCameraMute),
+        mOverrideToPortrait(overrideToPortrait) {
     mStatusId = statusTracker->addComponent("RequestThread");
 }
 
@@ -3673,9 +3676,9 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
         mPrevTriggers = triggerCount;
 
         // Do not override rotate&crop for stream configurations that include
-        // SurfaceViews(HW_COMPOSER) output. The display rotation there will be
-        // compensated by NATIVE_WINDOW_TRANSFORM_INVERSE_DISPLAY
-        bool rotateAndCropChanged = mComposerOutput ? false :
+        // SurfaceViews(HW_COMPOSER) output, unless mOverrideToPortrait is set.
+        // The display rotation there will be compensated by NATIVE_WINDOW_TRANSFORM_INVERSE_DISPLAY
+        bool rotateAndCropChanged = (mComposerOutput && !mOverrideToPortrait) ? false :
             overrideAutoRotateAndCrop(captureRequest);
         bool autoframingChanged = overrideAutoframing(captureRequest);
         bool testPatternChanged = overrideTestPattern(captureRequest);
@@ -4733,6 +4736,15 @@ status_t Camera3Device::RequestThread::addFakeTriggerIds(
 bool Camera3Device::RequestThread::overrideAutoRotateAndCrop(
         const sp<CaptureRequest> &request) {
     ATRACE_CALL();
+
+    if (mOverrideToPortrait) {
+        Mutex::Autolock l(mTriggerMutex);
+        uint8_t rotateAndCrop_u8 = mRotateAndCropOverride;
+        CameraMetadata &metadata = request->mSettingsList.begin()->metadata;
+        metadata.update(ANDROID_SCALER_ROTATE_AND_CROP,
+                &rotateAndCrop_u8, 1);
+        return true;
+    }
 
     if (request->mRotateAndCropAuto) {
         Mutex::Autolock l(mTriggerMutex);

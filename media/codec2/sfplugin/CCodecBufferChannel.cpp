@@ -236,6 +236,9 @@ status_t CCodecBufferChannel::queueInputBufferInternal(
     if (buffer->meta()->findInt32("tunnel-first-frame", &tmp) && tmp) {
         tunnelFirstFrame = true;
     }
+    if (buffer->meta()->findInt32("decode-only", &tmp) && tmp) {
+        flags |= C2FrameData::FLAG_DROP_FRAME;
+    }
     ALOGV("[%s] queueInputBuffer: buffer->size() = %zu", mName, buffer->size());
     std::list<std::unique_ptr<C2Work>> items;
     std::unique_ptr<C2Work> work(new C2Work);
@@ -2091,6 +2094,12 @@ bool CCodecBufferChannel::handleWork(
               mName, work->input.ordinal.frameIndex.peekull());
         drop = true;
         notifyClient = false;
+    }
+
+    // Workaround: if C2FrameData::FLAG_DROP_FRAME is not implemented in
+    // HAL, the flag is then removed in the corresponding output buffer.
+    if (work->input.flags & C2FrameData::FLAG_DROP_FRAME) {
+        flags |= BUFFER_FLAG_DECODE_ONLY;
     }
 
     if (notifyClient && !buffer && !flags) {

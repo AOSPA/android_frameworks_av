@@ -17,6 +17,7 @@
 #ifndef A_CODEC_H_
 #define A_CODEC_H_
 
+#include <set>
 #include <stdint.h>
 #include <list>
 #include <vector>
@@ -275,6 +276,7 @@ protected:
     std::vector<BufferInfo> mBuffers[4];
     bool mPortEOS[2];
     status_t mInputEOSResult;
+    std::set<int64_t> mDecodeOnlyTimesUs;
 
     std::list<sp<AMessage>> mDeferredQueue;
 

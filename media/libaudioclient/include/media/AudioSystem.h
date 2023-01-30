@@ -28,6 +28,8 @@
 #include <android/media/BnAudioPolicyServiceClient.h>
 #include <android/media/EffectDescriptor.h>
 #include <android/media/INativeSpatializerCallback.h>
+#include <android/media/ISoundDose.h>
+#include <android/media/ISoundDoseCallback.h>
 #include <android/media/ISpatializer.h>
 #include <android/media/RecordClientInfo.h>
 #include <android/media/audio/common/AudioConfigBase.h>
@@ -299,6 +301,7 @@ public:
      * @param[out] portId the generated port id to identify the client
      * @param[out] secondaryOutputs collection of io handle for secondary outputs
      * @param[out] isSpatialized true if the playback will be spatialized
+     * @param[out] isBitPerfect true if the playback will be bit-perfect
      * @return if the call is successful or not
      */
     static status_t getOutputForAttr(audio_attributes_t *attr,
@@ -311,7 +314,8 @@ public:
                                      audio_port_handle_t *selectedDeviceId,
                                      audio_port_handle_t *portId,
                                      std::vector<audio_io_handle_t> *secondaryOutputs,
-                                     bool *isSpatialized);
+                                     bool *isSpatialized,
+                                     bool *isBitPerfect);
     static status_t startOutput(audio_port_handle_t portId);
     static status_t stopOutput(audio_port_handle_t portId);
     static void releaseOutput(audio_port_handle_t portId);
@@ -586,6 +590,16 @@ public:
                                      bool *canBeSpatialized);
 
     /**
+     * Registers the sound dose callback with the audio server and returns the ISoundDose
+     * interface.
+     *
+     * \param callback to send messages to the audio server
+     * \param soundDose binder to send messages to the AudioService
+     **/
+    static status_t getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                          sp<media::ISoundDose>* soundDose);
+
+    /**
      * Query how the direct playback is currently supported on the device.
      * @param attr audio attributes describing the playback use case
      * @param config audio configuration for the playback
@@ -614,6 +628,19 @@ public:
 
     static status_t getSupportedLatencyModes(audio_io_handle_t output,
             std::vector<audio_latency_mode_t>* modes);
+
+    static status_t getSupportedMixerAttributes(audio_port_handle_t portId,
+                                                std::vector<audio_mixer_attributes_t> *mixerAttrs);
+    static status_t setPreferredMixerAttributes(const audio_attributes_t *attr,
+                                                audio_port_handle_t portId,
+                                                uid_t uid,
+                                                const audio_mixer_attributes_t *mixerAttr);
+    static status_t getPreferredMixerAttributes(const audio_attributes_t* attr,
+                                                audio_port_handle_t portId,
+                                                std::optional<audio_mixer_attributes_t>* mixerAttr);
+    static status_t clearPreferredMixerAttributes(const audio_attributes_t* attr,
+                                                  audio_port_handle_t portId,
+                                                  uid_t uid);
 
     // A listener for capture state changes.
     class CaptureStateListener : public virtual RefBase {

@@ -70,6 +70,8 @@ static const std::vector<Equalizer::Preset> kEqPresets = {
 static const Equalizer::Capability kEqCap = {.bandFrequencies = kEqBandFrequency,
                                              .presets = kEqPresets};
 
+static const std::string kEqualizerEffectName = "EqualizerBundle";
+
 static const Descriptor kEqualizerDesc = {
         .common = {.id = {.type = kEqualizerTypeUUID,
                           .uuid = kEqualizerBundleImplUUID,
@@ -77,13 +79,32 @@ static const Descriptor kEqualizerDesc = {
                    .flags = {.type = Flags::Type::INSERT,
                              .insert = Flags::Insert::FIRST,
                              .volume = Flags::Volume::CTRL},
-                   .name = "EqualizerBundle",
+                   .name = kEqualizerEffectName,
                    .implementor = "NXP Software Ltd."},
         .capability = Capability::make<Capability::equalizer>(kEqCap)};
 
+static const bool mStrengthSupported = true;
+
+static const BassBoost::Capability kBassBoostCap = {.strengthSupported = mStrengthSupported};
+
+static const std::string kBassBoostEffectName = "Dynamic Bass Boost";
+
+static const Descriptor kBassBoostDesc = {
+        .common = {.id = {.type = kBassBoostTypeUUID,
+                          .uuid = kBassBoostBundleImplUUID,
+                          .proxy = kBassBoostProxyUUID},
+                   .flags = {.type = Flags::Type::INSERT,
+                             .insert = Flags::Insert::FIRST,
+                             .volume = Flags::Volume::CTRL,
+                             .deviceIndication = true},
+                   .cpuLoad = BASS_BOOST_CUP_LOAD_ARM9E,
+                   .memoryUsage = BUNDLE_MEM_USAGE,
+                   .name = kBassBoostEffectName,
+                   .implementor = "NXP Software Ltd."},
+        .capability = Capability::make<Capability::bassBoost>(kBassBoostCap)};
+
 // TODO: add descriptors for other bundle effect types here.
 static const Descriptor kVirtualizerDesc;
-static const Descriptor kBassBoostDesc;
 static const Descriptor kVolumeDesc;
 
 /* The following tables have been computed using the actual levels measured by the output of

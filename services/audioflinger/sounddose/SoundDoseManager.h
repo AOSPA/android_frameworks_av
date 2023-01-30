@@ -17,16 +17,18 @@
 
 #pragma once
 
-#include <audio_utils/MelProcessor.h>
+#include <android/media/BnSoundDose.h>
+#include <android/media/ISoundDoseCallback.h>
 #include <audio_utils/MelAggregator.h>
+#include <audio_utils/MelProcessor.h>
+#include <binder/Status.h>
 #include <mutex>
 #include <unordered_map>
-#include <utils/Errors.h>
 
 namespace android {
 
 class SoundDoseManager : public audio_utils::MelProcessor::MelCallback {
-public:
+  public:
     /** CSD is computed with a rolling window of 7 days. */
     static constexpr int64_t kCsdWindowSeconds = 604800;  // 60s * 60m * 24h * 7d
     /** Default RS2 value in dBA as defined in IEC 62368-1 3rd edition. */
@@ -34,7 +36,7 @@ public:
 
     SoundDoseManager()
         : mMelAggregator(sp<audio_utils::MelAggregator>::make(kCsdWindowSeconds)),
-          mRs2Value(kDefaultRs2Value) {};
+          mRs2Value(kDefaultRs2Value){};
 
     /**
      * \brief Creates or gets the MelProcessor assigned to the streamHandle
@@ -47,12 +49,11 @@ public:
      *
      * \return MelProcessor assigned to the stream and device id.
      */
-    sp<audio_utils::MelProcessor> getOrCreateProcessorForDevice(
-        audio_port_handle_t deviceId,
-        audio_io_handle_t streamHandle,
-        uint32_t sampleRate,
-        size_t channelCount,
-        audio_format_t format);
+    sp<audio_utils::MelProcessor> getOrCreateProcessorForDevice(audio_port_handle_t deviceId,
+                                                                audio_io_handle_t streamHandle,
+                                                                uint32_t sampleRate,
+                                                                size_t channelCount,
+                                                                audio_format_t format);
 
     /**
      * \brief Removes stream processor when MEL computation is not needed anymore
@@ -69,28 +70,65 @@ public:
      */
     void setOutputRs2(float rs2Value);
 
+    /**
+     * \brief Registers the interface for passing callbacks to the AudioService and gets
+     * the ISoundDose interface.
+     *
+     * \returns the sound dose binder to send commands to the SoundDoseManager
+     **/
+    sp<media::ISoundDose> getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback);
+
     std::string dump() const;
 
     // used for testing
     size_t getCachedMelRecordsSize() const;
 
+    /** Method for converting from audio_utils::CsdRecord to media::SoundDoseRecord. */
+    static media::SoundDoseRecord csdRecordToSoundDoseRecord(const audio_utils::CsdRecord& legacy);
+
     // ------ Override audio_utils::MelProcessor::MelCallback ------
-    void onNewMelValues(const std::vector<float>& mels,
-                        size_t offset,
-                        size_t length,
+    void onNewMelValues(const std::vector<float>& mels, size_t offset, size_t length,
                         audio_port_handle_t deviceId) const override;
 
     void onMomentaryExposure(float currentMel, audio_port_handle_t deviceId) const override;
+
 private:
+    class SoundDose : public media::BnSoundDose,
+                      public IBinder::DeathRecipient {
+    public:
+        SoundDose(SoundDoseManager* manager, const sp<media::ISoundDoseCallback>& callback)
+            : mSoundDoseManager(manager),
+              mSoundDoseCallback(callback) {};
+
+        /** IBinder::DeathRecipient. Listen to the death of ISoundDoseCallback. */
+        virtual void binderDied(const wp<IBinder>& who);
+
+        /** BnSoundDose override */
+        binder::Status setOutputRs2(float value) override;
+        binder::Status resetCsd(float currentCsd,
+                                const std::vector<media::SoundDoseRecord>& records) override;
+
+        wp<SoundDoseManager> mSoundDoseManager;
+        const sp<media::ISoundDoseCallback> mSoundDoseCallback;
+    };
+
+    void resetSoundDose();
+
+    void resetCsd(float currentCsd, const std::vector<media::SoundDoseRecord>& records);
+
+    sp<media::ISoundDoseCallback> getSoundDoseCallback() const;
+    
     mutable std::mutex mLock;
 
     // no need for lock since MelAggregator is thread-safe
     const sp<audio_utils::MelAggregator> mMelAggregator;
 
-    std::unordered_map<audio_io_handle_t,
-                       wp<audio_utils::MelProcessor>> mActiveProcessors GUARDED_BY(mLock);
+    std::unordered_map<audio_io_handle_t, wp<audio_utils::MelProcessor>> mActiveProcessors
+            GUARDED_BY(mLock);
 
     float mRs2Value GUARDED_BY(mLock);
+
+    sp<SoundDose> mSoundDose GUARDED_BY(mLock);
 };
 
 }  // namespace android

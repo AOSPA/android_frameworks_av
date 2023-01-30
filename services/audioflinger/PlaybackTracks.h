@@ -83,7 +83,8 @@ public:
                                   * ready as possible (aka. Buffer is full). */
                                 size_t frameCountToBeReady = SIZE_MAX,
                                 float speed = 1.0f,
-                                bool isSpatialized = false);
+                                bool isSpatialized = false,
+                                bool isBitPerfect = false);
     virtual             ~Track();
     virtual status_t    initCheck() const;
 
@@ -147,8 +148,12 @@ public:
     sp<media::VolumeHandler>   getVolumeHandler() { return mVolumeHandler; }
     /** Set the computed normalized final volume of the track.
      * !masterMute * masterVolume * streamVolume * averageLRVolume */
-    void                setFinalVolume(float volume);
+    void                setFinalVolume(float volumeLeft, float volumeRight);
     float               getFinalVolume() const { return mFinalVolume; }
+    void                getFinalVolume(float* left, float* right) const {
+                            *left = mFinalVolumeLeft;
+                            *right = mFinalVolumeRight;
+    }
 
     using SourceMetadatas = std::vector<playback_track_metadata_v7_t>;
     using MetadataInserter = std::back_insert_iterator<SourceMetadatas>;
@@ -203,6 +208,7 @@ public:
     audio_output_flags_t getOutputFlags() const { return mFlags; }
     float getSpeed() const { return mSpeed; }
     bool isSpatialized() const override { return mIsSpatialized; }
+    bool isBitPerfect() const override { return mIsBitPerfect; }
 
     /**
      * Updates the mute state and notifies the audio service. Call this only when holding player
@@ -353,6 +359,10 @@ private:
                                         // 'volatile' means accessed without lock or
                                         // barrier, but is read/written atomically
     float               mFinalVolume; // combine master volume, stream type volume and track volume
+    float               mFinalVolumeLeft; // combine master volume, stream type volume and track
+                                          // volume
+    float               mFinalVolumeRight; // combine master volume, stream type volume and track
+                                           // volume
     sp<AudioTrackServerProxy>  mAudioTrackServerProxy;
     bool                mResumeToStopping; // track was paused in stopping state.
     bool                mFlushHwPending; // track requests for thread flush
@@ -361,6 +371,7 @@ private:
     TeePatches  mTeePatches;
     const float         mSpeed;
     const bool          mIsSpatialized;
+    const bool          mIsBitPerfect;
 
     // TODO: replace PersistableBundle with own struct
     // access these two variables only when holding player thread lock.
