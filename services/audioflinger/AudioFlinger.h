@@ -88,6 +88,7 @@
 #include <audio_utils/TimestampVerifier.h>
 
 #include <sounddose/SoundDoseManager.h>
+#include <timing/MonotonicFrameCounter.h>
 
 #include "FastCapture.h"
 #include "FastMixer.h"
@@ -123,6 +124,7 @@ class DevicesFactoryHalInterface;
 class EffectsFactoryHalInterface;
 class FastMixer;
 class IAudioManager;
+class ISoundDoseCallback;
 class PassthruBufferProvider;
 class RecordBufferConverter;
 class ServerProxy;
@@ -304,6 +306,9 @@ public:
 
     virtual status_t getSupportedLatencyModes(audio_io_handle_t output,
             std::vector<audio_latency_mode_t>* modes);
+
+    virtual status_t getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                           sp<media::ISoundDose>* soundDose);
 
     status_t onTransactWrapper(TransactionCode code, const Parcel& data, uint32_t flags,
         const std::function<status_t()>& delegate) override;
@@ -587,6 +592,7 @@ private:
     class OffloadThread;
     class DuplicatingThread;
     class AsyncCallbackThread;
+    class BitPerfectThread;
     class Track;
     class RecordTrack;
     class EffectBase;

@@ -39,6 +39,7 @@
 #include <utils/Log.h>
 #include <utils/Trace.h>
 #include <binder/Parcel.h>
+#include <media/audiohal/AudioHalVersionInfo.h>
 #include <media/audiohal/DeviceHalInterface.h>
 #include <media/audiohal/DevicesFactoryHalInterface.h>
 #include <media/audiohal/EffectsFactoryHalInterface.h>
@@ -106,13 +107,15 @@
 
 namespace android {
 
-#define MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION 7.1
-
 using ::android::base::StringPrintf;
 using media::IEffectClient;
 using media::audio::common::AudioMMapPolicyInfo;
 using media::audio::common::AudioMMapPolicyType;
 using android::content::AttributionSourceState;
+using android::detail::AudioHalVersionInfo;
+
+static const AudioHalVersionInfo kMaxAAudioPropertyDeviceHalVersion =
+        AudioHalVersionInfo(AudioHalVersionInfo::Type::HIDL, 7, 1);
 
 static constexpr char kDeadlockedString[] = "AudioFlinger may be deadlocked\n";
 static constexpr char kHardwareLockedString[] = "Hardware lock is taken\n";
@@ -229,7 +232,7 @@ BINDER_METHOD_ENTRY(getAAudioHardwareBurstMinUsec) \
 BINDER_METHOD_ENTRY(setDeviceConnectedState) \
 BINDER_METHOD_ENTRY(setRequestedLatencyMode) \
 BINDER_METHOD_ENTRY(getSupportedLatencyModes) \
-
+BINDER_METHOD_ENTRY(getSoundDoseInterface) \
 
 // singleton for Binder Method Statistics for IAudioFlinger
 static auto& getIAudioFlingerStatistics() {
@@ -401,7 +404,7 @@ void AudioFlinger::onFirstRef()
     mDevicesFactoryHalCallback = new DevicesFactoryHalCallbackImpl;
     mDevicesFactoryHal->setCallbackOnce(mDevicesFactoryHalCallback);
 
-    if (mDevicesFactoryHal->getHalVersion() <= MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION) {
+    if (mDevicesFactoryHal->getHalVersion() <= kMaxAAudioPropertyDeviceHalVersion) {
         mAAudioBurstsPerBuffer = getAAudioMixerBurstCountFromSystemProperty();
         mAAudioHwBurstMinMicros = getAAudioHardwareBurstMinUsecFromSystemProperty();
     }
@@ -447,7 +450,7 @@ status_t AudioFlinger::getMmapPolicyInfos(
         *policyInfos = it->second;
         return NO_ERROR;
     }
-    if (mDevicesFactoryHal->getHalVersion() > MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION) {
+    if (mDevicesFactoryHal->getHalVersion() > kMaxAAudioPropertyDeviceHalVersion) {
         AutoMutex lock(mHardwareLock);
         for (size_t i = 0; i < mAudioHwDevs.size(); ++i) {
             AudioHwDevice *dev = mAudioHwDevs.valueAt(i);
@@ -618,13 +621,15 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
         fullConfig.format = config->format;
         std::vector<audio_io_handle_t> secondaryOutputs;
         bool isSpatialized;
+        bool isBitPerfect;
         ret = AudioSystem::getOutputForAttr(&localAttr, &io,
                                             actualSessionId,
                                             &streamType, adjAttributionSource,
                                             &fullConfig,
                                             (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_MMAP_NOIRQ |
                                                     AUDIO_OUTPUT_FLAG_DIRECT),
-                                            deviceId, &portId, &secondaryOutputs, &isSpatialized);
+                                            deviceId, &portId, &secondaryOutputs, &isSpatialized,
+                                            &isBitPerfect);
         if (ret != NO_ERROR) {
             config->sample_rate = fullConfig.sample_rate;
             config->channel_mask = fullConfig.channel_mask;
@@ -1080,7 +1085,8 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
     audio_stream_type_t streamType;
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
     std::vector<audio_io_handle_t> secondaryOutputs;
-    bool isSpatialized = false;;
+    bool isSpatialized = false;
+    bool isBitPerfect = false;
 
     // TODO b/182392553: refactor or make clearer
     pid_t clientPid =
@@ -1127,7 +1133,7 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
     lStatus = AudioSystem::getOutputForAttr(&localAttr, &output.outputId, sessionId, &streamType,
                                             adjAttributionSource, &input.config, input.flags,
                                             &output.selectedDeviceId, &portId, &secondaryOutputs,
-                                            &isSpatialized);
+                                            &isSpatialized, &isBitPerfect);
 
     if (lStatus != NO_ERROR || output.outputId == AUDIO_IO_HANDLE_NONE) {
         ALOGE("createTrack() getOutputForAttr() return error %d or invalid output handle", lStatus);
@@ -1193,7 +1199,8 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
                                       input.notificationsPerBuffer, input.speed,
                                       input.sharedBuffer, sessionId, &output.flags,
                                       callingPid, adjAttributionSource, input.clientInfo.clientTid,
-                                      &lStatus, portId, input.audioTrackCallback, isSpatialized);
+                                      &lStatus, portId, input.audioTrackCallback, isSpatialized,
+                                      isBitPerfect);
         LOG_ALWAYS_FATAL_IF((lStatus == NO_ERROR) && (track == 0));
         // we don't abort yet if lStatus != NO_ERROR; there is still work to be done regardless
 
@@ -1658,6 +1665,16 @@ status_t AudioFlinger::getSupportedLatencyModes(audio_io_handle_t output,
         return BAD_VALUE;
     }
     return thread->getSupportedLatencyModes(modes);
+}
+
+status_t AudioFlinger::getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                             sp<media::ISoundDose>* soundDose) {
+    if (soundDose == nullptr) {
+        return BAD_VALUE;
+    }
+
+    *soundDose = mMelReporter->getSoundDoseInterface(callback);
+    return NO_ERROR;
 }
 
 status_t AudioFlinger::setStreamMute(audio_stream_type_t stream, bool muted)
@@ -2572,7 +2589,7 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
         mHardwareStatus = AUDIO_HW_IDLE;
     }
 
-    if (mDevicesFactoryHal->getHalVersion() > MAX_AAUDIO_PROPERTY_DEVICE_HAL_VERSION) {
+    if (mDevicesFactoryHal->getHalVersion() > kMaxAAudioPropertyDeviceHalVersion) {
         if (int32_t mixerBursts = dev->getAAudioMixerBurstCount();
             mixerBursts > 0 && mixerBursts > mAAudioBurstsPerBuffer) {
             mAAudioBurstsPerBuffer = mixerBursts;
@@ -2906,7 +2923,11 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
             return thread;
         } else {
             sp<PlaybackThread> thread;
-            if (flags & AUDIO_OUTPUT_FLAG_SPATIALIZER) {
+            if (flags & AUDIO_OUTPUT_FLAG_BIT_PERFECT) {
+                thread = sp<BitPerfectThread>::make(this, outputStream, *output, mSystemReady);
+                ALOGV("%s() created bit-perfect output: ID %d thread %p",
+                      __func__, *output, thread.get());
+            } else if (flags & AUDIO_OUTPUT_FLAG_SPATIALIZER) {
                 thread = new SpatializerThread(this, outputStream, *output,
                                                     mSystemReady, mixerConfig);
                 ALOGV("openOutput_l() created spatializer output: ID %d thread %p",
@@ -4624,6 +4645,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::SET_MASTER_VOLUME:
         case TransactionCode::SET_MASTER_MUTE:
         case TransactionCode::MASTER_MUTE:
+        case TransactionCode::GET_SOUND_DOSE_INTERFACE:
         case TransactionCode::SET_MODE:
         case TransactionCode::SET_MIC_MUTE:
         case TransactionCode::SET_LOW_RAM_DEVICE:
@@ -4635,7 +4657,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
                 ALOGW("%s: transaction %d received from PID %d unauthorized UID %d",
                       __func__, code, IPCThreadState::self()->getCallingPid(),
                       IPCThreadState::self()->getCallingUid());
-                // return status only for non void methods
+                // return status only for non-void methods
                 switch (code) {
                     case TransactionCode::SYSTEM_READY:
                         break;

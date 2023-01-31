@@ -137,14 +137,15 @@ public:
                                       audio_io_handle_t *output,
                                       audio_session_t session,
                                       audio_stream_type_t *stream,
-                                      const AttributionSourceState& attributionSouce,
+                                      const AttributionSourceState& attributionSource,
                                       audio_config_t *config,
                                       audio_output_flags_t *flags,
                                       audio_port_handle_t *selectedDeviceId,
                                       audio_port_handle_t *portId,
                                       std::vector<audio_io_handle_t> *secondaryOutputs,
                                       output_type_t *outputType,
-                                      bool *isSpatialized) = 0;
+                                      bool *isSpatialized,
+                                      bool *isBitPerfect) = 0;
     // indicates to the audio policy manager that the output starts being used by corresponding
     // stream.
     virtual status_t startOutput(audio_port_handle_t portId) = 0;
@@ -159,7 +160,7 @@ public:
                                      audio_io_handle_t *input,
                                      audio_unique_id_t riid,
                                      audio_session_t session,
-                                     const AttributionSourceState& attributionSouce,
+                                     const AttributionSourceState& attributionSource,
                                      audio_config_base_t *config,
                                      audio_input_flags_t flags,
                                      audio_port_handle_t *selectedDeviceId,
@@ -407,6 +408,20 @@ public:
     // retrieves the list of available direct audio profiles for the given audio attributes
     virtual status_t getDirectProfilesForAttributes(const audio_attributes_t* attr,
                                                     AudioProfileVector& audioProfiles) = 0;
+
+    virtual status_t getSupportedMixerAttributes(
+            audio_port_handle_t portId, std::vector<audio_mixer_attributes_t>& mixerAttrs) = 0;
+    virtual status_t setPreferredMixerAttributes(
+            const audio_attributes_t* attr,
+            audio_port_handle_t portId,
+            uid_t uid,
+            const audio_mixer_attributes_t* mixerAttributes) = 0;
+    virtual status_t getPreferredMixerAttributes(const audio_attributes_t* attr,
+                                                 audio_port_handle_t portId,
+                                                 audio_mixer_attributes_t* mixerAttributes) = 0;
+    virtual status_t clearPreferredMixerAttributes(const audio_attributes_t* attr,
+                                                   audio_port_handle_t portId,
+                                                   uid_t uid) = 0;
 };
 
 // Audio Policy client Interface

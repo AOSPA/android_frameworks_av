@@ -55,6 +55,8 @@
 #include "android/media/IAudioTrackCallback.h"
 #include "android/media/IEffect.h"
 #include "android/media/IEffectClient.h"
+#include "android/media/ISoundDose.h"
+#include "android/media/ISoundDoseCallback.h"
 #include "android/media/OpenInputRequest.h"
 #include "android/media/OpenInputResponse.h"
 #include "android/media/OpenOutputRequest.h"
@@ -370,6 +372,8 @@ public:
     virtual status_t getSupportedLatencyModes(audio_io_handle_t output,
             std::vector<audio_latency_mode_t>* modes) = 0;
 
+    virtual status_t getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                           sp<media::ISoundDose>* soundDose) = 0;
 };
 
 /**
@@ -476,6 +480,8 @@ public:
             audio_latency_mode_t mode) override;
     status_t getSupportedLatencyModes(
             audio_io_handle_t output, std::vector<audio_latency_mode_t>* modes) override;
+    status_t getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                   sp<media::ISoundDose>* soundDose) override;
 
 private:
     const sp<media::IAudioFlingerService> mDelegate;
@@ -567,6 +573,7 @@ public:
             SET_DEVICE_CONNECTED_STATE = media::BnAudioFlingerService::TRANSACTION_setDeviceConnectedState,
             SET_REQUESTED_LATENCY_MODE = media::BnAudioFlingerService::TRANSACTION_setRequestedLatencyMode,
             GET_SUPPORTED_LATENCY_MODES = media::BnAudioFlingerService::TRANSACTION_getSupportedLatencyModes,
+            GET_SOUND_DOSE_INTERFACE = media::BnAudioFlingerService::TRANSACTION_getSoundDoseInterface,
         };
 
     protected:
@@ -667,12 +674,12 @@ public:
     Status getPrimaryOutputSamplingRate(int32_t* _aidl_return) override;
     Status getPrimaryOutputFrameCount(int64_t* _aidl_return) override;
     Status setLowRamDevice(bool isLowRamDevice, int64_t totalMemory) override;
-    Status getAudioPort(const media::AudioPort& port, media::AudioPort* _aidl_return) override;
-    Status createAudioPatch(const media::AudioPatch& patch, int32_t* _aidl_return) override;
+    Status getAudioPort(const media::AudioPortFw& port, media::AudioPortFw* _aidl_return) override;
+    Status createAudioPatch(const media::AudioPatchFw& patch, int32_t* _aidl_return) override;
     Status releaseAudioPatch(int32_t handle) override;
     Status listAudioPatches(int32_t maxCount,
-                            std::vector<media::AudioPatch>* _aidl_return) override;
-    Status setAudioPortConfig(const media::AudioPortConfig& config) override;
+                            std::vector<media::AudioPatchFw>* _aidl_return) override;
+    Status setAudioPortConfig(const media::AudioPortConfigFw& config) override;
     Status getAudioHwSyncForSession(int32_t sessionId, int32_t* _aidl_return) override;
     Status systemReady() override;
     Status audioPolicyReady() override;
@@ -687,10 +694,12 @@ public:
             std::vector<media::audio::common::AudioMMapPolicyInfo> *_aidl_return) override;
     Status getAAudioMixerBurstCount(int32_t* _aidl_return) override;
     Status getAAudioHardwareBurstMinUsec(int32_t* _aidl_return) override;
-    Status setDeviceConnectedState(const media::AudioPort& port, bool connected) override;
+    Status setDeviceConnectedState(const media::AudioPortFw& port, bool connected) override;
     Status setRequestedLatencyMode(int output, media::LatencyMode mode) override;
     Status getSupportedLatencyModes(int output,
             std::vector<media::LatencyMode>* _aidl_return) override;
+    Status getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                 sp<media::ISoundDose>* _aidl_return) override;
 private:
     const sp<AudioFlingerServerAdapter::Delegate> mDelegate;
 };

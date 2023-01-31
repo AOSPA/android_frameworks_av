@@ -633,7 +633,8 @@ AudioFlinger::PlaybackThread::Track::Track(
             audio_port_handle_t portId,
             size_t frameCountToBeReady,
             float speed,
-            bool isSpatialized)
+            bool isSpatialized,
+            bool isBitPerfect)
     :   TrackBase(thread, client, attr, sampleRate, format, channelMask, frameCount,
                   // TODO: Using unsecurePointer() has some associated security pitfalls
                   //       (see declaration for details).
@@ -668,7 +669,8 @@ AudioFlinger::PlaybackThread::Track::Track(
     mFlushHwPending(false),
     mFlags(flags),
     mSpeed(speed),
-    mIsSpatialized(isSpatialized)
+    mIsSpatialized(isSpatialized),
+    mIsBitPerfect(isBitPerfect)
 {
     // client == 0 implies sharedBuffer == 0
     ALOG_ASSERT(!(client == 0 && sharedBuffer != 0));
@@ -1116,10 +1118,10 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
             mObservedUnderruns = playbackThread->getFastTrackUnderruns(mFastIndex);
         }
         status = playbackThread->addTrack_l(this);
-        if (status == INVALID_OPERATION || status == PERMISSION_DENIED) {
+        if (status == INVALID_OPERATION || status == PERMISSION_DENIED || status == DEAD_OBJECT) {
             triggerEvents(AudioSystem::SYNC_EVENT_PRESENTATION_COMPLETE);
             //  restore previous state if start was rejected by policy manager
-            if (status == PERMISSION_DENIED) {
+            if (status == PERMISSION_DENIED || status == DEAD_OBJECT) {
                 mState = state;
             }
         }
@@ -1360,25 +1362,7 @@ VolumeShaper::Status AudioFlinger::PlaybackThread::Track::applyVolumeShaper(
         const sp<VolumeShaper::Configuration>& configuration,
         const sp<VolumeShaper::Operation>& operation)
 {
-    sp<VolumeShaper::Configuration> newConfiguration;
-
-    if (isOffloadedOrDirect()) {
-        const VolumeShaper::Configuration::OptionFlag optionFlag
-            = configuration->getOptionFlags();
-        if ((optionFlag & VolumeShaper::Configuration::OPTION_FLAG_CLOCK_TIME) == 0) {
-            ALOGW("%s(%d): %s tracks do not support frame counted VolumeShaper,"
-                    " using clock time instead",
-                    __func__, mId,
-                    isOffloaded() ? "Offload" : "Direct");
-            newConfiguration = new VolumeShaper::Configuration(*configuration);
-            newConfiguration->setOptionFlags(
-                VolumeShaper::Configuration::OptionFlag(optionFlag
-                        | VolumeShaper::Configuration::OPTION_FLAG_CLOCK_TIME));
-        }
-    }
-
-    VolumeShaper::Status status = mVolumeHandler->applyVolumeShaper(
-            (newConfiguration.get() != nullptr ? newConfiguration : configuration), operation);
+    VolumeShaper::Status status = mVolumeHandler->applyVolumeShaper(configuration, operation);
 
     if (isOffloadedOrDirect()) {
         // Signal thread to fetch new volume.
@@ -1399,8 +1383,11 @@ sp<VolumeShaper::State> AudioFlinger::PlaybackThread::Track::getVolumeShaperStat
     return mVolumeHandler->getVolumeShaperState(id);
 }
 
-void AudioFlinger::PlaybackThread::Track::setFinalVolume(float volume)
+void AudioFlinger::PlaybackThread::Track::setFinalVolume(float volumeLeft, float volumeRight)
 {
+    mFinalVolumeLeft = volumeLeft;
+    mFinalVolumeRight = volumeRight;
+    const float volume = (volumeLeft + volumeRight) * 0.5f;
     if (mFinalVolume != volume) { // Compare to an epsilon if too many meaningless updates
         mFinalVolume = volume;
         setMetadataHasChanged();

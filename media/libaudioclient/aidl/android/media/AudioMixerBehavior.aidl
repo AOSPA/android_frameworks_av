@@ -14,8 +14,24 @@
  * limitations under the License.
  */
 
-extern "C" void* createIEffectsFactoryImpl();
+package android.media;
 
-extern "C" __attribute__((visibility("default"))) void* createIEffectsFactory() {
-    return createIEffectsFactoryImpl();
+/**
+ * Defines the mixer behavior that can be used when setting mixer attributes.
+ */
+@Backing(type="int")
+enum AudioMixerBehavior {
+    /**
+     * The mixer behavior is invalid.
+     */
+    INVALID = -1,
+    /**
+     * The mixer behavior that follows platform default behavior, which is mixing audio from
+     * different sources.
+     */
+    DEFAULT = 0,
+    /**
+     * The audio data in the mixer will be bit-perfect as long as possible.
+     */
+    BIT_PERFECT = 1,
 }

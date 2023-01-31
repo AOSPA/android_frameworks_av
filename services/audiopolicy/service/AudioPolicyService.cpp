@@ -155,7 +155,11 @@ BINDER_METHOD_ENTRY(registerSoundTriggerCaptureStateListener) \
 BINDER_METHOD_ENTRY(getSpatializer) \
 BINDER_METHOD_ENTRY(canBeSpatialized) \
 BINDER_METHOD_ENTRY(getDirectPlaybackSupport) \
-BINDER_METHOD_ENTRY(getDirectProfilesForAttributes) \
+BINDER_METHOD_ENTRY(getDirectProfilesForAttributes)  \
+BINDER_METHOD_ENTRY(getSupportedMixerAttributes) \
+BINDER_METHOD_ENTRY(setPreferredMixerAttributes) \
+BINDER_METHOD_ENTRY(getPreferredMixerAttributes) \
+BINDER_METHOD_ENTRY(clearPreferredMixerAttributes) \
 
 // singleton for Binder Method Statistics for IAudioPolicyService
 static auto& getIAudioPolicyServiceStatistics() {
@@ -201,7 +205,8 @@ AudioPolicyService::AudioPolicyService()
       mPhoneState(AUDIO_MODE_INVALID),
       mCaptureStateNotifier(false),
       mCreateAudioPolicyManager(createAudioPolicyManager),
-      mDestroyAudioPolicyManager(destroyAudioPolicyManager) {
+      mDestroyAudioPolicyManager(destroyAudioPolicyManager),
+      mUsecaseValidator(media::createUsecaseValidator()) {
       setMinSchedulerPolicy(SCHED_NORMAL, ANDROID_PRIORITY_AUDIO);
 }
 
@@ -1324,7 +1329,9 @@ status_t AudioPolicyService::onTransact(
         case TRANSACTION_removeDevicesRoleForCapturePreset:
         case TRANSACTION_clearDevicesRoleForCapturePreset:
         case TRANSACTION_getDevicesForRoleAndCapturePreset:
-        case TRANSACTION_getSpatializer: {
+        case TRANSACTION_getSpatializer:
+        case TRANSACTION_setPreferredMixerAttributes:
+        case TRANSACTION_clearPreferredMixerAttributes: {
             if (!isServiceUid(IPCThreadState::self()->getCallingUid())) {
                 ALOGW("%s: transaction %d received from PID %d unauthorized UID %d",
                       __func__, code, IPCThreadState::self()->getCallingPid(),
@@ -1529,6 +1536,16 @@ status_t AudioPolicyService::printHelp(int out) {
         "  set-uid-state <PACKAGE> <active|idle> [--user USER_ID] overrides the uid state\n"
         "  reset-uid-state <PACKAGE> [--user USER_ID] clears the uid state override\n"
         "  help print this message\n");
+}
+
+status_t AudioPolicyService::registerOutput(audio_io_handle_t output,
+                        const audio_config_base_t& config,
+                        const audio_output_flags_t flags) {
+    return mUsecaseValidator->registerStream(output, config, flags);
+}
+
+status_t AudioPolicyService::unregisterOutput(audio_io_handle_t output) {
+    return mUsecaseValidator->unregisterStream(output);
 }
 
 // -----------  AudioPolicyService::UidPolicy implementation ----------
