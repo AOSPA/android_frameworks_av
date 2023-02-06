@@ -34,6 +34,23 @@
       "parentUuid": "e45c2741_45bf7eba",
       "revId": "3663b16e79a8f76103b3ab7ca723ee29ac8b709f",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "c7256553_cbde3156",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000429
+      },
+      "writtenOn": "2023-02-06T23:34:38Z",
+      "side": 1,
+      "message": "whole topic tested and it fixed wfd for xiaomi sdm439 devices.",
+      "revId": "3663b16e79a8f76103b3ab7ca723ee29ac8b709f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
