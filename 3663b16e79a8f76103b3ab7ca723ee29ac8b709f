@@ -16,6 +16,24 @@
       "message": "just add back that dependency",
       "revId": "3663b16e79a8f76103b3ab7ca723ee29ac8b709f",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "6f7dc3bf_4753f7b3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000429
+      },
+      "writtenOn": "2023-02-06T13:42:30Z",
+      "side": 1,
+      "message": "that commit has been always like that.",
+      "parentUuid": "e45c2741_45bf7eba",
+      "revId": "3663b16e79a8f76103b3ab7ca723ee29ac8b709f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
