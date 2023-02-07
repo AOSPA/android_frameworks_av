@@ -68,6 +68,24 @@
       "message": "we dont need test classes. you can remove them irrespective of how the commit has been.",
       "revId": "3663b16e79a8f76103b3ab7ca723ee29ac8b709f",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "ca0062e6_749d05d0",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000429
+      },
+      "writtenOn": "2023-02-07T08:29:17Z",
+      "side": 1,
+      "message": "ok got it",
+      "parentUuid": "8a0da41b_8592f0b4",
+      "revId": "3663b16e79a8f76103b3ab7ca723ee29ac8b709f",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
