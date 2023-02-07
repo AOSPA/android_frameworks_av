@@ -66,7 +66,7 @@ struct NuPlayer::Renderer : public AHandler {
     void signalDisableOffloadAudio();
     void signalEnableOffloadAudio();
 
-    void pause();
+    void pause(bool forPreroll = false);
     void resume();
 
     void setVideoFrameRate(float fps);
@@ -75,8 +75,7 @@ struct NuPlayer::Renderer : public AHandler {
     status_t getCurrentPosition(int64_t *mediaUs);
     int64_t getVideoLateByUs();
 
-    bool isVideoPrerollCompleted() const;
-    bool isVideoSampleReceived() const;
+    bool isVideoPrerollInprogress() const;
 
     status_t openAudioSink(
             const sp<AMessage> &format,
@@ -197,6 +196,7 @@ protected:
     bool mPaused;
     int64_t mPauseDrainAudioAllowedUs; // time when we can drain/deliver audio in pause mode.
 
+    bool mVideoPrerollInprogress;
     bool mVideoSampleReceived;
     bool mVideoRenderingStarted;
     int32_t mVideoRenderingStartGeneration;
@@ -272,7 +272,7 @@ protected:
     status_t onConfigSync(const AVSyncSettings &sync, float videoFpsHint);
     status_t onGetSyncSettings(AVSyncSettings *sync /* nonnull */, float *videoFps /* nonnull */);
 
-    void onPause();
+    void onPause(bool forPreroll = false);
     void onResume();
     void onSetVideoFrameRate(float fps);
     int32_t getQueueGeneration(bool audio);
