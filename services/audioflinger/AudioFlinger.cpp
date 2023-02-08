@@ -2726,13 +2726,14 @@ status_t AudioFlinger::systemReady()
 {
     Mutex::Autolock _l(mLock);
     ALOGI("%s", __FUNCTION__);
-    mediautils::TimeCheck::setSystemReadyTimeoutMs(
-        mediautils::TimeCheck::kDefaultTimeoutDuration.count());
     if (mSystemReady) {
         ALOGW("%s called twice", __FUNCTION__);
         return NO_ERROR;
     }
     mSystemReady = true;
+
+    mediautils::TimeCheck::setSystemReady();
+
     for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
         ThreadBase *thread = (ThreadBase *)mPlaybackThreads.valueAt(i).get();
         thread->systemReady();
