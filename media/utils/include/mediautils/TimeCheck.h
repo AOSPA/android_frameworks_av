@@ -97,7 +97,7 @@ class TimeCheck {
     static std::string toString();
     static void setAudioHalPids(const std::vector<pid_t>& pids);
     static std::vector<pid_t> getAudioHalPids();
-    static void setSystemReadyTimeoutMs(uint32_t timeoutMs);
+    static void setSystemReady();
 
   private:
     // Helper class for handling events.
