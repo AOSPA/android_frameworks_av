@@ -376,8 +376,6 @@ public:
     virtual     void        toAudioPortConfig(struct audio_port_config *config) = 0;
 
     virtual     void        resizeInputBuffer_l(int32_t maxSharedAudioHistoryMs);
-    virtual     void        onHalLatencyModesChanged_l() {}
-
 
                 // see note at declaration of mStandby, mOutDevice and mInDevice
                 bool        standby() const { return mStandby; }
@@ -624,6 +622,8 @@ protected:
                             }
 
                 product_strategy_t getStrategyForStream(audio_stream_type_t stream) const;
+
+    virtual     void        onHalLatencyModesChanged_l() {}
 
     virtual     void        dumpInternals_l(int fd __unused, const Vector<String16>& args __unused)
                             { }
@@ -1037,7 +1037,11 @@ public:
 
                 // called with AudioFlinger lock held
                         bool     invalidateTracks_l(audio_stream_type_t streamType);
+                        bool     invalidateTracks_l(std::set<audio_port_handle_t>& portIds);
                 virtual void     invalidateTracks(audio_stream_type_t streamType);
+                // Invalidate tracks by a set of port ids. The port id will be removed from
+                // the given set if the corresponding track is found and invalidated.
+                virtual void     invalidateTracks(std::set<audio_port_handle_t>& portIds);
 
     virtual     size_t      frameCount() const { return mNormalFrameCount; }
 
@@ -1096,6 +1100,10 @@ public:
 
     virtual     status_t getSupportedLatencyModes(
                         std::vector<audio_latency_mode_t>* modes __unused) {
+                    return INVALID_OPERATION;
+                }
+
+    virtual     status_t setBluetoothVariableLatencyEnabled(bool enabled __unused) {
                     return INVALID_OPERATION;
                 }
 
@@ -1460,7 +1468,8 @@ protected:
                 }
 };
 
-class MixerThread : public PlaybackThread {
+class MixerThread : public PlaybackThread,
+                    public StreamOutHalInterfaceLatencyModeCallback  {
 public:
     MixerThread(const sp<AudioFlinger>& audioFlinger,
                 AudioStreamOut* output,
@@ -1469,6 +1478,13 @@ public:
                 type_t type = MIXER,
                 audio_config_base_t *mixerConfig = nullptr);
     virtual             ~MixerThread();
+
+    // RefBase
+    virtual     void        onFirstRef();
+
+                // StreamOutHalInterfaceLatencyModeCallback
+                void        onRecommendedLatencyModeChanged(
+                                    std::vector<audio_latency_mode_t> modes) override;
 
     // Thread virtuals
 
@@ -1507,6 +1523,17 @@ protected:
     virtual     status_t    releaseAudioPatch_l(const audio_patch_handle_t handle);
 
                 AudioMixer* mAudioMixer;    // normal mixer
+
+            // Support low latency mode by default as unless explicitly indicated by the audio HAL
+            // we assume the audio path is compatible with the head tracking latency requirements
+            std::vector<audio_latency_mode_t> mSupportedLatencyModes = {AUDIO_LATENCY_MODE_LOW};
+            // default to invalid value to force first update to the audio HAL
+            audio_latency_mode_t mSetLatencyMode =
+                    (audio_latency_mode_t)AUDIO_LATENCY_MODE_INVALID;
+
+            // Bluetooth Variable latency control logic is enabled or disabled for this thread
+            std::atomic_bool mBluetoothLatencyModesEnabled;
+
 private:
                 // one-time initialization, no locks required
                 sp<FastMixer>     mFastMixer;     // non-0 if there is also a fast mixer
@@ -1541,6 +1568,11 @@ public:
                                 return INVALID_OPERATION;
                             }
 
+                status_t    getSupportedLatencyModes(
+                                    std::vector<audio_latency_mode_t>* modes) override;
+
+                status_t    setBluetoothVariableLatencyEnabled(bool enabled) override;
+
 protected:
     virtual     void       setMasterMono_l(bool mono) {
                                mMasterMono.store(mono);
@@ -1559,6 +1591,10 @@ protected:
                                    mFastMixer->setMasterBalance(balance);
                                }
                            }
+
+                void       updateHalSupportedLatencyModes_l();
+                void       onHalLatencyModesChanged_l() override;
+                void       setHalLatencyMode_l() override;
 };
 
 class DirectOutputThread : public PlaybackThread {
@@ -1664,6 +1700,7 @@ protected:
     virtual     bool        waitingAsyncCallback();
     virtual     bool        waitingAsyncCallback_l();
     virtual     void        invalidateTracks(audio_stream_type_t streamType);
+                void        invalidateTracks(std::set<audio_port_handle_t>& portIds) override;
 
     virtual     bool        keepWakeLock() const { return (mKeepWakeLock || (mDrainSequence & 1)); }
 
@@ -1766,8 +1803,7 @@ public:
     }
 };
 
-class SpatializerThread : public MixerThread,
-        public StreamOutHalInterfaceLatencyModeCallback {
+class SpatializerThread : public MixerThread {
 public:
     SpatializerThread(const sp<AudioFlinger>& audioFlinger,
                            AudioStreamOut* output,
@@ -1778,32 +1814,16 @@ public:
 
             bool hasFastMixer() const override { return false; }
 
-            status_t    createAudioPatch_l(const struct audio_patch *patch,
-                                   audio_patch_handle_t *handle) override;
-
             // RefBase
             virtual void        onFirstRef();
 
-            // StreamOutHalInterfaceLatencyModeCallback
-            void onRecommendedLatencyModeChanged(std::vector<audio_latency_mode_t> modes) override;
-
             status_t setRequestedLatencyMode(audio_latency_mode_t mode) override;
-            status_t getSupportedLatencyModes(std::vector<audio_latency_mode_t>* modes) override;
 
 protected:
             void checkOutputStageEffects() override;
-            void onHalLatencyModesChanged_l() override;
             void setHalLatencyMode_l() override;
 
 private:
-            void updateHalSupportedLatencyModes_l();
-
-            // Support low latency mode by default as unless explicitly indicated by the audio HAL
-            // we assume the audio path is compatible with the head tracking latency requirements
-            std::vector<audio_latency_mode_t> mSupportedLatencyModes = {AUDIO_LATENCY_MODE_LOW};
-            // default to invalid value to force first update to the audio HAL
-            audio_latency_mode_t mSetLatencyMode =
-                    (audio_latency_mode_t)AUDIO_LATENCY_MODE_INVALID;
             // Do not request a specific mode by default
             audio_latency_mode_t mRequestedLatencyMode = AUDIO_LATENCY_MODE_FREE;
 
@@ -2160,6 +2180,7 @@ class MmapThread : public ThreadBase
     virtual     audio_stream_type_t streamType() { return AUDIO_STREAM_DEFAULT; }
 
     virtual     void        invalidateTracks(audio_stream_type_t streamType __unused) {}
+    virtual     void        invalidateTracks(std::set<audio_port_handle_t>& portIds __unused) {}
 
                 // Sets the UID records silence
     virtual     void        setRecordSilenced(audio_port_handle_t portId __unused,
@@ -2239,6 +2260,7 @@ public:
                 void        setMasterMute_l(bool muted) { mMasterMute = muted; }
 
     virtual     void        invalidateTracks(audio_stream_type_t streamType);
+                void        invalidateTracks(std::set<audio_port_handle_t>& portIds) override;
 
     virtual     audio_stream_type_t streamType() { return mStreamType; }
     virtual     void        checkSilentMode_l();

@@ -137,6 +137,7 @@ BINDER_METHOD_ENTRY(setA11yServicesUids) \
 BINDER_METHOD_ENTRY(setCurrentImeUid) \
 BINDER_METHOD_ENTRY(isHapticPlaybackSupported) \
 BINDER_METHOD_ENTRY(isUltrasoundSupported) \
+BINDER_METHOD_ENTRY(isHotwordStreamSupported) \
 BINDER_METHOD_ENTRY(listAudioProductStrategies) \
 BINDER_METHOD_ENTRY(getProductStrategyFromAudioAttributes) \
 BINDER_METHOD_ENTRY(listAudioVolumeGroups) \
@@ -145,6 +146,7 @@ BINDER_METHOD_ENTRY(setRttEnabled) \
 BINDER_METHOD_ENTRY(isCallScreenModeSupported) \
 BINDER_METHOD_ENTRY(setDevicesRoleForStrategy) \
 BINDER_METHOD_ENTRY(removeDevicesRoleForStrategy) \
+BINDER_METHOD_ENTRY(clearDevicesRoleForStrategy) \
 BINDER_METHOD_ENTRY(getDevicesForRoleAndStrategy) \
 BINDER_METHOD_ENTRY(setDevicesRoleForCapturePreset) \
 BINDER_METHOD_ENTRY(addDevicesRoleForCapturePreset) \
@@ -1313,11 +1315,13 @@ status_t AudioPolicyService::onTransact(
         case TRANSACTION_getVolumeGroupFromAudioAttributes:
         case TRANSACTION_acquireSoundTriggerSession:
         case TRANSACTION_releaseSoundTriggerSession:
+        case TRANSACTION_isHotwordStreamSupported:
         case TRANSACTION_setRttEnabled:
         case TRANSACTION_isCallScreenModeSupported:
         case TRANSACTION_setDevicesRoleForStrategy:
         case TRANSACTION_setSupportedSystemUsages:
         case TRANSACTION_removeDevicesRoleForStrategy:
+        case TRANSACTION_clearDevicesRoleForStrategy:
         case TRANSACTION_getDevicesForRoleAndStrategy:
         case TRANSACTION_getDevicesForAttributes:
         case TRANSACTION_setAllowedCapturePolicy:

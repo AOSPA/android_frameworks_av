@@ -194,7 +194,6 @@ BINDER_METHOD_ENTRY(suspendOutput) \
 BINDER_METHOD_ENTRY(restoreOutput) \
 BINDER_METHOD_ENTRY(openInput) \
 BINDER_METHOD_ENTRY(closeInput) \
-BINDER_METHOD_ENTRY(invalidateStream) \
 BINDER_METHOD_ENTRY(setVoiceVolume) \
 BINDER_METHOD_ENTRY(getRenderPosition) \
 BINDER_METHOD_ENTRY(getInputFramesLost) \
@@ -232,6 +231,9 @@ BINDER_METHOD_ENTRY(getAAudioHardwareBurstMinUsec) \
 BINDER_METHOD_ENTRY(setDeviceConnectedState) \
 BINDER_METHOD_ENTRY(setRequestedLatencyMode) \
 BINDER_METHOD_ENTRY(getSupportedLatencyModes) \
+BINDER_METHOD_ENTRY(setBluetoothVariableLatencyEnabled) \
+BINDER_METHOD_ENTRY(isBluetoothVariableLatencyEnabled) \
+BINDER_METHOD_ENTRY(supportsBluetoothVariableLatency) \
 BINDER_METHOD_ENTRY(getSoundDoseInterface) \
 
 // singleton for Binder Method Statistics for IAudioFlinger
@@ -328,7 +330,8 @@ AudioFlinger::AudioFlinger()
       mPatchCommandThread(sp<PatchCommandThread>::make()),
       mDeviceEffectManager(sp<DeviceEffectManager>::make(*this)),
       mMelReporter(sp<MelReporter>::make(*this)),
-      mSystemReady(false)
+      mSystemReady(false),
+      mBluetoothLatencyModesEnabled(true)
 {
     // Move the audio session unique ID generator start base as time passes to limit risk of
     // generating the same ID again after an audioserver restart.
@@ -1667,6 +1670,44 @@ status_t AudioFlinger::getSupportedLatencyModes(audio_io_handle_t output,
     return thread->getSupportedLatencyModes(modes);
 }
 
+status_t AudioFlinger::setBluetoothVariableLatencyEnabled(bool enabled) {
+    Mutex::Autolock _l(mLock);
+    status_t status = INVALID_OPERATION;
+    for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
+        // Success if at least one PlaybackThread supports Bluetooth latency modes
+        if (mPlaybackThreads.valueAt(i)->setBluetoothVariableLatencyEnabled(enabled) == NO_ERROR) {
+            status = NO_ERROR;
+        }
+    }
+    if (status == NO_ERROR) {
+        mBluetoothLatencyModesEnabled.store(enabled);
+    }
+    return status;
+}
+
+status_t AudioFlinger::isBluetoothVariableLatencyEnabled(bool *enabled) {
+    if (enabled == nullptr) {
+        return BAD_VALUE;
+    }
+    *enabled = mBluetoothLatencyModesEnabled.load();
+    return NO_ERROR;
+}
+
+status_t AudioFlinger::supportsBluetoothVariableLatency(bool* support) {
+    if (support == nullptr) {
+        return BAD_VALUE;
+    }
+    Mutex::Autolock _l(mLock);
+    *support = false;
+    for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
+        if (mAudioHwDevs.valueAt(i)->supportsBluetoothVariableLatency()) {
+             *support = true;
+             break;
+        }
+    }
+    return NO_ERROR;
+}
+
 status_t AudioFlinger::getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
                                              sp<media::ISoundDose>* soundDose) {
     if (soundDose == nullptr) {
@@ -2179,9 +2220,9 @@ void AudioFlinger::ioConfigChanged(audio_io_config_event_t event,
 void AudioFlinger::onSupportedLatencyModesChanged(
         audio_io_handle_t output, const std::vector<audio_latency_mode_t>& modes) {
     int32_t outputAidl = VALUE_OR_FATAL(legacy2aidl_audio_io_handle_t_int32_t(output));
-    std::vector<media::LatencyMode> modesAidl = VALUE_OR_FATAL(
-                convertContainer<std::vector<media::LatencyMode>>(modes,
-                        legacy2aidl_audio_latency_mode_t_LatencyMode));
+    std::vector<media::audio::common::AudioLatencyMode> modesAidl = VALUE_OR_FATAL(
+                convertContainer<std::vector<media::audio::common::AudioLatencyMode>>(
+                        modes, legacy2aidl_audio_latency_mode_t_AudioLatencyMode));
 
     Mutex::Autolock _l(mClientLock);
     size_t size = mNotificationClients.size();
@@ -2532,6 +2573,9 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
         ALOGE("loadHwModule() error %d loading module %s", rc, name);
         return AUDIO_MODULE_HANDLE_NONE;
     }
+    if (!mMelReporter->activateHalSoundDoseComputation(name)) {
+        ALOGW("loadHwModule() sound dose reporting is not available");
+    }
 
     mHardwareStatus = AUDIO_HW_INIT;
     rc = dev->initCheck();
@@ -2578,6 +2622,13 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
     if (strcmp(name, AUDIO_HARDWARE_MODULE_ID_MSD) == 0) {
         // An MSD module is inserted before hardware modules in order to mix encoded streams.
         flags = static_cast<AudioHwDevice::Flags>(flags | AudioHwDevice::AHWD_IS_INSERT);
+    }
+
+
+    if (bool supports = false;
+            dev->supportsBluetoothVariableLatency(&supports) == NO_ERROR && supports) {
+        flags = static_cast<AudioHwDevice::Flags>(flags |
+                AudioHwDevice::AHWD_SUPPORTS_BT_LATENCY_MODES);
     }
 
     audio_module_handle_t handle = (audio_module_handle_t) nextUniqueId(AUDIO_UNIQUE_ID_USE_MODULE);
@@ -2814,14 +2865,15 @@ status_t AudioFlinger::getMicrophones(std::vector<media::MicrophoneInfo> *microp
     status_t status = INVALID_OPERATION;
 
     for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
-        std::vector<media::MicrophoneInfo> mics;
+        std::vector<audio_microphone_characteristic_t> mics;
         AudioHwDevice *dev = mAudioHwDevs.valueAt(i);
         mHardwareStatus = AUDIO_HW_GET_MICROPHONES;
         status_t devStatus = dev->hwDevice()->getMicrophones(&mics);
         mHardwareStatus = AUDIO_HW_IDLE;
         if (devStatus == NO_ERROR) {
-            microphones->insert(microphones->begin(), mics.begin(), mics.end());
             // report success if at least one HW module supports the function.
+            std::transform(mics.begin(), mics.end(), std::back_inserter(*microphones),
+                           [](auto& mic) { return media::MicrophoneInfo(mic); });
             status = NO_ERROR;
         }
     }
@@ -2955,6 +3007,7 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
             if (thread->isMsdDevice()) {
                 thread->setDownStreamPatch(&patch);
             }
+            thread->setBluetoothVariableLatencyEnabled(mBluetoothLatencyModesEnabled.load());
             return thread;
         }
     }
@@ -3400,17 +3453,23 @@ void AudioFlinger::closeThreadInternal_l(const sp<RecordThread>& thread)
     closeInputFinish(thread);
 }
 
-status_t AudioFlinger::invalidateStream(audio_stream_type_t stream)
-{
+status_t AudioFlinger::invalidateTracks(const std::vector<audio_port_handle_t> &portIds) {
     Mutex::Autolock _l(mLock);
-    ALOGV("invalidateStream() stream %d", stream);
+    ALOGV("%s", __func__);
 
+    std::set<audio_port_handle_t> portIdSet(portIds.begin(), portIds.end());
     for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
         PlaybackThread *thread = mPlaybackThreads.valueAt(i).get();
-        thread->invalidateTracks(stream);
+        thread->invalidateTracks(portIdSet);
+        if (portIdSet.empty()) {
+            return NO_ERROR;
+        }
     }
     for (size_t i = 0; i < mMmapThreads.size(); i++) {
-        mMmapThreads[i]->invalidateTracks(stream);
+        mMmapThreads[i]->invalidateTracks(portIdSet);
+        if (portIdSet.empty()) {
+            return NO_ERROR;
+        }
     }
     return NO_ERROR;
 }
@@ -4609,7 +4668,6 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::RESTORE_OUTPUT:
         case TransactionCode::OPEN_INPUT:
         case TransactionCode::CLOSE_INPUT:
-        case TransactionCode::INVALIDATE_STREAM:
         case TransactionCode::SET_VOICE_VOLUME:
         case TransactionCode::MOVE_EFFECTS:
         case TransactionCode::SET_EFFECT_SUSPENDED:
@@ -4624,6 +4682,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::SET_DEVICE_CONNECTED_STATE:
         case TransactionCode::SET_REQUESTED_LATENCY_MODE:
         case TransactionCode::GET_SUPPORTED_LATENCY_MODES:
+        case TransactionCode::INVALIDATE_TRACKS:
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, code, IPCThreadState::self()->getCallingPid());
             // return status only for non void methods
@@ -4652,7 +4711,10 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::SYSTEM_READY:
         case TransactionCode::SET_AUDIO_HAL_PIDS:
         case TransactionCode::SET_VIBRATOR_INFOS:
-        case TransactionCode::UPDATE_SECONDARY_OUTPUTS: {
+        case TransactionCode::UPDATE_SECONDARY_OUTPUTS:
+        case TransactionCode::SET_BLUETOOTH_VARIABLE_LATENCY_ENABLED:
+        case TransactionCode::IS_BLUETOOTH_VARIABLE_LATENCY_ENABLED:
+        case TransactionCode::SUPPORTS_BLUETOOTH_VARIABLE_LATENCY: {
             if (!isServiceUid(IPCThreadState::self()->getCallingUid())) {
                 ALOGW("%s: transaction %d received from PID %d unauthorized UID %d",
                       __func__, code, IPCThreadState::self()->getCallingPid(),

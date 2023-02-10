@@ -29,7 +29,7 @@
 #include <media/stagefright/foundation/MediaDefs.h>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// Utilities
+// AIDL CPP/NDK backend to legacy audio data structure conversion utilities.
 
 #if defined(BACKEND_NDK)
 /* AIDL String generated in NDK is different than CPP */
@@ -53,6 +53,7 @@ using media::audio::common::AudioDevice;
 using media::audio::common::AudioDeviceAddress;
 using media::audio::common::AudioDeviceDescription;
 using media::audio::common::AudioDeviceType;
+using media::audio::common::AudioDualMonoMode;
 using media::audio::common::AudioEncapsulationMetadataType;
 using media::audio::common::AudioEncapsulationMode;
 using media::audio::common::AudioEncapsulationType;
@@ -63,9 +64,11 @@ using media::audio::common::AudioGainConfig;
 using media::audio::common::AudioGainMode;
 using media::audio::common::AudioInputFlags;
 using media::audio::common::AudioIoFlags;
+using media::audio::common::AudioLatencyMode;
 using media::audio::common::AudioMode;
 using media::audio::common::AudioOffloadInfo;
 using media::audio::common::AudioOutputFlags;
+using media::audio::common::AudioPlaybackRate;
 using media::audio::common::AudioPortDeviceExt;
 using media::audio::common::AudioPortExt;
 using media::audio::common::AudioPortMixExt;
@@ -843,8 +846,8 @@ ConversionResult<audio_channel_mask_t> aidl2legacy_AudioChannelLayout_audio_chan
         case Tag::indexMask:
             // Index masks do not have pre-defined values.
             if (const int bits = aidl.get<Tag::indexMask>();
-                    __builtin_popcount(bits) != 0 &&
-                    __builtin_popcount(bits) <= AUDIO_CHANNEL_COUNT_MAX) {
+                __builtin_popcount(bits) != 0 &&
+                __builtin_popcount(bits) <= (int)AUDIO_CHANNEL_COUNT_MAX) {
                 return audio_channel_mask_from_representation_and_bits(
                         AUDIO_CHANNEL_REPRESENTATION_INDEX, bits);
             } else {
@@ -1120,7 +1123,7 @@ ConversionResult<audio_gain_config> aidl2legacy_AudioGainConfig_audio_gain_confi
     for (size_t i = 0; i < numValues; ++i) {
         legacy.values[i] = VALUE_OR_RETURN(convertIntegral<int>(aidl.values[i]));
     }
-    legacy.ramp_duration_ms = VALUE_OR_RETURN(convertIntegral<unsigned int>(aidl.rampDurationMs));
+    legacy.ramp_duration_ms = VALUE_OR_RETURN(convertIntegral<int>(aidl.rampDurationMs));
     return legacy;
 }
 
@@ -1164,6 +1167,10 @@ ConversionResult<audio_input_flags_t> aidl2legacy_AudioInputFlags_audio_input_fl
             return AUDIO_INPUT_FLAG_DIRECT;
         case AudioInputFlags::ULTRASOUND:
             return AUDIO_INPUT_FLAG_ULTRASOUND;
+        case AudioInputFlags::HOTWORD_TAP:
+            return AUDIO_INPUT_FLAG_HOTWORD_TAP;
+        case AudioInputFlags::HW_LOOKBACK:
+            return AUDIO_INPUT_FLAG_HW_LOOKBACK;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1191,6 +1198,10 @@ ConversionResult<AudioInputFlags> legacy2aidl_audio_input_flags_t_AudioInputFlag
             return AudioInputFlags::DIRECT;
         case AUDIO_INPUT_FLAG_ULTRASOUND:
             return AudioInputFlags::ULTRASOUND;
+        case AUDIO_INPUT_FLAG_HOTWORD_TAP:
+            return AudioInputFlags::HOTWORD_TAP;
+        case AUDIO_INPUT_FLAG_HW_LOOKBACK:
+            return AudioInputFlags::HW_LOOKBACK;
     }
     return unexpected(BAD_VALUE);
 }
@@ -1707,12 +1718,12 @@ aidl2legacy_AudioOffloadInfo_audio_offload_info_t(const AudioOffloadInfo& aidl) 
     legacy.format = base.format;
     legacy.stream_type = VALUE_OR_RETURN(
             aidl2legacy_AudioStreamType_audio_stream_type_t(aidl.streamType));
-    legacy.bit_rate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.bitRatePerSecond));
+    legacy.bit_rate = VALUE_OR_RETURN(convertIntegral<int32_t>(aidl.bitRatePerSecond));
     legacy.duration_us = VALUE_OR_RETURN(convertIntegral<int64_t>(aidl.durationUs));
     legacy.has_video = aidl.hasVideo;
     legacy.is_streaming = aidl.isStreaming;
-    legacy.bit_width = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.bitWidth));
-    legacy.offload_buffer_size = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.offloadBufferSize));
+    legacy.bit_width = VALUE_OR_RETURN(convertIntegral<int32_t>(aidl.bitWidth));
+    legacy.offload_buffer_size = VALUE_OR_RETURN(convertIntegral<int32_t>(aidl.offloadBufferSize));
     legacy.usage = VALUE_OR_RETURN(aidl2legacy_AudioUsage_audio_usage_t(aidl.usage));
     legacy.encapsulation_mode = VALUE_OR_RETURN(
             aidl2legacy_AudioEncapsulationMode_audio_encapsulation_mode_t(aidl.encapsulationMode));
@@ -1786,7 +1797,7 @@ legacy2aidl_audio_config_t_AudioConfig(const audio_config_t& legacy, bool isInpu
 ConversionResult<audio_config_base_t>
 aidl2legacy_AudioConfigBase_audio_config_base_t(const AudioConfigBase& aidl, bool isInput) {
     audio_config_base_t legacy;
-    legacy.sample_rate = VALUE_OR_RETURN(convertIntegral<uint32_t>(aidl.sampleRate));
+    legacy.sample_rate = VALUE_OR_RETURN(convertIntegral<int>(aidl.sampleRate));
     legacy.channel_mask = VALUE_OR_RETURN(
             aidl2legacy_AudioChannelLayout_audio_channel_mask_t(aidl.channelMask, isInput));
     legacy.format = VALUE_OR_RETURN(aidl2legacy_AudioFormatDescription_audio_format_t(aidl.format));
@@ -2046,6 +2057,10 @@ aidl2legacy_AudioStandard_audio_standard_t(AudioStandard aidl) {
             return AUDIO_STANDARD_NONE;
         case AudioStandard::EDID:
             return AUDIO_STANDARD_EDID;
+        case AudioStandard::SADB:
+            return AUDIO_STANDARD_SADB;
+        case AudioStandard::VSADB:
+            return AUDIO_STANDARD_VSADB;
     }
     return unexpected(BAD_VALUE);
 }
@@ -2057,6 +2072,10 @@ legacy2aidl_audio_standard_t_AudioStandard(audio_standard_t legacy) {
             return AudioStandard::NONE;
         case AUDIO_STANDARD_EDID:
             return AudioStandard::EDID;
+        case AUDIO_STANDARD_SADB:
+            return AudioStandard::SADB;
+        case AUDIO_STANDARD_VSADB:
+            return AudioStandard::VSADB;
     }
     return unexpected(BAD_VALUE);
 }
@@ -2119,6 +2138,139 @@ legacy2aidl_audio_encapsulation_type_t_AudioEncapsulationType(
             return AudioEncapsulationType::IEC61937;
         case AUDIO_ENCAPSULATION_TYPE_PCM:
             return AudioEncapsulationType::PCM;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<audio_dual_mono_mode_t>
+aidl2legacy_AudioDualMonoMode_audio_dual_mono_mode_t(AudioDualMonoMode aidl) {
+    switch (aidl) {
+        case AudioDualMonoMode::OFF:
+            return AUDIO_DUAL_MONO_MODE_OFF;
+        case AudioDualMonoMode::LR:
+            return AUDIO_DUAL_MONO_MODE_LR;
+        case AudioDualMonoMode::LL:
+            return AUDIO_DUAL_MONO_MODE_LL;
+        case AudioDualMonoMode::RR:
+            return AUDIO_DUAL_MONO_MODE_RR;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<AudioDualMonoMode>
+legacy2aidl_audio_dual_mono_mode_t_AudioDualMonoMode(audio_dual_mono_mode_t legacy) {
+    switch (legacy) {
+        case AUDIO_DUAL_MONO_MODE_OFF:
+            return AudioDualMonoMode::OFF;
+        case AUDIO_DUAL_MONO_MODE_LR:
+            return AudioDualMonoMode::LR;
+        case AUDIO_DUAL_MONO_MODE_LL:
+            return AudioDualMonoMode::LL;
+        case AUDIO_DUAL_MONO_MODE_RR:
+            return AudioDualMonoMode::RR;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<audio_timestretch_fallback_mode_t>
+aidl2legacy_TimestretchFallbackMode_audio_timestretch_fallback_mode_t(
+        AudioPlaybackRate::TimestretchFallbackMode aidl) {
+    switch (aidl) {
+        case AudioPlaybackRate::TimestretchFallbackMode::SYS_RESERVED_CUT_REPEAT:
+            return AUDIO_TIMESTRETCH_FALLBACK_CUT_REPEAT;
+        case AudioPlaybackRate::TimestretchFallbackMode::SYS_RESERVED_DEFAULT:
+            return AUDIO_TIMESTRETCH_FALLBACK_DEFAULT;
+        case AudioPlaybackRate::TimestretchFallbackMode::MUTE:
+            return AUDIO_TIMESTRETCH_FALLBACK_MUTE;
+        case AudioPlaybackRate::TimestretchFallbackMode::FAIL:
+            return AUDIO_TIMESTRETCH_FALLBACK_FAIL;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<AudioPlaybackRate::TimestretchFallbackMode>
+legacy2aidl_audio_timestretch_fallback_mode_t_TimestretchFallbackMode(
+        audio_timestretch_fallback_mode_t legacy) {
+    switch (legacy) {
+        case AUDIO_TIMESTRETCH_FALLBACK_CUT_REPEAT:
+            return AudioPlaybackRate::TimestretchFallbackMode::SYS_RESERVED_CUT_REPEAT;
+        case AUDIO_TIMESTRETCH_FALLBACK_DEFAULT:
+            return AudioPlaybackRate::TimestretchFallbackMode::SYS_RESERVED_DEFAULT;
+        case AUDIO_TIMESTRETCH_FALLBACK_MUTE:
+            return AudioPlaybackRate::TimestretchFallbackMode::MUTE;
+        case AUDIO_TIMESTRETCH_FALLBACK_FAIL:
+            return AudioPlaybackRate::TimestretchFallbackMode::FAIL;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<audio_timestretch_stretch_mode_t>
+aidl2legacy_TimestretchMode_audio_timestretch_stretch_mode_t(
+        AudioPlaybackRate::TimestretchMode aidl) {
+    switch (aidl) {
+        case AudioPlaybackRate::TimestretchMode::DEFAULT:
+            return AUDIO_TIMESTRETCH_STRETCH_DEFAULT;
+        case AudioPlaybackRate::TimestretchMode::VOICE:
+            return AUDIO_TIMESTRETCH_STRETCH_VOICE;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<AudioPlaybackRate::TimestretchMode>
+legacy2aidl_audio_timestretch_stretch_mode_t_TimestretchMode(
+        audio_timestretch_stretch_mode_t legacy) {
+    switch (legacy) {
+        case AUDIO_TIMESTRETCH_STRETCH_DEFAULT:
+            return AudioPlaybackRate::TimestretchMode::DEFAULT;
+        case AUDIO_TIMESTRETCH_STRETCH_VOICE:
+            return AudioPlaybackRate::TimestretchMode::VOICE;
+    }
+    return unexpected(BAD_VALUE);
+}
+
+ConversionResult<audio_playback_rate_t>
+aidl2legacy_AudioPlaybackRate_audio_playback_rate_t(const AudioPlaybackRate& aidl) {
+    audio_playback_rate_t legacy;
+    legacy.mSpeed = aidl.speed;
+    legacy.mPitch = aidl.pitch;
+    legacy.mFallbackMode = VALUE_OR_RETURN(
+            aidl2legacy_TimestretchFallbackMode_audio_timestretch_fallback_mode_t(
+                    aidl.fallbackMode));
+    legacy.mStretchMode = VALUE_OR_RETURN(
+            aidl2legacy_TimestretchMode_audio_timestretch_stretch_mode_t(aidl.timestretchMode));
+    return legacy;
+}
+
+ConversionResult<AudioPlaybackRate>
+legacy2aidl_audio_playback_rate_t_AudioPlaybackRate(const audio_playback_rate_t& legacy) {
+    AudioPlaybackRate aidl;
+    aidl.speed = legacy.mSpeed;
+    aidl.pitch = legacy.mPitch;
+    aidl.fallbackMode = VALUE_OR_RETURN(
+            legacy2aidl_audio_timestretch_fallback_mode_t_TimestretchFallbackMode(
+                    legacy.mFallbackMode));
+    aidl.timestretchMode = VALUE_OR_RETURN(
+            legacy2aidl_audio_timestretch_stretch_mode_t_TimestretchMode(legacy.mStretchMode));
+    return aidl;
+}
+
+ConversionResult<audio_latency_mode_t>
+aidl2legacy_AudioLatencyMode_audio_latency_mode_t(AudioLatencyMode aidl) {
+    switch (aidl) {
+        case AudioLatencyMode::FREE:
+            return AUDIO_LATENCY_MODE_FREE;
+        case AudioLatencyMode::LOW:
+            return AUDIO_LATENCY_MODE_LOW;
+    }
+    return unexpected(BAD_VALUE);
+}
+ConversionResult<AudioLatencyMode>
+legacy2aidl_audio_latency_mode_t_AudioLatencyMode(audio_latency_mode_t legacy) {
+    switch (legacy) {
+        case AUDIO_LATENCY_MODE_FREE:
+            return AudioLatencyMode::FREE;
+        case AUDIO_LATENCY_MODE_LOW:
+            return AudioLatencyMode::LOW;
     }
     return unexpected(BAD_VALUE);
 }

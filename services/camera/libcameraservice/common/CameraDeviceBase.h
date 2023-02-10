@@ -193,7 +193,8 @@ class CameraDeviceBase : public virtual FrameProducer {
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
             int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
-            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED,
+            bool useReadoutTimestamp = false)
             = 0;
 
     /**
@@ -216,7 +217,8 @@ class CameraDeviceBase : public virtual FrameProducer {
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
             int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
-            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED,
+            bool useReadoutTimestamp = false)
             = 0;
 
     /**
@@ -478,6 +480,15 @@ class CameraDeviceBase : public virtual FrameProducer {
     void setImageDumpMask(int mask) { mImageDumpMask = mask; }
 
     /**
+     * Set stream use case overrides
+     */
+    void setStreamUseCaseOverrides(const std::vector<int64_t>& useCaseOverrides) {
+          mStreamUseCaseOverrides = useCaseOverrides;
+    }
+
+    void clearStreamUseCaseOverrides() {}
+
+    /**
      * The injection camera session to replace the internal camera
      * session.
      */
@@ -491,6 +502,7 @@ class CameraDeviceBase : public virtual FrameProducer {
 
 protected:
     bool mImageDumpMask = 0;
+    std::vector<int64_t> mStreamUseCaseOverrides;
 };
 
 }; // namespace android

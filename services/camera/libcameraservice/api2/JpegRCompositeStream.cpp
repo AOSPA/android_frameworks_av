@@ -285,22 +285,37 @@ status_t JpegRCompositeStream::processInputFrame(nsecs_t ts, const InputFrame &i
     }
 
     size_t actualJpegRSize = 0;
-    if (mSupportInternalJpeg) {
-        recoverymap::jpegr_uncompressed_struct p010;
-        recoverymap::jpegr_compressed_struct jpeg;
-        recoverymap::jpegr_compressed_struct jpegR;
+    recoverymap::jpegr_uncompressed_struct p010;
+    recoverymap::jpegr_compressed_struct jpegR;
+    recoverymap::RecoveryMap recoveryMap;
 
-        p010.height = inputFrame.p010Buffer.height;
-        p010.width = inputFrame.p010Buffer.width;
-        p010.colorGamut = recoverymap::jpegr_color_gamut::JPEGR_COLORGAMUT_BT2100;
-        size_t yChannelSizeInByte = p010.width * p010.height * 2;
-        size_t uvChannelSizeInByte = p010.width * p010.height;
-        p010.data = new uint8_t[yChannelSizeInByte + uvChannelSizeInByte];
-        std::unique_ptr<uint8_t[]> p010_data;
-        p010_data.reset(reinterpret_cast<uint8_t*>(p010.data));
-        memcpy((uint8_t*)p010.data, inputFrame.p010Buffer.data, yChannelSizeInByte);
-        memcpy((uint8_t*)p010.data + yChannelSizeInByte, inputFrame.p010Buffer.dataCb,
-               uvChannelSizeInByte);
+    p010.height = inputFrame.p010Buffer.height;
+    p010.width = inputFrame.p010Buffer.width;
+    p010.colorGamut = recoverymap::jpegr_color_gamut::JPEGR_COLORGAMUT_BT2100;
+    size_t yChannelSizeInByte = p010.width * p010.height * 2;
+    size_t uvChannelSizeInByte = p010.width * p010.height;
+    p010.data = new uint8_t[yChannelSizeInByte + uvChannelSizeInByte];
+    std::unique_ptr<uint8_t[]> p010_data;
+    p010_data.reset(reinterpret_cast<uint8_t*>(p010.data));
+    memcpy((uint8_t*)p010.data, inputFrame.p010Buffer.data, yChannelSizeInByte);
+    memcpy((uint8_t*)p010.data + yChannelSizeInByte, inputFrame.p010Buffer.dataCb,
+           uvChannelSizeInByte);
+
+    jpegR.data = dstBuffer;
+    jpegR.maxLength = maxJpegRBufferSize;
+
+    recoverymap::jpegr_transfer_function transferFunction;
+    switch (mP010DynamicRange) {
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HDR10:
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HDR10_PLUS:
+            transferFunction = recoverymap::jpegr_transfer_function::JPEGR_TF_PQ;
+            break;
+        default:
+            transferFunction = recoverymap::jpegr_transfer_function::JPEGR_TF_HLG;
+    }
+
+    if (mSupportInternalJpeg) {
+        recoverymap::jpegr_compressed_struct jpeg;
 
         jpeg.data = inputFrame.jpegBuffer.data;
         jpeg.length = android::camera2::JpegProcessor::findJpegSize(inputFrame.jpegBuffer.data,
@@ -317,28 +332,7 @@ status_t JpegRCompositeStream::processInputFrame(nsecs_t ts, const InputFrame &i
             jpeg.colorGamut = recoverymap::jpegr_color_gamut::JPEGR_COLORGAMUT_BT709;
         }
 
-        recoverymap::jpegr_transfer_function transferFunction;
-        switch (mP010DynamicRange) {
-            case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HDR10:
-            case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HDR10_PLUS:
-                transferFunction = recoverymap::jpegr_transfer_function::JPEGR_TF_PQ;
-                break;
-            default:
-                transferFunction = recoverymap::jpegr_transfer_function::JPEGR_TF_HLG;
-        }
-
-        jpegR.data = dstBuffer;
-        jpegR.maxLength = maxJpegRBufferSize;
-
-        recoverymap::RecoveryMap recoveryMap;
         res = recoveryMap.encodeJPEGR(&p010, &jpeg, transferFunction, &jpegR);
-        if (res != OK) {
-            ALOGE("%s: Error trying to encode JPEG/R: %s (%d)", __FUNCTION__, strerror(-res), res);
-            return res;
-        }
-
-        actualJpegRSize = jpegR.length;
-        p010_data.release();
     } else {
         const uint8_t* exifBuffer = nullptr;
         size_t exifBufferSize = 0;
@@ -352,7 +346,21 @@ status_t JpegRCompositeStream::processInputFrame(nsecs_t ts, const InputFrame &i
         } else {
             ALOGE("%s: Unable to generate App1 buffer", __FUNCTION__);
         }
+
+        recoverymap::jpegr_exif_struct exif;
+        exif.data = reinterpret_cast<void*>(const_cast<uint8_t*>(exifBuffer));
+        exif.length = exifBufferSize;
+
+        res = recoveryMap.encodeJPEGR(&p010, transferFunction, &jpegR, jpegQuality, &exif);
     }
+
+    if (res != OK) {
+        ALOGE("%s: Error trying to encode JPEG/R: %s (%d)", __FUNCTION__, strerror(-res), res);
+        return res;
+    }
+
+    actualJpegRSize = jpegR.length;
+    p010_data.release();
 
     size_t finalJpegRSize = actualJpegRSize + sizeof(CameraBlob);
     if (finalJpegRSize > maxJpegRBufferSize) {
@@ -532,7 +540,7 @@ status_t JpegRCompositeStream::createInternalStreams(const std::vector<sp<Surfac
         const std::unordered_set<int32_t> &sensorPixelModesUsed,
         std::vector<int> *surfaceIds,
         int /*streamSetId*/, bool /*isShared*/, int32_t colorSpace,
-        int64_t dynamicProfile, int64_t streamUseCase) {
+        int64_t dynamicProfile, int64_t streamUseCase, bool useReadoutTimestamp) {
     sp<CameraDeviceBase> device = mDevice.promote();
     if (!device.get()) {
         ALOGE("%s: Invalid camera device!", __FUNCTION__);
@@ -556,9 +564,9 @@ status_t JpegRCompositeStream::createInternalStreams(const std::vector<sp<Surfac
             static_cast<android_dataspace>(mP010DataSpace), rotation,
             id, physicalCameraId, sensorPixelModesUsed, surfaceIds,
             camera3::CAMERA3_STREAM_SET_ID_INVALID, false /*isShared*/, false /*isMultiResolution*/,
-            GRALLOC_USAGE_SW_READ_OFTEN,
-            mP010DynamicRange,
-            streamUseCase);
+            GRALLOC_USAGE_SW_READ_OFTEN, mP010DynamicRange, streamUseCase,
+            OutputConfiguration::TIMESTAMP_BASE_DEFAULT, OutputConfiguration::MIRROR_MODE_AUTO,
+            ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED, useReadoutTimestamp);
     if (ret == OK) {
         mP010StreamId = *id;
         mP010SurfaceId = (*surfaceIds)[0];
@@ -585,7 +593,7 @@ status_t JpegRCompositeStream::createInternalStreams(const std::vector<sp<Surfac
                 streamUseCase,
                 /*timestampBase*/ OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
                 /*mirrorMode*/ OutputConfiguration::MIRROR_MODE_AUTO,
-                /*colorSpace*/ colorSpace);
+                /*colorSpace*/ colorSpace, useReadoutTimestamp);
         if (ret == OK) {
             mBlobSurfaceId = blobSurfaceId[0];
         } else {

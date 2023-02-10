@@ -443,6 +443,8 @@ public:
 
     bool isConfigurationMatched(const audio_config_base_t& config, audio_output_flags_t flags);
 
+    PortHandleVector getClientsForStream(audio_stream_type_t streamType) const;
+
     const sp<IOProfile> mProfile;          // I/O profile this output derives from
     uint32_t mLatency;                  //
     using AudioOutputDescriptor::mFlags;
