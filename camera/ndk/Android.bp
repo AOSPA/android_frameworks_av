@@ -107,7 +107,6 @@ cc_library_shared {
         "libnativewindow",
     ],
     version_script: "libcamera2ndk.map.txt",
-    sdclang: false, // See b/16384269
 }
 
 cc_library_shared {
@@ -172,7 +171,6 @@ cc_library_shared {
             enabled: false,
         },
     },
-    sdclang: false, // See b/163842697
 }
 
 cc_test {
