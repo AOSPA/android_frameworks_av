@@ -70,7 +70,7 @@ class AudioPolicyService :
     public IBinder::DeathRecipient,
     public SpatializerPolicyCallback
 {
-    friend class BinderService<AudioPolicyService>;
+    friend class sp<AudioPolicyService>;
 
 public:
     // for BinderService
@@ -223,8 +223,8 @@ public:
     binder::Status setCurrentImeUid(int32_t uid) override;
     binder::Status isHapticPlaybackSupported(bool* _aidl_return) override;
     binder::Status isUltrasoundSupported(bool* _aidl_return) override;
-
-          status_t doStartOutput(audio_port_handle_t portId);
+    binder::Status isHotwordStreamSupported(bool lookbackAudio, bool* _aidl_return) override;
+    status_t doStartOutput(audio_port_handle_t portId);
     binder::Status listAudioProductStrategies(
             std::vector<media::AudioProductStrategy>* _aidl_return) override;
     binder::Status getProductStrategyFromAudioAttributes(const media::AudioAttributesInternal& aa,
@@ -240,7 +240,12 @@ public:
     binder::Status setDevicesRoleForStrategy(
             int32_t strategy, media::DeviceRole role,
             const std::vector<AudioDevice>& devices) override;
-    binder::Status removeDevicesRoleForStrategy(int32_t strategy, media::DeviceRole role) override;
+    binder::Status removeDevicesRoleForStrategy(
+            int32_t strategy, media::DeviceRole role,
+            const std::vector<AudioDevice>& devices) override;
+    binder::Status clearDevicesRoleForStrategy(
+            int32_t strategy,
+            media::DeviceRole role) override;
     binder::Status getDevicesForRoleAndStrategy(
             int32_t strategy, media::DeviceRole role,
             std::vector<AudioDevice>* _aidl_return) override;
@@ -791,9 +796,6 @@ private:
         // for each output (destination device) it is attached to.
         virtual status_t setStreamVolume(audio_stream_type_t stream, float volume, audio_io_handle_t output, int delayMs = 0);
 
-        // invalidate a stream type, causing a reroute to an unspecified new output
-        virtual status_t invalidateStream(audio_stream_type_t stream);
-
         // function enabling to send proprietary informations directly from audio policy manager to audio hardware interface.
         virtual void setParameters(audio_io_handle_t ioHandle, const String8& keyValuePairs, int delayMs = 0);
         // function enabling to receive proprietary informations directly from audio hardware interface to audio policy manager.
@@ -852,6 +854,8 @@ private:
 
         status_t setDeviceConnectedState(
                 const struct audio_port_v7 *port, bool connected) override;
+
+        status_t invalidateTracks(const std::vector<audio_port_handle_t>& portIds) override;
 
      private:
         AudioPolicyService *mAudioPolicyService;

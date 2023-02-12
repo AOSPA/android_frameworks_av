@@ -153,7 +153,8 @@ class Camera3Device :
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
             int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
-            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED,
+            bool useReadoutTimestamp = false)
             override;
 
     status_t createStream(const std::vector<sp<Surface>>& consumers,
@@ -170,7 +171,8 @@ class Camera3Device :
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
             int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
-            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED,
+            bool useReadoutTimestamp = false)
             override;
 
     status_t createInputStream(
@@ -300,6 +302,13 @@ class Camera3Device :
      * Enables/disables camera service watchdog
      */
     status_t setCameraServiceWatchdog(bool enabled);
+
+    // Set stream use case overrides
+    void setStreamUseCaseOverrides(
+            const std::vector<int64_t>& useCaseOverrides);
+
+    // Clear stream use case overrides
+    void clearStreamUseCaseOverrides();
 
     // Get the status trackeer for the camera device
     wp<camera3::StatusTracker> getStatusTracker() { return mStatusTracker; }
@@ -1491,6 +1500,8 @@ class Camera3Device :
             createCamera3DeviceInjectionMethods(wp<Camera3Device>) = 0;
 
     sp<Camera3DeviceInjectionMethods> mInjectionMethods;
+
+    void overrideStreamUseCaseLocked();
 
 }; // class Camera3Device
 

@@ -300,8 +300,11 @@ public:
                                                    const AudioDeviceTypeAddrVector &devices);
 
         virtual status_t removeDevicesRoleForStrategy(product_strategy_t strategy,
-                                                      device_role_t role);
+                                                      device_role_t role,
+                                                      const AudioDeviceTypeAddrVector &devices);
 
+        virtual status_t clearDevicesRoleForStrategy(product_strategy_t strategy,
+                                                     device_role_t role);
 
         virtual status_t getDevicesForRoleAndStrategy(product_strategy_t strategy,
                                                       device_role_t role,
@@ -352,6 +355,8 @@ public:
         virtual bool isHapticPlaybackSupported();
 
         virtual bool isUltrasoundSupported();
+
+        bool isHotwordStreamSupported(bool lookbackAudio) override;
 
         virtual status_t listAudioProductStrategies(AudioProductStrategyVector &strategies)
         {
@@ -1317,6 +1322,7 @@ protected:
 
         sp<PreferredMixerAttributesInfo> getPreferredMixerAttributesInfo(
                 audio_port_handle_t devicePortId, product_strategy_t strategy);
+
         sp<SwAudioOutputDescriptor> reopenOutput(
                 sp<SwAudioOutputDescriptor> outputDesc,
                 const audio_config_t *config,
@@ -1325,6 +1331,9 @@ protected:
 
         void reopenOutputsWithDevices(
                 const std::map<audio_io_handle_t, DeviceVector>& outputsToReopen);
+
+        PortHandleVector getClientsForStream(audio_stream_type_t streamType) const;
+        void invalidateStreams(StreamTypeVector streams) const;
 };
 
 };

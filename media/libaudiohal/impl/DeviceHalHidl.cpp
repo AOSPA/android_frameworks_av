@@ -46,9 +46,6 @@ namespace android {
 using namespace ::android::hardware::audio::common::COMMON_TYPES_CPP_VERSION;
 using namespace ::android::hardware::audio::CORE_TYPES_CPP_VERSION;
 
-#define TIME_CHECK() auto timeCheck = \
-        mediautils::makeTimeCheckStatsForClassMethod(getClassName(), __func__)
-
 DeviceHalHidl::DeviceHalHidl(const sp<::android::hardware::audio::CPP_VERSION::IDevice>& device)
         : CoreConversionHelperHidl("DeviceHalHidl"), mDevice(device) {
 }
@@ -459,12 +456,13 @@ status_t DeviceHalHidl::setAudioPortConfig(const struct audio_port_config *confi
 
 #if MAJOR_VERSION == 2
 status_t DeviceHalHidl::getMicrophones(
-        std::vector<media::MicrophoneInfo> *microphonesInfo __unused) {
+        std::vector<audio_microphone_characteristic_t> *microphonesInfo __unused) {
     if (mDevice == 0) return NO_INIT;
     return INVALID_OPERATION;
 }
 #elif MAJOR_VERSION >= 4
-status_t DeviceHalHidl::getMicrophones(std::vector<media::MicrophoneInfo> *microphonesInfo) {
+status_t DeviceHalHidl::getMicrophones(
+        std::vector<audio_microphone_characteristic_t> *microphonesInfo) {
     TIME_CHECK();
     if (mDevice == 0) return NO_INIT;
     Result retval;
@@ -475,8 +473,7 @@ status_t DeviceHalHidl::getMicrophones(std::vector<media::MicrophoneInfo> *micro
             audio_microphone_characteristic_t dst;
             //convert
             (void)CoreUtils::microphoneInfoToHal(micArrayHal[k], &dst);
-            media::MicrophoneInfo microphone = media::MicrophoneInfo(dst);
-            microphonesInfo->push_back(microphone);
+            microphonesInfo->push_back(dst);
         }
     });
     return processReturn("getMicrophones", ret, retval);

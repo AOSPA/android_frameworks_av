@@ -82,7 +82,7 @@ sp<CaptureStateListenerImpl> gSoundTriggerCaptureStateListener = nullptr;
 // Binder for the AudioFlinger service that's passed to this client process from the system server.
 // This allows specific isolated processes to access the audio system. Currently used only for the
 // HotwordDetectionService.
-sp<IBinder> gAudioFlingerBinder = nullptr;
+static sp<IBinder> gAudioFlingerBinder = nullptr;
 
 void AudioSystem::setAudioFlingerBinder(const sp<IBinder>& audioFlinger) {
     if (audioFlinger->getInterfaceDescriptor() != media::IAudioFlingerService::descriptor) {
@@ -98,6 +98,15 @@ void AudioSystem::setAudioFlingerBinder(const sp<IBinder>& audioFlinger) {
     gAudioFlingerBinder = audioFlinger;
 }
 
+static sp<IAudioFlinger> gLocalAudioFlinger; // set if we are local.
+
+status_t AudioSystem::setLocalAudioFlinger(const sp<IAudioFlinger>& af) {
+    Mutex::Autolock _l(gLock);
+    if (gAudioFlinger != nullptr) return INVALID_OPERATION;
+    gLocalAudioFlinger = af;
+    return OK;
+}
+
 // establish binder interface to AudioFlinger service
 const sp<IAudioFlinger> AudioSystem::get_audio_flinger() {
     sp<IAudioFlinger> af;
@@ -105,7 +114,19 @@ const sp<IAudioFlinger> AudioSystem::get_audio_flinger() {
     bool reportNoError = false;
     {
         Mutex::Autolock _l(gLock);
-        if (gAudioFlinger == 0) {
+        if (gAudioFlinger != nullptr) {
+            return gAudioFlinger;
+        }
+
+        if (gAudioFlingerClient == nullptr) {
+            gAudioFlingerClient = sp<AudioFlingerClient>::make();
+        } else {
+            reportNoError = true;
+        }
+
+        if (gLocalAudioFlinger != nullptr) {
+            gAudioFlinger = gLocalAudioFlinger;
+        } else {
             sp<IBinder> binder;
             if (gAudioFlingerBinder != nullptr) {
                 binder = gAudioFlingerBinder;
@@ -113,32 +134,24 @@ const sp<IAudioFlinger> AudioSystem::get_audio_flinger() {
                 sp<IServiceManager> sm = defaultServiceManager();
                 do {
                     binder = sm->getService(String16(IAudioFlinger::DEFAULT_SERVICE_NAME));
-                    if (binder != 0)
-                        break;
+                    if (binder != nullptr) break;
                     ALOGW("AudioFlinger not published, waiting...");
                     usleep(500000); // 0.5 s
                 } while (true);
             }
-            if (gAudioFlingerClient == NULL) {
-                gAudioFlingerClient = new AudioFlingerClient();
-            } else {
-                reportNoError = true;
-            }
             binder->linkToDeath(gAudioFlingerClient);
-            gAudioFlinger = new AudioFlingerClientAdapter(
-                    interface_cast<media::IAudioFlingerService>(binder));
-            LOG_ALWAYS_FATAL_IF(gAudioFlinger == 0);
-            afc = gAudioFlingerClient;
-            // Make sure callbacks can be received by gAudioFlingerClient
-            ProcessState::self()->startThreadPool();
+            const auto afs = interface_cast<media::IAudioFlingerService>(binder);
+            LOG_ALWAYS_FATAL_IF(afs == nullptr);
+            gAudioFlinger = sp<AudioFlingerClientAdapter>::make(afs);
         }
+        afc = gAudioFlingerClient;
         af = gAudioFlinger;
+        // Make sure callbacks can be received by gAudioFlingerClient
+        ProcessState::self()->startThreadPool();
     }
-    if (afc != 0) {
-        int64_t token = IPCThreadState::self()->clearCallingIdentity();
-        af->registerClient(afc);
-        IPCThreadState::self()->restoreCallingIdentity(token);
-    }
+    const int64_t token = IPCThreadState::self()->clearCallingIdentity();
+    af->registerClient(afc);
+    IPCThreadState::self()->restoreCallingIdentity(token);
     if (reportNoError) reportError(NO_ERROR);
     return af;
 }
@@ -672,12 +685,12 @@ Status AudioSystem::AudioFlingerClient::ioConfigChanged(
 }
 
 Status AudioSystem::AudioFlingerClient::onSupportedLatencyModesChanged(
-        int output, const std::vector<media::LatencyMode>& latencyModes) {
+        int output, const std::vector<media::audio::common::AudioLatencyMode>& latencyModes) {
     audio_io_handle_t outputLegacy = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_int32_t_audio_io_handle_t(output));
     std::vector<audio_latency_mode_t> modesLegacy = VALUE_OR_RETURN_BINDER_STATUS(
             convertContainer<std::vector<audio_latency_mode_t>>(
-                    latencyModes, aidl2legacy_LatencyMode_audio_latency_mode_t));
+                    latencyModes, aidl2legacy_AudioLatencyMode_audio_latency_mode_t));
 
     std::vector<sp<SupportedLatencyModesCallback>> callbacks;
     {
@@ -2223,8 +2236,25 @@ status_t AudioSystem::setDevicesRoleForStrategy(product_strategy_t strategy,
             aps->setDevicesRoleForStrategy(strategyAidl, roleAidl, devicesAidl));
 }
 
+status_t AudioSystem::removeDevicesRoleForStrategy(product_strategy_t strategy,
+                                                   device_role_t role,
+                                                   const AudioDeviceTypeAddrVector& devices) {
+    const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
+    if (aps == 0) {
+        return PERMISSION_DENIED;
+    }
+
+    int32_t strategyAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_product_strategy_t_int32_t(strategy));
+    media::DeviceRole roleAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_device_role_t_DeviceRole(role));
+    std::vector<AudioDevice> devicesAidl = VALUE_OR_RETURN_STATUS(
+            convertContainer<std::vector<AudioDevice>>(devices,
+                                                       legacy2aidl_AudioDeviceTypeAddress));
+    return statusTFromBinderStatus(
+            aps->removeDevicesRoleForStrategy(strategyAidl, roleAidl, devicesAidl));
+}
+
 status_t
-AudioSystem::removeDevicesRoleForStrategy(product_strategy_t strategy, device_role_t role) {
+AudioSystem::clearDevicesRoleForStrategy(product_strategy_t strategy, device_role_t role) {
     const sp<IAudioPolicyService>& aps = AudioSystem::get_audio_policy_service();
     if (aps == 0) {
         return PERMISSION_DENIED;
@@ -2232,7 +2262,7 @@ AudioSystem::removeDevicesRoleForStrategy(product_strategy_t strategy, device_ro
     int32_t strategyAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_product_strategy_t_int32_t(strategy));
     media::DeviceRole roleAidl = VALUE_OR_RETURN_STATUS(legacy2aidl_device_role_t_DeviceRole(role));
     return statusTFromBinderStatus(
-            aps->removeDevicesRoleForStrategy(strategyAidl, roleAidl));
+            aps->clearDevicesRoleForStrategy(strategyAidl, roleAidl));
 }
 
 status_t AudioSystem::getDevicesForRoleAndStrategy(product_strategy_t strategy,
@@ -2457,6 +2487,32 @@ status_t AudioSystem::getSupportedLatencyModes(audio_io_handle_t output,
         return PERMISSION_DENIED;
     }
     return af->getSupportedLatencyModes(output, modes);
+}
+
+status_t AudioSystem::setBluetoothVariableLatencyEnabled(bool enabled) {
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == nullptr) {
+        return PERMISSION_DENIED;
+    }
+    return af->setBluetoothVariableLatencyEnabled(enabled);
+}
+
+status_t AudioSystem::isBluetoothVariableLatencyEnabled(
+        bool *enabled) {
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == nullptr) {
+        return PERMISSION_DENIED;
+    }
+    return af->isBluetoothVariableLatencyEnabled(enabled);
+}
+
+status_t AudioSystem::supportsBluetoothVariableLatency(
+        bool *support) {
+    const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
+    if (af == nullptr) {
+        return PERMISSION_DENIED;
+    }
+    return af->supportsBluetoothVariableLatency(support);
 }
 
 class CaptureStateListenerImpl : public media::BnCaptureStateListener,

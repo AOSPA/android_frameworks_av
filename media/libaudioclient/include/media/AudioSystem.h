@@ -167,6 +167,10 @@ public:
     // HotwordDetectionService.
     static void setAudioFlingerBinder(const sp<IBinder>& audioFlinger);
 
+    // Sets a local AudioFlinger interface to be used by AudioSystem.
+    // This is used by audioserver main() to avoid binder AIDL translation.
+    static status_t setLocalAudioFlinger(const sp<IAudioFlinger>& af);
+
     // helper function to obtain AudioFlinger service handle
     static const sp<IAudioFlinger> get_audio_flinger();
 
@@ -523,7 +527,11 @@ public:
     static status_t setDevicesRoleForStrategy(product_strategy_t strategy,
             device_role_t role, const AudioDeviceTypeAddrVector &devices);
 
-    static status_t removeDevicesRoleForStrategy(product_strategy_t strategy, device_role_t role);
+    static status_t removeDevicesRoleForStrategy(product_strategy_t strategy,
+            device_role_t role, const AudioDeviceTypeAddrVector &devices);
+
+    static status_t clearDevicesRoleForStrategy(product_strategy_t strategy,
+            device_role_t role);
 
     static status_t getDevicesForRoleAndStrategy(product_strategy_t strategy,
             device_role_t role, AudioDeviceTypeAddrVector &devices);
@@ -628,6 +636,12 @@ public:
 
     static status_t getSupportedLatencyModes(audio_io_handle_t output,
             std::vector<audio_latency_mode_t>* modes);
+
+    static status_t setBluetoothVariableLatencyEnabled(bool enabled);
+
+    static status_t isBluetoothVariableLatencyEnabled(bool *enabled);
+
+    static status_t supportsBluetoothVariableLatency(bool *support);
 
     static status_t getSupportedMixerAttributes(audio_port_handle_t portId,
                                                 std::vector<audio_mixer_attributes_t> *mixerAttrs);
@@ -772,7 +786,8 @@ private:
                 const media::AudioIoDescriptor& ioDesc) override;
 
         binder::Status onSupportedLatencyModesChanged(
-                int output, const std::vector<media::LatencyMode>& latencyModes) override;
+                int output,
+                const std::vector<media::audio::common::AudioLatencyMode>& latencyModes) override;
 
         status_t addAudioDeviceCallback(const wp<AudioDeviceCallback>& callback,
                                                audio_io_handle_t audioIo,
