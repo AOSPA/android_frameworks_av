@@ -438,7 +438,7 @@ void AudioTrack::createDummyAudioSessionForBluetooth() {
    p = static_cast<uint8_t*>(iMem->unsecurePointer());
    memset(p, '\0', DUMMY_TRACK_SMP_BUF_SIZE*sizeof(short));
 
-   dummyTrack = new AudioTrack(AUDIO_STREAM_MUSIC,// stream type
+   dummyTrack = new AudioTrack(AUDIO_STREAM_SYSTEM,// stream type
                                48000, AUDIO_FORMAT_PCM_16_BIT,
                                AUDIO_CHANNEL_OUT_STEREO, iMem,
                                AUDIO_OUTPUT_FLAG_FAST);
@@ -1301,6 +1301,21 @@ uint32_t AudioTrack::getOriginalSampleRate() const
     return mOriginalSampleRate;
 }
 
+uint32_t AudioTrack::getHalSampleRate() const
+{
+    return mAfSampleRate;
+}
+
+uint32_t AudioTrack::getHalChannelCount() const
+{
+    return mAfChannelCount;
+}
+
+audio_format_t AudioTrack::getHalFormat() const
+{
+    return mAfFormat;
+}
+
 status_t AudioTrack::setDualMonoMode(audio_dual_mono_mode_t mode)
 {
     AutoMutex lock(mLock);
@@ -1985,6 +2000,8 @@ status_t AudioTrack::createTrack_l()
 
     mAfFrameCount = output.afFrameCount;
     mAfSampleRate = output.afSampleRate;
+    mAfChannelCount = audio_channel_count_from_out_mask(output.afChannelMask);
+    mAfFormat = output.afFormat;
     mAfLatency = output.afLatencyMs;
 
     mLatency = mAfLatency + (1000LL * mFrameCount) / mSampleRate;
