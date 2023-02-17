@@ -116,23 +116,26 @@ void SoundDoseManager::setOutputRs2(float rs2Value) {
     ALOGV("%s", __func__);
     std::lock_guard _l(mLock);
 
-    mRs2Value = rs2Value;
     if (mHalSoundDose != nullptr) {
         // using the HAL sound dose interface
-        if (!mHalSoundDose->setOutputRs2(mRs2Value).isOk()) {
-            ALOGE("%s: Cannot set RS2 value for momentary exposure %f", __func__, mRs2Value);
+        if (!mHalSoundDose->setOutputRs2(rs2Value).isOk()) {
+            ALOGE("%s: Cannot set RS2 value for momentary exposure %f", __func__, rs2Value);
+            return;
         }
+        mRs2Value = rs2Value;
         return;
     }
 
     for (auto& streamProcessor : mActiveProcessors) {
         sp<audio_utils::MelProcessor> processor = streamProcessor.second.promote();
         if (processor != nullptr) {
-            status_t result = processor->setOutputRs2(mRs2Value);
+            status_t result = processor->setOutputRs2(rs2Value);
             if (result != NO_ERROR) {
-                ALOGW("%s: could not set RS2 value %f for stream %d", __func__, mRs2Value,
+                ALOGW("%s: could not set RS2 value %f for stream %d", __func__, rs2Value,
                       streamProcessor.first);
+                return;
             }
+            mRs2Value = rs2Value;
         }
     }
 }
@@ -160,7 +163,7 @@ audio_port_handle_t SoundDoseManager::getIdForAudioDevice(const AudioDevice& aud
     auto adt = AudioDeviceTypeAddr(type, address);
     auto deviceIt = mActiveDevices.find(adt);
     if (deviceIt == mActiveDevices.end()) {
-        ALOGE("%s: could not find port id for device %s", __func__, adt.toString().c_str());
+        ALOGI("%s: could not find port id for device %s", __func__, adt.toString().c_str());
         return AUDIO_PORT_HANDLE_NONE;
     }
     return deviceIt->second;
@@ -184,7 +187,6 @@ void SoundDoseManager::clearMapDeviceIdEntries(audio_port_handle_t deviceId) {
         }
         ++activeDevice;
     }
-    return;
 }
 
 ndk::ScopedAStatus SoundDoseManager::HalSoundDoseCallback::onMomentaryExposureWarning(
@@ -203,7 +205,7 @@ ndk::ScopedAStatus SoundDoseManager::HalSoundDoseCallback::onMomentaryExposureWa
 
     auto id = soundDoseManager->getIdForAudioDevice(in_audioDevice);
     if (id == AUDIO_PORT_HANDLE_NONE) {
-        ALOGW("%s: no mapped id for audio device with type %d and address %s",
+        ALOGI("%s: no mapped id for audio device with type %d and address %s",
                 __func__, in_audioDevice.type.type,
                 in_audioDevice.address.get<AudioDeviceAddress::id>().c_str());
         return ndk::ScopedAStatus::fromExceptionCode(EX_ILLEGAL_ARGUMENT);
@@ -230,7 +232,7 @@ ndk::ScopedAStatus SoundDoseManager::HalSoundDoseCallback::onNewMelValues(
 
     auto id = soundDoseManager->getIdForAudioDevice(in_audioDevice);
     if (id == AUDIO_PORT_HANDLE_NONE) {
-        ALOGW("%s: no mapped id for audio device with type %d and address %s",
+        ALOGI("%s: no mapped id for audio device with type %d and address %s",
                 __func__, in_audioDevice.type.type,
                 in_audioDevice.address.get<AudioDeviceAddress::id>().c_str());
         return ndk::ScopedAStatus::fromExceptionCode(EX_ILLEGAL_ARGUMENT);

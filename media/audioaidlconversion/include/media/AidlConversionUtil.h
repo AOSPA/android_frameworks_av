@@ -25,6 +25,7 @@
 #include <error/Result.h>
 
 #if defined(BACKEND_NDK)
+#include <android/binder_auto_utils.h>
 #include <android/binder_enums.h>
 #include <android/binder_status.h>
 
@@ -277,6 +278,8 @@ ConversionResult<UnionFieldType<T, tag>> unionGetField(const T& u) {
 #define UNION_SET(u, field, value) \
     (u).set<std::decay_t<decltype(u)>::Tag::field>(value)
 
+#define UNION_MAKE(u, field, value) u::make<u::Tag::field>(value)
+
 namespace aidl_utils {
 
 /**
@@ -362,6 +365,20 @@ static inline ::android::status_t statusTFromBinderStatus(const ::android::binde
                                                     // standard Java exception (fromExceptionCode)
 }
 
+#if defined(BACKEND_NDK)
+static inline ::android::status_t statusTFromBinderStatus(const ::ndk::ScopedAStatus &status) {
+    // What we want to do is to 'return statusTFromBinderStatus(status.get()->get())'
+    // However, since the definition of AStatus is not exposed, we have to do the same
+    // via methods of ScopedAStatus:
+    return status.isOk() ? ::android::OK // check ::android::OK,
+        : status.getServiceSpecificError() // service-side error, not standard Java exception
+                                           // (fromServiceSpecificError)
+        ?: status.getStatus() // a native binder transaction error (fromStatusT)
+        ?: statusTFromExceptionCode(status.getExceptionCode()); // a service-side error with a
+                                                     // standard Java exception (fromExceptionCode)
+}
+#endif
+
 /**
  * Return a binder::Status from native service status.
  *
@@ -395,7 +412,6 @@ static inline ::android::binder::Status binderStatusFromStatusT(
     // throw a ServiceSpecificException.
     return Status::fromServiceSpecificError(status, emptyIfNull);
 }
-
 
 } // namespace aidl_utils
 

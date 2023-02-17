@@ -1004,19 +1004,21 @@ void CameraProviderManager::ProviderInfo::DeviceInfo3::getSupportedDurations(
     auto availableDurations = ch.find(tag);
     if (availableDurations.count > 0) {
         // Duration entry contains 4 elements (format, width, height, duration)
-        for (size_t i = 0; i < availableDurations.count; i += 4) {
-            for (const auto& size : sizes) {
-                int64_t width = std::get<0>(size);
-                int64_t height = std::get<1>(size);
+        for (const auto& size : sizes) {
+            int64_t width = std::get<0>(size);
+            int64_t height = std::get<1>(size);
+            for (size_t i = 0; i < availableDurations.count; i += 4) {
                 if ((availableDurations.data.i64[i] == format) &&
                         (availableDurations.data.i64[i+1] == width) &&
                         (availableDurations.data.i64[i+2] == height)) {
                     durations->push_back(availableDurations.data.i64[i+3]);
+                    break;
                 }
             }
         }
     }
 }
+
 void CameraProviderManager::ProviderInfo::DeviceInfo3::getSupportedDynamicDepthDurations(
         const std::vector<int64_t>& depthDurations, const std::vector<int64_t>& blobDurations,
         std::vector<int64_t> *dynamicDepthDurations /*out*/) {
@@ -1137,8 +1139,7 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::deriveJpegRTags(bool 
         return BAD_VALUE;
     }
 
-    std::vector<std::tuple<size_t, size_t>> supportedP010Sizes, supportedBlobSizes,
-            supportedDynamicDepthSizes, internalDepthSizes;
+    std::vector<std::tuple<size_t, size_t>> supportedP010Sizes, supportedBlobSizes;
     auto capabilities = c.find(ANDROID_REQUEST_AVAILABLE_CAPABILITIES);
     if (capabilities.count == 0) {
         ALOGE("%s: Supported camera capabilities is empty!", __FUNCTION__);
@@ -1150,14 +1151,6 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::deriveJpegRTags(bool 
             ANDROID_REQUEST_AVAILABLE_CAPABILITIES_DYNAMIC_RANGE_TEN_BIT) != end;
     if (!isTenBitOutputSupported) {
         // No 10-bit support, nothing more to do.
-        return OK;
-    }
-
-    if (!isConcurrentDynamicRangeCaptureSupported(c,
-                ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10,
-                ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD)) {
-        // Advertise Jpeg/R only in case 10 and 8-bit concurrent capture is supported.
-        // This can be removed when 10-bit to 8-bit tonemapping is available.
         return OK;
     }
 
@@ -1199,9 +1192,11 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::deriveJpegRTags(bool 
     getSupportedDurations(c, scalerStallDurationsTag, HAL_PIXEL_FORMAT_BLOB,
             supportedP010Sizes, &blobStallDurations);
     if (blobStallDurations.empty() || blobMinDurations.empty() ||
-            (blobMinDurations.size() != blobStallDurations.size())) {
-        ALOGE("%s: Unexpected number of available blob durations! %zu vs. %zu",
-                __FUNCTION__, blobMinDurations.size(), blobStallDurations.size());
+            supportedP010Sizes.size() != blobMinDurations.size() ||
+            blobMinDurations.size() != blobStallDurations.size()) {
+        ALOGE("%s: Unexpected number of available blob durations! %zu vs. %zu with "
+                "supportedP010Sizes size: %zu", __FUNCTION__, blobMinDurations.size(),
+                blobStallDurations.size(), supportedP010Sizes.size());
         return BAD_VALUE;
     }
 
@@ -2254,7 +2249,7 @@ status_t CameraProviderManager::ProviderInfo::dump(int fd, const Vector<String16
         }
         CameraMetadata info2;
         res = device->getCameraCharacteristics(true /*overrideForPerfClass*/, &info2,
-                /*overrideToPortrait*/true);
+                /*overrideToPortrait*/false);
         if (res == INVALID_OPERATION) {
             dprintf(fd, "  API2 not directly supported\n");
         } else if (res != OK) {
@@ -2605,8 +2600,8 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::getCameraCharacterist
     if (overrideToPortrait) {
         const auto &lensFacingEntry = characteristics->find(ANDROID_LENS_FACING);
         const auto &sensorOrientationEntry = characteristics->find(ANDROID_SENSOR_ORIENTATION);
+        uint8_t lensFacing = lensFacingEntry.data.u8[0];
         if (lensFacingEntry.count > 0 && sensorOrientationEntry.count > 0) {
-            uint8_t lensFacing = lensFacingEntry.data.u8[0];
             int32_t sensorOrientation = sensorOrientationEntry.data.i32[0];
             int32_t newSensorOrientation = sensorOrientation;
 
@@ -2627,6 +2622,8 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::getCameraCharacterist
         }
 
         if (characteristics->exists(ANDROID_INFO_DEVICE_STATE_ORIENTATIONS)) {
+            ALOGV("%s: Erasing ANDROID_INFO_DEVICE_STATE_ORIENTATIONS for lens facing %d",
+                    __FUNCTION__, lensFacing);
             characteristics->erase(ANDROID_INFO_DEVICE_STATE_ORIENTATIONS);
         }
     }
@@ -2662,8 +2659,8 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::filterSmallJpegSizes(
     for (size_t i = 0; i < streamConfigs.count; i += 4) {
         if ((streamConfigs.data.i32[i] == HAL_PIXEL_FORMAT_BLOB) && (streamConfigs.data.i32[i+3] ==
                 ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS_OUTPUT)) {
-            if (streamConfigs.data.i32[i+1] < thresholdW  ||
-                    streamConfigs.data.i32[i+2] < thresholdH) {
+            if (streamConfigs.data.i32[i+1] * streamConfigs.data.i32[i+2] <
+                    thresholdW * thresholdH) {
                 continue;
             } else {
                 largeJpegCount ++;
@@ -2683,8 +2680,8 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::filterSmallJpegSizes(
             mCameraCharacteristics.find(ANDROID_SCALER_AVAILABLE_MIN_FRAME_DURATIONS);
     for (size_t i = 0; i < minDurations.count; i += 4) {
         if (minDurations.data.i64[i] == HAL_PIXEL_FORMAT_BLOB) {
-            if (minDurations.data.i64[i+1] < thresholdW ||
-                    minDurations.data.i64[i+2] < thresholdH) {
+            if ((int32_t)minDurations.data.i64[i+1] * (int32_t)minDurations.data.i64[i+2] <
+                    thresholdW * thresholdH) {
                 continue;
             } else {
                 largeJpegCount++;
@@ -2704,8 +2701,8 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::filterSmallJpegSizes(
             mCameraCharacteristics.find(ANDROID_SCALER_AVAILABLE_STALL_DURATIONS);
     for (size_t i = 0; i < stallDurations.count; i += 4) {
         if (stallDurations.data.i64[i] == HAL_PIXEL_FORMAT_BLOB) {
-            if (stallDurations.data.i64[i+1] < thresholdW ||
-                    stallDurations.data.i64[i+2] < thresholdH) {
+            if ((int32_t)stallDurations.data.i64[i+1] * (int32_t)stallDurations.data.i64[i+2] <
+                    thresholdW * thresholdH) {
                 continue;
             } else {
                 largeJpegCount++;

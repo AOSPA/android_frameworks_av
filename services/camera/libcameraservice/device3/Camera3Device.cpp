@@ -52,15 +52,16 @@
 #include <android/hardware/camera/device/3.7/ICameraInjectionSession.h>
 #include <android/hardware/camera2/ICameraDeviceUser.h>
 
-#include "utils/CameraTraces.h"
-#include "mediautils/SchedulingPolicyService.h"
-#include "device3/Camera3Device.h"
-#include "device3/Camera3OutputStream.h"
-#include "device3/Camera3InputStream.h"
-#include "device3/Camera3FakeStream.h"
-#include "device3/Camera3SharedOutputStream.h"
 #include "CameraService.h"
+#include "aidl/AidlUtils.h"
+#include "device3/Camera3Device.h"
+#include "device3/Camera3FakeStream.h"
+#include "device3/Camera3InputStream.h"
+#include "device3/Camera3OutputStream.h"
+#include "device3/Camera3SharedOutputStream.h"
+#include "mediautils/SchedulingPolicyService.h"
 #include "utils/CameraThreadState.h"
+#include "utils/CameraTraces.h"
 #include "utils/SessionConfigurationUtils.h"
 #include "utils/TraceHFR.h"
 
@@ -96,7 +97,8 @@ Camera3Device::Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraS
         mLastTemplateId(-1),
         mNeedFixupMonochromeTags(false),
         mOverrideForPerfClass(overrideForPerfClass),
-        mOverrideToPortrait(overrideToPortrait)
+        mOverrideToPortrait(overrideToPortrait),
+        mActivePhysicalId("")
 {
     ATRACE_CALL();
     ALOGV("%s: Created device for camera %s", __FUNCTION__, mId.string());
@@ -229,7 +231,7 @@ status_t Camera3Device::initializeCommonLocked() {
     mInjectionMethods = createCamera3DeviceInjectionMethods(this);
 
     /** Start watchdog thread */
-    mCameraServiceWatchdog = new CameraServiceWatchdog();
+    mCameraServiceWatchdog = new CameraServiceWatchdog(mId, mCameraServiceProxyWrapper);
     res = mCameraServiceWatchdog->run("CameraServiceWatchdog");
     if (res != OK) {
         SET_ERR_L("Unable to start camera service watchdog thread: %s (%d)",
@@ -2364,6 +2366,9 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
         tryRemoveFakeStreamLocked();
     }
 
+    // Override stream use case based on "adb shell command"
+    overrideStreamUseCaseLocked();
+
     // Start configuring the streams
     ALOGV("%s: Camera %s: Starting stream configuration", __FUNCTION__, mId.string());
 
@@ -2942,6 +2947,7 @@ Camera3Device::RequestThread::RequestThread(wp<Camera3Device> parent,
         mSupportCameraMute(supportCameraMute),
         mOverrideToPortrait(overrideToPortrait) {
     mStatusId = statusTracker->addComponent("RequestThread");
+    mVndkVersion = property_get_int32("ro.vndk.version", __ANDROID_API_FUTURE__);
 }
 
 Camera3Device::RequestThread::~RequestThread() {}
@@ -3736,6 +3742,17 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                         }
                         captureRequest->mRotationAndCropUpdated = true;
                     }
+
+                    for (it = captureRequest->mSettingsList.begin();
+                            it != captureRequest->mSettingsList.end(); it++) {
+                        res = hardware::cameraservice::utils::conversion::aidl::filterVndkKeys(
+                                mVndkVersion, it->metadata, false /*isStatic*/);
+                        if (res != OK) {
+                            SET_ERR("RequestThread: Failed during VNDK filter of capture requests "
+                                    "%d: %s (%d)", halRequest->frame_number, strerror(-res), res);
+                            return INVALID_OPERATION;
+                        }
+                    }
                 }
             }
 
@@ -4159,6 +4176,25 @@ status_t Camera3Device::setCameraServiceWatchdog(bool enabled) {
     }
 
     return OK;
+}
+
+void Camera3Device::setStreamUseCaseOverrides(
+        const std::vector<int64_t>& useCaseOverrides) {
+    Mutex::Autolock il(mInterfaceLock);
+    Mutex::Autolock l(mLock);
+    mStreamUseCaseOverrides = useCaseOverrides;
+}
+
+void Camera3Device::clearStreamUseCaseOverrides() {
+    Mutex::Autolock il(mInterfaceLock);
+    Mutex::Autolock l(mLock);
+    mStreamUseCaseOverrides.clear();
+}
+
+bool Camera3Device::hasDeviceError() {
+    Mutex::Autolock il(mInterfaceLock);
+    Mutex::Autolock l(mLock);
+    return mStatus == STATUS_ERROR;
 }
 
 void Camera3Device::RequestThread::cleanUpFailedRequests(bool sendRequestError) {
@@ -4857,7 +4893,8 @@ status_t Camera3Device::PreparerThread::prepare(int maxCount, sp<Camera3StreamIn
     }
 
     // queue up the work
-    mPendingStreams.emplace(maxCount, stream);
+    mPendingStreams.push_back(
+            std::tuple<int, sp<camera3::Camera3StreamInterface>>(maxCount, stream));
     ALOGV("%s: Stream %d queued for preparing", __FUNCTION__, stream->getId());
 
     return OK;
@@ -4868,8 +4905,8 @@ void Camera3Device::PreparerThread::pause() {
 
     Mutex::Autolock l(mLock);
 
-    std::unordered_map<int, sp<camera3::Camera3StreamInterface> > pendingStreams;
-    pendingStreams.insert(mPendingStreams.begin(), mPendingStreams.end());
+    std::list<std::tuple<int, sp<camera3::Camera3StreamInterface>>> pendingStreams;
+    pendingStreams.insert(pendingStreams.begin(), mPendingStreams.begin(), mPendingStreams.end());
     sp<camera3::Camera3StreamInterface> currentStream = mCurrentStream;
     int currentMaxCount = mCurrentMaxCount;
     mPendingStreams.clear();
@@ -4890,18 +4927,19 @@ void Camera3Device::PreparerThread::pause() {
     //of the streams in the pending list.
     if (currentStream != nullptr) {
         if (!mCurrentPrepareComplete) {
-            pendingStreams.emplace(currentMaxCount, currentStream);
+            pendingStreams.push_back(std::tuple(currentMaxCount, currentStream));
         }
     }
 
-    mPendingStreams.insert(pendingStreams.begin(), pendingStreams.end());
+    mPendingStreams.insert(mPendingStreams.begin(), pendingStreams.begin(), pendingStreams.end());
     for (const auto& it : mPendingStreams) {
-        it.second->cancelPrepare();
+        std::get<1>(it)->cancelPrepare();
     }
 }
 
 status_t Camera3Device::PreparerThread::resume() {
     ATRACE_CALL();
+    ALOGV("%s: PreparerThread", __FUNCTION__);
     status_t res;
 
     Mutex::Autolock l(mLock);
@@ -4914,10 +4952,10 @@ status_t Camera3Device::PreparerThread::resume() {
 
     auto it = mPendingStreams.begin();
     for (; it != mPendingStreams.end();) {
-        res = it->second->startPrepare(it->first, true /*blockRequest*/);
+        res = std::get<1>(*it)->startPrepare(std::get<0>(*it), true /*blockRequest*/);
         if (res == OK) {
             if (listener != NULL) {
-                listener->notifyPrepared(it->second->getId());
+                listener->notifyPrepared(std::get<1>(*it)->getId());
             }
             it = mPendingStreams.erase(it);
         } else if (res != NOT_ENOUGH_DATA) {
@@ -4951,7 +4989,7 @@ status_t Camera3Device::PreparerThread::clear() {
     Mutex::Autolock l(mLock);
 
     for (const auto& it : mPendingStreams) {
-        it.second->cancelPrepare();
+        std::get<1>(it)->cancelPrepare();
     }
     mPendingStreams.clear();
     mCancelNow = true;
@@ -4982,8 +5020,8 @@ bool Camera3Device::PreparerThread::threadLoop() {
 
             // Get next stream to prepare
             auto it = mPendingStreams.begin();
-            mCurrentStream = it->second;
-            mCurrentMaxCount = it->first;
+            mCurrentMaxCount = std::get<0>(*it);
+            mCurrentStream = std::get<1>(*it);
             mCurrentPrepareComplete = false;
             mPendingStreams.erase(it);
             ATRACE_ASYNC_BEGIN("stream prepare", mCurrentStream->getId());
@@ -5313,6 +5351,58 @@ status_t Camera3Device::stopInjection() {
     Mutex::Autolock il(mInterfaceLock);
     Mutex::Autolock l(mLock);
     return mInjectionMethods->stopInjection();
+}
+
+void Camera3Device::overrideStreamUseCaseLocked() {
+    if (mStreamUseCaseOverrides.size() == 0) {
+        return;
+    }
+
+    // Start from an array of indexes in mStreamUseCaseOverrides, and sort them
+    // based first on size, and second on formats of [JPEG, RAW, YUV, PRIV].
+    // Refer to CameraService::printHelp for details.
+    std::vector<int> outputStreamsIndices(mOutputStreams.size());
+    for (size_t i = 0; i < outputStreamsIndices.size(); i++) {
+        outputStreamsIndices[i] = i;
+    }
+
+    std::sort(outputStreamsIndices.begin(), outputStreamsIndices.end(),
+            [&](int a, int b) -> bool {
+
+                auto formatScore = [](int format) {
+                    switch (format) {
+                    case HAL_PIXEL_FORMAT_BLOB:
+                        return 4;
+                    case HAL_PIXEL_FORMAT_RAW16:
+                    case HAL_PIXEL_FORMAT_RAW10:
+                    case HAL_PIXEL_FORMAT_RAW12:
+                        return 3;
+                    case HAL_PIXEL_FORMAT_YCBCR_420_888:
+                        return 2;
+                    case HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED:
+                        return 1;
+                    default:
+                        return 0;
+                    }
+                };
+
+                int sizeA = mOutputStreams[a]->getWidth() * mOutputStreams[a]->getHeight();
+                int sizeB = mOutputStreams[a]->getWidth() * mOutputStreams[a]->getHeight();
+                int formatAScore = formatScore(mOutputStreams[a]->getFormat());
+                int formatBScore = formatScore(mOutputStreams[b]->getFormat());
+                if (sizeA > sizeB ||
+                        (sizeA == sizeB && formatAScore >= formatBScore)) {
+                    return true;
+                } else {
+                    return false;
+                }
+            });
+
+    size_t overlapSize = std::min(mStreamUseCaseOverrides.size(), mOutputStreams.size());
+    for (size_t i = 0; i < mOutputStreams.size(); i++) {
+        mOutputStreams[outputStreamsIndices[i]]->setStreamUseCase(
+                mStreamUseCaseOverrides[std::min(i, overlapSize-1)]);
+    }
 }
 
 }; // namespace android

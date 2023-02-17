@@ -158,7 +158,8 @@ status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr
     }
 
     /** Start watchdog thread */
-    mCameraServiceWatchdog = new CameraServiceWatchdog();
+    mCameraServiceWatchdog = new CameraServiceWatchdog(TClientBase::mCameraIdStr,
+            mCameraServiceProxyWrapper);
     res = mCameraServiceWatchdog->run("Camera2ClientBaseWatchdog");
     if (res != OK) {
         ALOGE("%s: Unable to start camera service watchdog thread: %s (%d)",
@@ -356,6 +357,29 @@ void Camera2ClientBase<TClientBase>::notifyError(
         const CaptureResultExtras& resultExtras) {
     ALOGE("Error condition %d reported by HAL, requestId %" PRId32, errorCode,
           resultExtras.requestId);
+}
+
+template <typename TClientBase>
+void Camera2ClientBase<TClientBase>::notifyPhysicalCameraChange(const std::string &physicalId) {
+    // We're only interested in this notification if overrideToPortrait is turned on.
+    if (!TClientBase::mOverrideToPortrait) {
+        return;
+    }
+
+    String8 physicalId8(physicalId.c_str());
+    auto physicalCameraMetadata = mDevice->infoPhysical(physicalId8);
+    auto orientationEntry = physicalCameraMetadata.find(ANDROID_SENSOR_ORIENTATION);
+
+    if (orientationEntry.count == 1) {
+        int orientation = orientationEntry.data.i32[0];
+        int rotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_NONE;
+
+        if (orientation == 0 || orientation == 180) {
+            rotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_90;
+        }
+
+        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode);
+    }
 }
 
 template <typename TClientBase>

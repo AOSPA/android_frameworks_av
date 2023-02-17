@@ -603,7 +603,10 @@ status_t AudioPolicyManager::getHwOffloadFormatsSupportedForBluetoothMedia(
         audioDeviceSet = getAudioDeviceOutAllA2dpSet();
         break;
     case AUDIO_DEVICE_OUT_BLE_HEADSET:
-        audioDeviceSet = getAudioDeviceOutAllBleSet();
+        audioDeviceSet = getAudioDeviceOutLeAudioUnicastSet();
+        break;
+    case AUDIO_DEVICE_OUT_BLE_BROADCAST:
+        audioDeviceSet = getAudioDeviceOutLeAudioBroadcastSet();
         break;
     default:
         ALOGE("%s() device type 0x%08x not supported", __func__, device);
@@ -1043,7 +1046,7 @@ sp<IOProfile> AudioPolicyManager::searchCompatibleProfileHwModules (
 
              // when searching for direct outputs, if several profiles are compatible, give priority
              // to one with offload capability
-             if (profile != 0 && 
+             if (profile != 0 &&
                  ((curProfile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0)) {
                 continue;
              }
@@ -1168,6 +1171,8 @@ status_t AudioPolicyManager::getOutputForAttrInt(
     ALOGV("%s() attributes=%s stream=%s session %d selectedDeviceId %d", __func__,
           toString(*resultAttr).c_str(), toString(*stream).c_str(), session, requestedPortId);
 
+    bool usePrimaryOutputFromPolicyMixes = false;
+
     // The primary output is the explicit routing (eg. setPreferredDevice) if specified,
     //       otherwise, fallback to the dynamic policies, if none match, query the engine.
     // Secondary outputs are always found by dynamic policies as the engine do not support them
@@ -1177,13 +1182,11 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         .format = config->format,
     };
     status = mPolicyMixes.getOutputForAttr(*resultAttr, clientConfig, uid, session, *flags,
-                                           primaryMix, secondaryMixes);
+                                           mAvailableOutputDevices, requestedDevice, primaryMix,
+                                           secondaryMixes, usePrimaryOutputFromPolicyMixes);
     if (status != OK) {
         return status;
     }
-
-    // Explicit routing is higher priority then any dynamic policy primary output
-    bool usePrimaryOutputFromPolicyMixes = requestedDevice == nullptr && primaryMix != nullptr;
 
     // FIXME: in case of RENDER policy, the output capabilities should be checked
     if ((secondaryMixes != nullptr && !secondaryMixes->empty())
@@ -2132,6 +2135,10 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
         }
     }
 
+    if (client->hasPreferredDevice()) {
+        // playback activity with preferred device impacts routing occurred, inform upper layers
+        mpClientInterface->onRoutingUpdated();
+    }
     if (delayMs != 0) {
         usleep(delayMs * 1000);
     }
@@ -2391,6 +2398,11 @@ status_t AudioPolicyManager::stopOutput(audio_port_handle_t portId)
         return BAD_VALUE;
     }
     sp<TrackClientDescriptor> client = outputDesc->getClient(portId);
+
+    if (client->hasPreferredDevice(true)) {
+        // playback activity with preferred device impacts routing occurred, inform upper layers
+        mpClientInterface->onRoutingUpdated();
+    }
 
     ALOGV("stopOutput() output %d, stream %d, session %d",
           outputDesc->mIoHandle, client->stream(), client->session());
@@ -3916,7 +3928,8 @@ status_t AudioPolicyManager::clearDevicesRoleForStrategy(product_strategy_t stra
 
     status_t status = mEngine->clearDevicesRoleForStrategy(strategy, role);
     if (status != NO_ERROR) {
-        ALOGV("Engine could not remove device role for strategy %d status %d",
+        ALOGW_IF(status != NAME_NOT_FOUND,
+                "Engine could not remove device role for strategy %d status %d",
                 strategy, status);
         return status;
     }
@@ -3988,10 +4001,11 @@ status_t AudioPolicyManager::removeDevicesRoleForCapturePreset(
 
     status_t status = mEngine->removeDevicesRoleForCapturePreset(
             audioSource, role, devices);
-    ALOGW_IF(status != NO_ERROR,
+    ALOGW_IF(status != NO_ERROR && status != NAME_NOT_FOUND,
             "Engine could not remove devices role (%d) for capture preset %d", role, audioSource);
-
-    updateInputRouting();
+    if (status == NO_ERROR) {
+        updateInputRouting();
+    }
     return status;
 }
 
@@ -4000,10 +4014,11 @@ status_t AudioPolicyManager::clearDevicesRoleForCapturePreset(audio_source_t aud
     ALOGV("%s() audioSource=%d role=%d", __func__, audioSource, role);
 
     status_t status = mEngine->clearDevicesRoleForCapturePreset(audioSource, role);
-    ALOGW_IF(status != NO_ERROR,
+    ALOGW_IF(status != NO_ERROR && status != NAME_NOT_FOUND,
             "Engine could not clear devices role (%d) for capture preset %d", role, audioSource);
-
-    updateInputRouting();
+    if (status == NO_ERROR) {
+        updateInputRouting();
+    }
     return status;
 }
 
@@ -6001,6 +6016,17 @@ status_t AudioPolicyManager::initialize() {
         return status;
     }
 
+    // If microphones address is empty, set it according to device type
+    for (size_t i = 0; i < mInputDevicesAll.size(); i++) {
+        if (mInputDevicesAll[i]->address().empty()) {
+            if (mInputDevicesAll[i]->type() == AUDIO_DEVICE_IN_BUILTIN_MIC) {
+                mInputDevicesAll[i]->setAddress(AUDIO_BOTTOM_MICROPHONE_ADDRESS);
+            } else if (mInputDevicesAll[i]->type() == AUDIO_DEVICE_IN_BACK_MIC) {
+                mInputDevicesAll[i]->setAddress(AUDIO_BACK_MICROPHONE_ADDRESS);
+            }
+        }
+    }
+
     mEngine->updateDeviceSelectionCache();
     mCommunnicationStrategy = mEngine->getProductStrategyForAttributes(
         mEngine->getAttributesForStreamType(AUDIO_STREAM_VOICE_CALL));
@@ -6015,17 +6041,6 @@ status_t AudioPolicyManager::initialize() {
                  mDefaultOutputDevice->toString().c_str());
         status = NO_INIT;
     }
-    // If microphones address is empty, set it according to device type
-    for (size_t i = 0; i < mAvailableInputDevices.size(); i++) {
-        if (mAvailableInputDevices[i]->address().empty()) {
-            if (mAvailableInputDevices[i]->type() == AUDIO_DEVICE_IN_BUILTIN_MIC) {
-                mAvailableInputDevices[i]->setAddress(AUDIO_BOTTOM_MICROPHONE_ADDRESS);
-            } else if (mAvailableInputDevices[i]->type() == AUDIO_DEVICE_IN_BACK_MIC) {
-                mAvailableInputDevices[i]->setAddress(AUDIO_BACK_MICROPHONE_ADDRESS);
-            }
-        }
-    }
-
     ALOGW_IF(mPrimaryOutput == nullptr, "The policy configuration does not declare a primary output");
 
     // Silence ALOGV statements
@@ -6730,6 +6745,7 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
     SortedVector<audio_io_handle_t> dstOutputs = getOutputsForDevices(newDevices, mOutputs);
 
     uint32_t maxLatency = 0;
+    bool unneededUsePrimaryOutputFromPolicyMixes = false;
     std::vector<sp<SwAudioOutputDescriptor>> invalidatedOutputs;
     // take into account dynamic audio policies related changes: if a client is now associated
     // to a different policy mix than at creation time, invalidate corresponding stream
@@ -6744,7 +6760,9 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
             }
             sp<AudioPolicyMix> primaryMix;
             status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->config(),
-                    client->uid(), client->session(), client->flags(), primaryMix, nullptr);
+                    client->uid(), client->session(), client->flags(), mAvailableOutputDevices,
+                    nullptr /* requestedDevice */, primaryMix, nullptr /* secondaryMixes */,
+                    unneededUsePrimaryOutputFromPolicyMixes);
             if (status != OK) {
                 continue;
             }
@@ -6842,13 +6860,16 @@ void AudioPolicyManager::checkOutputForAllStrategies()
 void AudioPolicyManager::checkSecondaryOutputs() {
     PortHandleVector clientsToInvalidate;
     TrackSecondaryOutputsMap trackSecondaryOutputs;
+    bool unneededUsePrimaryOutputFromPolicyMixes = false;
     for (size_t i = 0; i < mOutputs.size(); i++) {
         const sp<SwAudioOutputDescriptor>& outputDescriptor = mOutputs[i];
         for (const sp<TrackClientDescriptor>& client : outputDescriptor->getClientIterable()) {
             sp<AudioPolicyMix> primaryMix;
             std::vector<sp<AudioPolicyMix>> secondaryMixes;
             status_t status = mPolicyMixes.getOutputForAttr(client->attributes(), client->config(),
-                    client->uid(), client->session(), client->flags(), primaryMix, &secondaryMixes);
+                    client->uid(), client->session(), client->flags(), mAvailableOutputDevices,
+                    nullptr /* requestedDevice */, primaryMix, &secondaryMixes,
+                    unneededUsePrimaryOutputFromPolicyMixes);
             std::vector<sp<SwAudioOutputDescriptor>> secondaryDescs;
             for (auto &secondaryMix : secondaryMixes) {
                 sp<SwAudioOutputDescriptor> outputDesc = secondaryMix->getOutput();
@@ -8282,9 +8303,11 @@ status_t AudioPolicyManager::getDevicesForAttributes(
     // check dynamic policies but only for primary descriptors (secondary not used for audible
     // audio routing, only used for duplication for playback capture)
     sp<AudioPolicyMix> policyMix;
+    bool unneededUsePrimaryOutputFromPolicyMixes = false;
     status_t status = mPolicyMixes.getOutputForAttr(attr, AUDIO_CONFIG_BASE_INITIALIZER,
-            0 /*uid unknown here*/, AUDIO_SESSION_NONE, AUDIO_OUTPUT_FLAG_NONE, policyMix,
-            nullptr /* secondaryMixes */);
+            0 /*uid unknown here*/, AUDIO_SESSION_NONE, AUDIO_OUTPUT_FLAG_NONE,
+            mAvailableOutputDevices, nullptr /* requestedDevice */, policyMix,
+            nullptr /* secondaryMixes */, unneededUsePrimaryOutputFromPolicyMixes);
     if (status != OK) {
         return status;
     }

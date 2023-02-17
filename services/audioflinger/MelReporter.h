@@ -37,21 +37,21 @@ public:
 
     void onFirstRef() override;
 
-    /** Returns true if we should compute MEL for the given device. */
-    bool shouldComputeMelForDeviceType(audio_devices_t device);
-
     /**
      * Activates the MEL reporting from the HAL sound dose interface. If the HAL
      * does not support the sound dose interface for this module, the internal MEL
      * calculation will be use.
      *
-     * For now support internal MelReporting only if the sound dose standalone HAL
-     * is not implemented
+     * <p>If the device is using the audio AIDL HAL then this method will try to get the sound
+     * dose interface from IModule#getSoundDose(). Otherwise, if the legacy audio HIDL HAL is used
+     * this method will be looking for the standalone sound dose implementation. It falls back to
+     * the internal MEL computation if no valid sound dose interface can be retrieved.
      *
-     * @return true if the MEL reporting will be done from the sound dose HAL
-     * interface
+     * @return true if the MEL reporting will be done from any sound dose HAL interface
+     * implementation, false otherwise.
      */
-    bool activateHalSoundDoseComputation(const std::string& module);
+    bool activateHalSoundDoseComputation(const std::string& module,
+                                         const sp<DeviceHalInterface>& device);
 
     /**
      * Activates the MEL reporting from internal framework values. These are used
@@ -70,23 +70,38 @@ public:
                             const PatchPanel::Patch& patch) override;
     void onReleaseAudioPatch(audio_patch_handle_t handle) override;
 
+    /**
+     * The new metadata can determine whether we should compute MEL for the given thread.
+     * This is the case only if one of the tracks in the thread mix is using MEDIA or GAME.
+     * Otherwise, this method will disable CSD.
+     **/
+    void updateMetadataForCsd(audio_io_handle_t streamHandle,
+                              const std::vector<playback_track_metadata_v7_t>& metadataVec);
 private:
-    void stopInternalMelComputation();
-    void stopInternalMelComputationForStream(audio_io_handle_t streamId);
-
-    void startMelComputationForNewPatch(audio_io_handle_t streamHandle,
-                                        audio_port_handle_t deviceId);
-
-    AudioFlinger& mAudioFlinger;  // does not own the object
-    std::shared_ptr<::aidl::android::hardware::audio::sounddose::ISoundDoseFactory>
-        mSoundDoseFactory;
-
-    sp<SoundDoseManager> mSoundDoseManager;
-
     struct ActiveMelPatch {
         audio_io_handle_t streamHandle{AUDIO_IO_HANDLE_NONE};
         std::vector<audio_port_handle_t> deviceHandles;
+        bool csdActive;
     };
+
+    /** Returns true if we should compute MEL for the given device. */
+    bool shouldComputeMelForDeviceType(audio_devices_t device);
+
+    void stopInternalMelComputation();
+
+    /** Should be called with the following order of locks: mAudioFlinger.mLock -> mLock. */
+    void stopMelComputationForPatch_l(const ActiveMelPatch& patch);
+
+    /** Should be called with the following order of locks: mAudioFlinger.mLock -> mLock. */
+    void startMelComputationForActivePatch_l(const ActiveMelPatch& patch);
+
+    std::optional<audio_patch_handle_t> activePatchStreamHandle_l(audio_io_handle_t streamHandle);
+
+    bool useHalSoundDoseInterface();
+
+    AudioFlinger& mAudioFlinger;  // does not own the object
+
+    sp<SoundDoseManager> mSoundDoseManager;
 
     /**
      * Lock for protecting the active mel patches. Do not mix with the AudioFlinger lock.
@@ -95,5 +110,7 @@ private:
     std::mutex mLock;
     std::unordered_map<audio_patch_handle_t, ActiveMelPatch>
         mActiveMelPatches GUARDED_BY(AudioFlinger::MelReporter::mLock);
+    std::unordered_map<audio_port_handle_t, int>
+        mActiveDevices GUARDED_BY(AudioFlinger::MelReporter::mLock);
     bool mUseHalSoundDoseInterface GUARDED_BY(AudioFlinger::MelReporter::mLock) = false;
 };

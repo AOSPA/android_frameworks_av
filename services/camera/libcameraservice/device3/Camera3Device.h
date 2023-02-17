@@ -20,6 +20,7 @@
 #include <utility>
 #include <unordered_map>
 #include <set>
+#include <tuple>
 
 #include <utils/Condition.h>
 #include <utils/Errors.h>
@@ -303,8 +304,18 @@ class Camera3Device :
      */
     status_t setCameraServiceWatchdog(bool enabled);
 
+    // Set stream use case overrides
+    void setStreamUseCaseOverrides(
+            const std::vector<int64_t>& useCaseOverrides);
+
+    // Clear stream use case overrides
+    void clearStreamUseCaseOverrides();
+
     // Get the status trackeer for the camera device
     wp<camera3::StatusTracker> getStatusTracker() { return mStatusTracker; }
+
+    // Whether the device is in error state
+    bool hasDeviceError();
 
     /**
      * The injection camera session to replace the internal camera
@@ -1050,7 +1061,7 @@ class Camera3Device :
 
         wp<NotificationListener> mListener;
 
-        const String8&     mId;       // The camera ID
+        const String8      mId;       // The camera ID
         int                mStatusId; // The RequestThread's component ID for
                                       // status tracking
 
@@ -1124,6 +1135,7 @@ class Camera3Device :
         const bool         mUseHalBufManager;
         const bool         mSupportCameraMute;
         const bool         mOverrideToPortrait;
+        int32_t            mVndkVersion = -1;
     };
 
     virtual sp<RequestThread> createNewRequestThread(wp<Camera3Device> /*parent*/,
@@ -1210,7 +1222,7 @@ class Camera3Device :
         // Guarded by mLock
 
         wp<NotificationListener> mListener;
-        std::unordered_map<int, sp<camera3::Camera3StreamInterface> > mPendingStreams;
+        std::list<std::tuple<int, sp<camera3::Camera3StreamInterface>>> mPendingStreams;
         bool mActive;
         bool mCancelNow;
 
@@ -1406,6 +1418,9 @@ class Camera3Device :
     // app compatibility reasons.
     bool mOverrideToPortrait;
 
+    // Current active physical id of the logical multi-camera, if any
+    std::string mActivePhysicalId;
+
     // The current minimum expected frame duration based on AE_TARGET_FPS_RANGE
     nsecs_t mMinExpectedDuration = 0;
     // Whether the camera device runs at fixed frame rate based on AE_MODE and
@@ -1493,6 +1508,8 @@ class Camera3Device :
             createCamera3DeviceInjectionMethods(wp<Camera3Device>) = 0;
 
     sp<Camera3DeviceInjectionMethods> mInjectionMethods;
+
+    void overrideStreamUseCaseLocked();
 
 }; // class Camera3Device
 

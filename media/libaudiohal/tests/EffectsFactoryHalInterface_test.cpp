@@ -15,15 +15,36 @@
  */
 
 //#define LOG_NDEBUG 0
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <memory>
+#include <utility>
 #define LOG_TAG "EffectsFactoryHalInterfaceTest"
 
+#include <aidl/android/media/audio/common/AudioUuid.h>
+#include <media/AidlConversionCppNdk.h>
 #include <media/audiohal/EffectsFactoryHalInterface.h>
+#include <system/audio_effects/audio_effects_utils.h>
+#include <system/audio_effects/effect_aec.h>
+#include <system/audio_effects/effect_agc2.h>
+#include <system/audio_effects/effect_bassboost.h>
+#include <system/audio_effects/effect_downmix.h>
+#include <system/audio_effects/effect_dynamicsprocessing.h>
+#include <system/audio_effects/effect_hapticgenerator.h>
+#include <system/audio_effects/effect_loudnessenhancer.h>
+#include <system/audio_effects/effect_ns.h>
+#include <system/audio_effect.h>
 
 #include <gtest/gtest.h>
 #include <utils/RefBase.h>
+#include <vibrator/ExternalVibrationUtils.h>
 
 namespace android {
+
+using effect::utils::EffectParamReader;
+using effect::utils::EffectParamWriter;
+using ::aidl::android::media::audio::common::AudioUuid;
 
 // EffectsFactoryHalInterface
 TEST(libAudioHalTest, createEffectsFactoryHalInterface) {
@@ -76,6 +97,210 @@ TEST(libAudioHalTest, getHalVersion) {
 
     auto version = factory->getHalVersion();
     EXPECT_NE(0, version.getMajorVersion());
+}
+
+class EffectParamCombination {
+  public:
+    template <typename P, typename V>
+    void init(const P& p, const V& v, size_t len) {
+        setBuffer.resize(sizeof(effect_param_t) + sizeof(p) + sizeof(v) + 4);
+        getBuffer.resize(sizeof(effect_param_t) + sizeof(p) + len + 4);
+        expectBuffer.resize(sizeof(effect_param_t) + sizeof(p) + len + 4);
+        parameterSet =
+                std::make_shared<EffectParamReader>(createEffectParam(setBuffer.data(), p, v));
+        parameterGet =
+                std::make_shared<EffectParamReader>(createEffectParam(getBuffer.data(), p, v));
+        parameterExpect =
+                std::make_shared<EffectParamReader>(createEffectParam(expectBuffer.data(), p, v));
+        valueSize = len;
+    }
+
+    std::shared_ptr<EffectParamReader> parameterSet; /* setParameter */
+    std::shared_ptr<EffectParamReader> parameterGet; /* getParameter */
+    std::shared_ptr<EffectParamReader> parameterExpect; /* expected from getParameter */
+    size_t valueSize;   /* ValueSize expect to write in reply data buffer */
+
+  private:
+    std::vector<uint8_t> setBuffer;
+    std::vector<uint8_t> getBuffer;
+    std::vector<uint8_t> expectBuffer;
+
+    template <typename P, typename V>
+    EffectParamReader createEffectParam(void* buf, const P& p, const V& v) {
+        effect_param_t* paramRet = (effect_param_t*)buf;
+        paramRet->psize = sizeof(P);
+        paramRet->vsize = sizeof(V);
+        EffectParamWriter writer(*paramRet);
+        EXPECT_EQ(OK, writer.writeToParameter(&p));
+        EXPECT_EQ(OK, writer.writeToValue(&v));
+        writer.finishValueWrite();
+        return writer;
+    }
+};
+
+template <typename P, typename V>
+std::shared_ptr<EffectParamCombination> createEffectParamCombination(const P& p, const V& v,
+                                                                     size_t len) {
+    auto comb = std::make_shared<EffectParamCombination>();
+    comb->init(p, v, len);
+    return comb;
+}
+
+enum ParamName { TUPLE_UUID, TUPLE_PARAM_COMBINATION };
+using EffectParamTestTuple =
+        std::tuple<const effect_uuid_t* /* type UUID */, std::shared_ptr<EffectParamCombination>>;
+
+static const effect_uuid_t EXTEND_EFFECT_TYPE_UUID = {
+        0xfa81dbde, 0x588b, 0x11ed, 0x9b6a, {0x02, 0x42, 0xac, 0x12, 0x00, 0x02}};
+
+std::vector<EffectParamTestTuple> testPairs = {
+        std::make_tuple(FX_IID_AEC,
+                        createEffectParamCombination(AEC_PARAM_ECHO_DELAY, 0xff /* echoDelayMs */,
+                                                     sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(FX_IID_AGC2, createEffectParamCombination(
+                                             AGC2_PARAM_FIXED_DIGITAL_GAIN, 15 /* digitalGainDb */,
+                                             sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(SL_IID_BASSBOOST,
+                        createEffectParamCombination(BASSBOOST_PARAM_STRENGTH, 20 /* strength */,
+                                                     sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(EFFECT_UIID_DOWNMIX,
+                        createEffectParamCombination(DOWNMIX_PARAM_TYPE, DOWNMIX_TYPE_FOLD,
+                                                     sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(SL_IID_DYNAMICSPROCESSING,
+                        createEffectParamCombination(
+                                std::array<uint32_t, 2>({DP_PARAM_INPUT_GAIN, 0 /* channel */}),
+                                30 /* gainDb */, sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(
+                FX_IID_HAPTICGENERATOR,
+                createEffectParamCombination(
+                        HG_PARAM_HAPTIC_INTENSITY,
+                        std::array<uint32_t, 2>(
+                                {1, uint32_t(::android::os::HapticScale::HIGH) /* scale */}),
+                        0 /* returnValueSize */)),
+        std::make_tuple(
+                FX_IID_LOUDNESS_ENHANCER,
+                createEffectParamCombination(LOUDNESS_ENHANCER_PARAM_TARGET_GAIN_MB, 5 /* gain */,
+                                             sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(FX_IID_NS,
+                        createEffectParamCombination(NS_PARAM_LEVEL, 1 /* level */,
+                                                     sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(&EXTEND_EFFECT_TYPE_UUID,
+                        createEffectParamCombination(1, 0xbead, sizeof(int32_t)))};
+
+class libAudioHalEffectParamTest : public ::testing::TestWithParam<EffectParamTestTuple> {
+  public:
+    libAudioHalEffectParamTest()
+        : mParamTuple(GetParam()),
+          mFactory(EffectsFactoryHalInterface::create()),
+          mTypeUuid(std::get<TUPLE_UUID>(mParamTuple)),
+          mCombination(std::get<TUPLE_PARAM_COMBINATION>(mParamTuple)),
+          mExpectedValue([&]() {
+              std::vector<uint8_t> expectData(mCombination->valueSize);
+              mCombination->parameterExpect->readFromValue(expectData.data(),
+                                                           mCombination->valueSize);
+              return expectData;
+          }()),
+          mDescs([&]() {
+              std::vector<effect_descriptor_t> descs;
+              if (mFactory && mTypeUuid && OK == mFactory->getDescriptors(mTypeUuid, &descs)) {
+                  return descs;
+              }
+              return descs;
+          }()) {}
+
+    void SetUp() override {
+        ASSERT_NE(0ul, mDescs.size());
+        for (const auto& desc : mDescs) {
+            sp<EffectHalInterface> interface = createEffectHal(desc);
+            ASSERT_NE(nullptr, interface);
+            mHalInterfaces.push_back(interface);
+        }
+    }
+
+    void initEffect(const sp<EffectHalInterface>& interface) {
+        uint32_t initReply = 0;
+        uint32_t initReplySize = sizeof(initReply);
+        ASSERT_EQ(OK, interface->command(EFFECT_CMD_INIT, 0, nullptr, &initReplySize, &initReply));
+    }
+
+    void TearDown() override {
+        for (auto& interface : mHalInterfaces) {
+            interface->close();
+        }
+    }
+
+    sp<EffectHalInterface> createEffectHal(const effect_descriptor_t& desc) {
+        sp<EffectHalInterface> interface = nullptr;
+        if (0 == std::memcmp(&desc.type, mTypeUuid, sizeof(effect_uuid_t)) &&
+            OK == mFactory->createEffect(&desc.uuid, 1 /* sessionId */, 1 /* ioId */,
+                                         1 /* deviceId */, &interface)) {
+            return interface;
+        }
+        return nullptr;
+    }
+
+    void setAndGetParameter(const sp<EffectHalInterface>& interface) {
+        uint32_t replySize = sizeof(uint32_t);
+        uint8_t reply[replySize];
+        auto parameterSet = mCombination->parameterSet;
+        ASSERT_EQ(OK,
+                  interface->command(EFFECT_CMD_SET_PARAM, (uint32_t)parameterSet->getTotalSize(),
+                                     const_cast<effect_param_t*>(&parameterSet->getEffectParam()),
+                                     &replySize, &reply))
+                << parameterSet->toString();
+        ASSERT_EQ(replySize, sizeof(uint32_t));
+
+        effect_param_t* getParam =
+                const_cast<effect_param_t*>(&mCombination->parameterGet->getEffectParam());
+        size_t maxReplySize = mCombination->valueSize + sizeof(effect_param_t) +
+                              sizeof(parameterSet->getPaddedParameterSize());
+        replySize = maxReplySize;
+        EXPECT_EQ(OK,
+                  interface->command(EFFECT_CMD_GET_PARAM, (uint32_t)parameterSet->getTotalSize(),
+                                     const_cast<effect_param_t*>(&parameterSet->getEffectParam()),
+                                     &replySize, getParam));
+        EffectParamReader parameterGet(*getParam);
+        EXPECT_EQ(replySize, parameterGet.getTotalSize()) << parameterGet.toString();
+        if (mCombination->valueSize) {
+            std::vector<uint8_t> response(mCombination->valueSize);
+            EXPECT_EQ(OK, parameterGet.readFromValue(response.data(), mCombination->valueSize))
+                << parameterGet.toString();
+            EXPECT_EQ(response, mExpectedValue);
+        }
+    }
+
+    const EffectParamTestTuple mParamTuple;
+    const sp<EffectsFactoryHalInterface> mFactory;
+    const effect_uuid_t* mTypeUuid;
+    std::shared_ptr<EffectParamCombination> mCombination;
+    const std::vector<uint8_t> mExpectedValue;
+    const std::vector<effect_descriptor_t> mDescs;
+    std::vector<sp<EffectHalInterface>> mHalInterfaces;
+};
+
+TEST_P(libAudioHalEffectParamTest, setAndGetParam) {
+    for (auto& interface : mHalInterfaces) {
+        EXPECT_NO_FATAL_FAILURE(initEffect(interface));
+        EXPECT_NO_FATAL_FAILURE(setAndGetParameter(interface));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+        libAudioHalEffectParamTest, libAudioHalEffectParamTest, ::testing::ValuesIn(testPairs),
+        [](const testing::TestParamInfo<libAudioHalEffectParamTest::ParamType>& info) {
+            AudioUuid uuid = ::aidl::android::legacy2aidl_audio_uuid_t_AudioUuid(
+                                     *std::get<TUPLE_UUID>(info.param))
+                                     .value();
+            std::string name = "UUID_" + uuid.toString();
+            std::replace_if(
+                    name.begin(), name.end(), [](const char c) { return !std::isalnum(c); }, '_');
+            return name;
+        });
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(libAudioHalEffectParamTest);
+
+int main(int argc, char** argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }
 
 // TODO: b/263986405 Add multi-thread testing

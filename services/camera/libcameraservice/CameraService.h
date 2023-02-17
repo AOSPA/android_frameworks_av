@@ -71,7 +71,8 @@ class CameraService :
     public BinderService<CameraService>,
     public virtual ::android::hardware::BnCameraService,
     public virtual IBinder::DeathRecipient,
-    public virtual CameraProviderManager::StatusListener
+    public virtual CameraProviderManager::StatusListener,
+    public virtual IServiceManager::LocalRegistrationCallback
 {
     friend class BinderService<CameraService>;
     friend class CameraOfflineSessionClient;
@@ -98,8 +99,14 @@ public:
     // Event log ID
     static const int SN_EVENT_LOG_ID = 0x534e4554;
 
+    // Register camera service
+    static void instantiate();
+
     // Implementation of BinderService<T>
     static char const* getServiceName() { return "media.camera"; }
+
+    // Implementation of IServiceManager::LocalRegistrationCallback
+    virtual void onServiceRegistration(const String16& name, const sp<IBinder>& binder) override;
 
                         // Non-null arguments for cameraServiceProxyWrapper should be provided for
                         // testing purposes only.
@@ -354,6 +361,13 @@ public:
 
         // Set Camera service watchdog
         virtual status_t setCameraServiceWatchdog(bool enabled) = 0;
+
+        // Set stream use case overrides
+        virtual void setStreamUseCaseOverrides(
+                const std::vector<int64_t>& useCaseOverrides) = 0;
+
+        // Clear stream use case overrides
+        virtual void clearStreamUseCaseOverrides() = 0;
 
         // The injection camera session to replace the internal camera
         // session.
@@ -707,7 +721,10 @@ private:
 
     // Observer for UID lifecycle enforcing that UIDs in idle
     // state cannot use the camera to protect user privacy.
-    class UidPolicy : public BnUidObserver, public virtual IBinder::DeathRecipient {
+    class UidPolicy :
+        public BnUidObserver,
+        public virtual IBinder::DeathRecipient,
+        public virtual IServiceManager::LocalRegistrationCallback {
     public:
         explicit UidPolicy(sp<CameraService> service)
                 : mRegistered(false), mService(service) {}
@@ -732,12 +749,16 @@ private:
         void registerMonitorUid(uid_t uid);
         void unregisterMonitorUid(uid_t uid);
 
+        // Implementation of IServiceManager::LocalRegistrationCallback
+        virtual void onServiceRegistration(const String16& name,
+                        const sp<IBinder>& binder) override;
         // IBinder::DeathRecipient implementation
         virtual void binderDied(const wp<IBinder> &who);
     private:
         bool isUidActiveLocked(uid_t uid, String16 callingPackage);
         int32_t getProcStateLocked(uid_t uid);
         void updateOverrideUid(uid_t uid, String16 callingPackage, bool active, bool insert);
+        void registerWithActivityManager();
 
         struct MonitoredUid {
             int32_t procState;
@@ -757,7 +778,8 @@ private:
     // If sensor privacy is enabled then all apps, including those that are active, should be
     // prevented from accessing the camera.
     class SensorPrivacyPolicy : public hardware::BnSensorPrivacyListener,
-            public virtual IBinder::DeathRecipient {
+            public virtual IBinder::DeathRecipient,
+            public virtual IServiceManager::LocalRegistrationCallback {
         public:
             explicit SensorPrivacyPolicy(wp<CameraService> service)
                     : mService(service), mSensorPrivacyEnabled(false), mRegistered(false) {}
@@ -771,6 +793,9 @@ private:
             binder::Status onSensorPrivacyChanged(int toggleType, int sensor,
                                                   bool enabled);
 
+            // Implementation of IServiceManager::LocalRegistrationCallback
+            virtual void onServiceRegistration(const String16& name,
+                                               const sp<IBinder>& binder) override;
             // IBinder::DeathRecipient implementation
             virtual void binderDied(const wp<IBinder> &who);
 
@@ -782,6 +807,7 @@ private:
             bool mRegistered;
 
             bool hasCameraPrivacyFeature();
+            void registerWithSensorPrivacyManager();
     };
 
     sp<UidPolicy> mUidPolicy;
@@ -1257,6 +1283,12 @@ private:
     // Set the camera mute state
     status_t handleSetCameraMute(const Vector<String16>& args);
 
+    // Set the stream use case overrides
+    status_t handleSetStreamUseCaseOverrides(const Vector<String16>& args);
+
+    // Clear the stream use case overrides
+    void handleClearStreamUseCaseOverrides();
+
     // Handle 'watch' command as passed through 'cmd'
     status_t handleWatchCommand(const Vector<String16> &args, int inFd, int outFd);
 
@@ -1354,6 +1386,9 @@ private:
 
     // Camera Service watchdog flag
     bool mCameraServiceWatchdogEnabled = true;
+
+    // Current stream use case overrides
+    std::vector<int64_t> mStreamUseCaseOverrides;
 
     /**
      * A listener class that implements the IBinder::DeathRecipient interface

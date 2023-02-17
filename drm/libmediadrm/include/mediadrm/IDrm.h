@@ -24,6 +24,8 @@
 
 #define ANDROID_IDRM_H_
 
+#define IDRM_UUID_SIZE (16)
+
 namespace android {
 namespace hardware {
 namespace drm {
@@ -32,6 +34,13 @@ struct LogMessage;
 }  // namespace V1_4
 }  // namespace drm
 }  // namespace hardware
+
+enum IDrmFrontend : int32_t {
+    IDRM_UNKNOWN = 0,
+    IDRM_JNI = 1,
+    IDRM_NDK = 2,
+    IDRM_NUPLAYER = 3,
+};
 
 namespace drm = ::android::hardware::drm;
 

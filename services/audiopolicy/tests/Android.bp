@@ -28,6 +28,7 @@ cc_test {
         "liblog",
         "libmedia_helper",
         "libutils",
+        "libcutils",
         "libxml2",
         "framework-permission-aidl-cpp",
         "libbinder",
@@ -54,7 +55,10 @@ cc_test {
         "-Wall",
     ],
 
-    test_suites: ["device-tests"],
+    test_suites: [
+        "device-tests",
+        "automotive-tests",
+    ],
 
 }
 

@@ -26,12 +26,16 @@
 #include <utils/RefBase.h>
 #include <utils/String8.h>
 
+namespace ndk {
+class SpAIBinder;
+}
+
 namespace android {
 
 class StreamInHalInterface;
 class StreamOutHalInterface;
 
-class DeviceHalInterface : public RefBase
+class DeviceHalInterface : public virtual RefBase
 {
   public:
     // Sets the value of 'devices' to a bitmask of 1 or more values of audio_devices_t.
@@ -106,16 +110,10 @@ class DeviceHalInterface : public RefBase
     virtual status_t releaseAudioPatch(audio_patch_handle_t patch) = 0;
 
     // Fills the list of supported attributes for a given audio port.
-    virtual status_t getAudioPort(struct audio_port* port) {
-        ALOGE("%s override me port %p", __func__, port);
-        return OK;
-    }
+    virtual status_t getAudioPort(struct audio_port* port) = 0;
 
     // Fills the list of supported attributes for a given audio port.
-    virtual status_t getAudioPort(struct audio_port_v7 *port) {
-        ALOGE("%s override me port %p", __func__, port);
-        return OK;
-    }
+    virtual status_t getAudioPort(struct audio_port_v7 *port) = 0;
 
     // Set audio port configuration.
     virtual status_t setAudioPortConfig(const struct audio_port_config *config) = 0;
@@ -145,6 +143,10 @@ class DeviceHalInterface : public RefBase
     virtual error::Result<audio_hw_sync_t> getHwAvSync() = 0;
 
     virtual status_t dump(int fd, const Vector<String16>& args) = 0;
+
+    // Returns the sound dose binder interface if it is supported by the HAL, nullptr otherwise
+    virtual status_t getSoundDoseInterface(const std::string& module,
+                                           ::ndk::SpAIBinder* soundDoseBinder) = 0;
 
   protected:
     // Subclasses can not be constructed directly by clients.

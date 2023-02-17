@@ -57,16 +57,25 @@ class BundleContext final : public EffectContext {
         return mChMask;
     }
     bool isDeviceSupportedBassBoost(
-            const aidl::android::media::audio::common::AudioDeviceDescription& device);
+            const std::vector<aidl::android::media::audio::common::AudioDeviceDescription>&
+                    devices);
     bool isDeviceSupportedVirtualizer(
+            const std::vector<aidl::android::media::audio::common::AudioDeviceDescription>&
+                    devices);
+    bool isConfigSupportedVirtualizer(
+            size_t channelCount,
             const aidl::android::media::audio::common::AudioDeviceDescription& device);
+
     RetCode setOutputDevice(
-            const aidl::android::media::audio::common::AudioDeviceDescription& device) override;
+            const std::vector<aidl::android::media::audio::common::AudioDeviceDescription>& devices)
+            override;
 
     RetCode setEqualizerPreset(const std::size_t presetIdx);
     int getEqualizerPreset() const { return mCurPresetIdx; }
     RetCode setEqualizerBandLevels(const std::vector<Equalizer::BandLevel>& bandLevels);
     std::vector<Equalizer::BandLevel> getEqualizerBandLevels() const;
+
+    std::vector<int32_t> getEqualizerCenterFreqs();
 
     RetCode setBassBoostStrength(int strength);
     int getBassBoostStrength() const { return mBassStrengthSaved; }
@@ -79,6 +88,14 @@ class BundleContext final : public EffectContext {
 
     RetCode setVirtualizerStrength(int strength);
     int getVirtualizerStrength() const { return mVirtStrengthSaved; }
+
+    RetCode setForcedDevice(
+            const ::aidl::android::media::audio::common::AudioDeviceDescription& device);
+    aidl::android::media::audio::common::AudioDeviceDescription getForcedDevice() const {
+        return mForceDevice;
+    }
+    std::vector<Virtualizer::ChannelAngle> getSpeakerAngles(
+            const Virtualizer::SpeakerAnglesPayload payload);
 
     RetCode setVolumeStereo(const Parameter::VolumeStereo& volumeStereo) override;
     Parameter::VolumeStereo getVolumeStereo() override { return mVolumeStereo; }
@@ -122,6 +139,7 @@ class BundleContext final : public EffectContext {
     // Virtualizer
     int mVirtStrengthSaved = 0; /* Conversion between Get/Set */
     bool mVirtualizerTempDisabled = false;
+    ::aidl::android::media::audio::common::AudioDeviceDescription mForceDevice;
     // Volume
     int mLevelSaved = 0; /* for when mute is set, level must be saved */
     int mVolume = 0;
