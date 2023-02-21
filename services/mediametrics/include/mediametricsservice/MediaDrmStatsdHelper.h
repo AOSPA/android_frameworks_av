@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,19 @@
  * limitations under the License.
  */
 
-#pragma version(1)
-#pragma rs java_package_name(com.android.rs.cppbasic)
-#pragma rs_fp_relaxed
+#ifndef MEDIA_DRM_STATSD_HELPER_H
+#define MEDIA_DRM_STATSD_HELPER_H
 
-void root(const uchar4 *v_in, uchar4 *v_out) {
-    v_out->x = v_in->y;
-    v_out->y = v_in->z;
-    v_out->z = v_in->w;
-    v_out->w = v_in->x;
-}
+#include <cstdint>
+#include <stats_media_metrics.h>
+#include <string>
+namespace android {
+
+class MediaDrmStatsdHelper {
+public:
+    static int32_t findDrmScheme(const int64_t msb, const int64_t lsb);
+    static int32_t findDrmApi(const std::string& api);
+};
+
+} // namespace android
+#endif  // MEDIA_DRM_STATSD_HELPER_H
