@@ -203,9 +203,10 @@ bool AudioMix::hasUserIdRule(bool match, int userId) const {
     return false;
 }
 
-bool AudioMix::hasMatchUserIdRule() const {
+bool AudioMix::hasUserIdRule(bool match) const {
+    const uint32_t rule = match ? RULE_MATCH_USERID : RULE_EXCLUDE_USERID;
     for (size_t i = 0; i < mCriteria.size(); i++) {
-        if (mCriteria[i].mRule == RULE_MATCH_USERID) {
+        if (mCriteria[i].mRule == rule) {
             return true;
         }
     }
@@ -214,7 +215,7 @@ bool AudioMix::hasMatchUserIdRule() const {
 
 bool AudioMix::isDeviceAffinityCompatible() const {
     return ((mMixType == MIX_TYPE_PLAYERS)
-            && (mRouteFlags == MIX_ROUTE_FLAG_RENDER));
+            && ((mRouteFlags & MIX_ROUTE_FLAG_RENDER) == MIX_ROUTE_FLAG_RENDER));
 }
 
 } // namespace android
