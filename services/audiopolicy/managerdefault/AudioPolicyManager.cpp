@@ -661,7 +661,10 @@ status_t AudioPolicyManager::getHwOffloadFormatsSupportedForBluetoothMedia(
         audioDeviceSet = getAudioDeviceOutAllA2dpSet();
         break;
     case AUDIO_DEVICE_OUT_BLE_HEADSET:
-        audioDeviceSet = getAudioDeviceOutAllBleSet();
+        audioDeviceSet = getAudioDeviceOutLeAudioUnicastSet();
+        break;
+    case AUDIO_DEVICE_OUT_BLE_BROADCAST:
+        audioDeviceSet = getAudioDeviceOutLeAudioBroadcastSet();
         break;
     default:
         ALOGE("%s() device type 0x%08x not supported", __func__, device);
@@ -1117,7 +1120,7 @@ sp<IOProfile> AudioPolicyManager::searchCompatibleProfileHwModules (
 
              // when searching for direct outputs, if several profiles are compatible, give priority
              // to one with offload capability
-             if (profile != 0 && 
+             if (profile != 0 &&
                  ((curProfile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) == 0)) {
                 continue;
              }
@@ -2333,6 +2336,10 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
         }
     }
 
+    if (client->hasPreferredDevice()) {
+        // playback activity with preferred device impacts routing occurred, inform upper layers
+        mpClientInterface->onRoutingUpdated();
+    }
     if (delayMs != 0) {
         usleep(delayMs * 1000);
     }
@@ -2592,6 +2599,11 @@ status_t AudioPolicyManager::stopOutput(audio_port_handle_t portId)
         return BAD_VALUE;
     }
     sp<TrackClientDescriptor> client = outputDesc->getClient(portId);
+
+    if (client->hasPreferredDevice(true)) {
+        // playback activity with preferred device impacts routing occurred, inform upper layers
+        mpClientInterface->onRoutingUpdated();
+    }
 
     ALOGV("stopOutput() output %d, stream %d, session %d",
           outputDesc->mIoHandle, client->stream(), client->session());
@@ -6289,6 +6301,17 @@ status_t AudioPolicyManager::initialize() {
         return status;
     }
 
+    // If microphones address is empty, set it according to device type
+    for (size_t i = 0; i < mInputDevicesAll.size(); i++) {
+        if (mInputDevicesAll[i]->address().empty()) {
+            if (mInputDevicesAll[i]->type() == AUDIO_DEVICE_IN_BUILTIN_MIC) {
+                mInputDevicesAll[i]->setAddress(AUDIO_BOTTOM_MICROPHONE_ADDRESS);
+            } else if (mInputDevicesAll[i]->type() == AUDIO_DEVICE_IN_BACK_MIC) {
+                mInputDevicesAll[i]->setAddress(AUDIO_BACK_MICROPHONE_ADDRESS);
+            }
+        }
+    }
+
     mEngine->updateDeviceSelectionCache();
     mCommunnicationStrategy = mEngine->getProductStrategyForAttributes(
         mEngine->getAttributesForStreamType(AUDIO_STREAM_VOICE_CALL));
@@ -6303,17 +6326,6 @@ status_t AudioPolicyManager::initialize() {
                  mDefaultOutputDevice->toString().c_str());
         status = NO_INIT;
     }
-    // If microphones address is empty, set it according to device type
-    for (size_t i = 0; i < mAvailableInputDevices.size(); i++) {
-        if (mAvailableInputDevices[i]->address().empty()) {
-            if (mAvailableInputDevices[i]->type() == AUDIO_DEVICE_IN_BUILTIN_MIC) {
-                mAvailableInputDevices[i]->setAddress(AUDIO_BOTTOM_MICROPHONE_ADDRESS);
-            } else if (mAvailableInputDevices[i]->type() == AUDIO_DEVICE_IN_BACK_MIC) {
-                mAvailableInputDevices[i]->setAddress(AUDIO_BACK_MICROPHONE_ADDRESS);
-            }
-        }
-    }
-
     ALOGW_IF(mPrimaryOutput == nullptr, "The policy configuration does not declare a primary output");
 
     // Silence ALOGV statements

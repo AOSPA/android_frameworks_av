@@ -313,6 +313,9 @@ class Camera3Device :
     // Get the status trackeer for the camera device
     wp<camera3::StatusTracker> getStatusTracker() { return mStatusTracker; }
 
+    // Whether the device is in error state
+    bool hasDeviceError();
+
     /**
      * The injection camera session to replace the internal camera
      * session.
@@ -1057,7 +1060,7 @@ class Camera3Device :
 
         wp<NotificationListener> mListener;
 
-        const String8&     mId;       // The camera ID
+        const String8      mId;       // The camera ID
         int                mStatusId; // The RequestThread's component ID for
                                       // status tracking
 
@@ -1131,6 +1134,7 @@ class Camera3Device :
         const bool         mUseHalBufManager;
         const bool         mSupportCameraMute;
         const bool         mOverrideToPortrait;
+        int32_t            mVndkVersion = -1;
     };
 
     virtual sp<RequestThread> createNewRequestThread(wp<Camera3Device> /*parent*/,
