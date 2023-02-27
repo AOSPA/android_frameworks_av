@@ -1817,7 +1817,9 @@ void NuPlayer::Renderer::onFlush(const sp<AMessage> &msg) {
         flushQueue(&mVideoQueue);
 
         mDrainVideoQueuePending = false;
-        mVideoPrerollInprogress = false;
+        if (mVideoSampleReceived) {
+            mVideoPrerollInprogress = false;
+        }
 
         if (mVideoScheduler != NULL) {
             mVideoScheduler->restart();
