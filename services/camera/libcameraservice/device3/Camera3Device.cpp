@@ -86,15 +86,16 @@
 #include <android/hardware/camera/device/3.7/ICameraInjectionSession.h>
 #include <android/hardware/camera2/ICameraDeviceUser.h>
 
-#include "utils/CameraTraces.h"
-#include "mediautils/SchedulingPolicyService.h"
-#include "device3/Camera3Device.h"
-#include "device3/Camera3OutputStream.h"
-#include "device3/Camera3InputStream.h"
-#include "device3/Camera3FakeStream.h"
-#include "device3/Camera3SharedOutputStream.h"
 #include "CameraService.h"
+#include "aidl/AidlUtils.h"
+#include "device3/Camera3Device.h"
+#include "device3/Camera3FakeStream.h"
+#include "device3/Camera3InputStream.h"
+#include "device3/Camera3OutputStream.h"
+#include "device3/Camera3SharedOutputStream.h"
+#include "mediautils/SchedulingPolicyService.h"
 #include "utils/CameraThreadState.h"
+#include "utils/CameraTraces.h"
 #include "utils/SessionConfigurationUtils.h"
 #include "utils/TraceHFR.h"
 
@@ -264,7 +265,7 @@ status_t Camera3Device::initializeCommonLocked() {
     mInjectionMethods = createCamera3DeviceInjectionMethods(this);
 
     /** Start watchdog thread */
-    mCameraServiceWatchdog = new CameraServiceWatchdog();
+    mCameraServiceWatchdog = new CameraServiceWatchdog(mId, mCameraServiceProxyWrapper);
     res = mCameraServiceWatchdog->run("CameraServiceWatchdog");
     if (res != OK) {
         SET_ERR_L("Unable to start camera service watchdog thread: %s (%d)",
@@ -3008,6 +3009,7 @@ Camera3Device::RequestThread::RequestThread(wp<Camera3Device> parent,
         mSupportCameraMute(supportCameraMute),
         mOverrideToPortrait(overrideToPortrait) {
     mStatusId = statusTracker->addComponent("RequestThread");
+    mVndkVersion = property_get_int32("ro.vndk.version", __ANDROID_API_FUTURE__);
 }
 
 Camera3Device::RequestThread::~RequestThread() {}
@@ -3808,6 +3810,17 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
                         }
                         captureRequest->mRotationAndCropUpdated = true;
                     }
+
+                    for (it = captureRequest->mSettingsList.begin();
+                            it != captureRequest->mSettingsList.end(); it++) {
+                        res = hardware::cameraservice::utils::conversion::aidl::filterVndkKeys(
+                                mVndkVersion, it->metadata, false /*isStatic*/);
+                        if (res != OK) {
+                            SET_ERR("RequestThread: Failed during VNDK filter of capture requests "
+                                    "%d: %s (%d)", halRequest->frame_number, strerror(-res), res);
+                            return INVALID_OPERATION;
+                        }
+                    }
                 }
             }
 
@@ -4244,6 +4257,12 @@ void Camera3Device::clearStreamUseCaseOverrides() {
     Mutex::Autolock il(mInterfaceLock);
     Mutex::Autolock l(mLock);
     mStreamUseCaseOverrides.clear();
+}
+
+bool Camera3Device::hasDeviceError() {
+    Mutex::Autolock il(mInterfaceLock);
+    Mutex::Autolock l(mLock);
+    return mStatus == STATUS_ERROR;
 }
 
 void Camera3Device::RequestThread::cleanUpFailedRequests(bool sendRequestError) {

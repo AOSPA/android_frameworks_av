@@ -49,12 +49,12 @@ class AudioSystemTest : public ::testing::Test {
     void TearDown() override {
         if (mPlayback) {
             mPlayback->stop();
-            mPlayback->getAudioTrackHandle()->removeAudioDeviceCallback(mCbPlayback);
+            mCbPlayback.clear();
             mPlayback.clear();
         }
         if (mCapture) {
             mCapture->stop();
-            mCapture->getAudioRecordHandle()->removeAudioDeviceCallback(mCbRecord);
+            mCbRecord.clear();
             mCapture.clear();
         }
     }

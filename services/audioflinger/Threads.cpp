@@ -4103,11 +4103,6 @@ bool AudioFlinger::PlaybackThread::threadLoop()
             setHalLatencyMode_l();
         } // mLock scope ends
 
-        if (!metadataUpdate.playbackMetadataUpdate.empty()) {
-            mAudioFlinger->mMelReporter->updateMetadataForCsd(id(),
-                    metadataUpdate.playbackMetadataUpdate);
-        }
-
         if (mBytesRemaining == 0) {
             mCurrentWriteLength = 0;
             if (mMixerStatus == MIXER_TRACKS_READY) {
@@ -4297,6 +4292,11 @@ bool AudioFlinger::PlaybackThread::threadLoop()
 
         // enable changes in effect chain
         unlockEffectChains(effectChains);
+
+        if (!metadataUpdate.playbackMetadataUpdate.empty()) {
+            mAudioFlinger->mMelReporter->updateMetadataForCsd(id(),
+                    metadataUpdate.playbackMetadataUpdate);
+        }
 
         if (!waitingAsyncCallback()) {
             // mSleepTimeUs == 0 means we must write to audio hardware

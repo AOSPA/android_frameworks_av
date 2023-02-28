@@ -1279,7 +1279,11 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                             notifyListener(MEDIA_PLAYBACK_COMPLETE, 0, 0);
                         } else {
                             // Only audio track has error. Video track could be still good to play.
-                            notifyListener(MEDIA_INFO, MEDIA_INFO_PLAY_AUDIO_ERROR, err);
+                            if (mVideoEOS) {
+                                notifyListener(MEDIA_PLAYBACK_COMPLETE, 0, 0);
+                            } else {
+                                notifyListener(MEDIA_INFO, MEDIA_INFO_PLAY_AUDIO_ERROR, err);
+                            }
                         }
                         mAudioDecoderError = true;
                     } else {
@@ -1298,7 +1302,11 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                             notifyListener(MEDIA_PLAYBACK_COMPLETE, 0, 0);
                         } else {
                             // Only video track has error. Audio track could be still good to play.
-                            notifyListener(MEDIA_INFO, MEDIA_INFO_PLAY_VIDEO_ERROR, err);
+                            if (mAudioEOS) {
+                                notifyListener(MEDIA_PLAYBACK_COMPLETE, 0, 0);
+                            } else {
+                                notifyListener(MEDIA_INFO, MEDIA_INFO_PLAY_VIDEO_ERROR, err);
+                            }
                         }
                         if (mRenderer != NULL && mRenderer->isVideoPrerollInprogress()) {
                             // wake up renderer immediately. it's still waiting for video preroll,
