@@ -276,8 +276,8 @@ static std::string patchSourcesToString(const struct audio_patch *patch)
 
 static std::string toString(audio_latency_mode_t mode) {
     // We convert to the AIDL type to print (eventually the legacy type will be removed).
-    const auto result = legacy2aidl_audio_latency_mode_t_LatencyMode(mode);
-    return result.has_value() ? media::toString(*result) : "UNKNOWN";
+    const auto result = legacy2aidl_audio_latency_mode_t_AudioLatencyMode(mode);
+    return result.has_value() ? media::audio::common::toString(*result) : "UNKNOWN";
 }
 
 // Could be made a template, but other toString overloads for std::vector are confused.
@@ -539,6 +539,8 @@ const char *AudioFlinger::ThreadBase::threadTypeToString(AudioFlinger::ThreadBas
         return "MMAP_CAPTURE";
     case SPATIALIZER:
         return "SPATIALIZER";
+    case BIT_PERFECT:
+        return "BIT_PERFECT";
     default:
         return "unknown";
     }
@@ -1519,6 +1521,26 @@ status_t AudioFlinger::PlaybackThread::checkEffectCompatibility_l(
             }
         }
         break;
+    case BIT_PERFECT:
+        if ((desc->flags & EFFECT_FLAG_HW_ACC_TUNNEL) != 0) {
+            // Allow HW accelerated effects of tunnel type
+            break;
+        }
+        // As bit-perfect tracks will not be allowed to apply audio effect that will touch the audio
+        // data, effects will not be allowed on 1) global effects (AUDIO_SESSION_OUTPUT_MIX),
+        // 2) post-processing effects (AUDIO_SESSION_OUTPUT_STAGE or AUDIO_SESSION_DEVICE) and
+        // 3) there is any bit-perfect track with the given session id.
+        if (sessionId == AUDIO_SESSION_OUTPUT_MIX || sessionId == AUDIO_SESSION_OUTPUT_STAGE ||
+            sessionId == AUDIO_SESSION_DEVICE) {
+            ALOGW("%s: effect %s not supported on bit-perfect thread %s",
+                  __func__, desc->name, mThreadName);
+            return BAD_VALUE;
+        } else if ((hasAudioSession_l(sessionId) & ThreadBase::BIT_PERFECT_SESSION) != 0) {
+            ALOGW("%s: effect %s not supported as there is a bit-perfect track with session as %d",
+                  __func__, desc->name, sessionId);
+            return BAD_VALUE;
+        }
+        break;
     default:
         LOG_ALWAYS_FATAL("checkEffectCompatibility_l(): wrong thread type %d", mType);
     }
@@ -2289,7 +2311,8 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         status_t *status,
         audio_port_handle_t portId,
         const sp<media::IAudioTrackCallback>& callback,
-        bool isSpatialized)
+        bool isSpatialized,
+        bool isBitPerfect)
 {
     size_t frameCount = *pFrameCount;
     size_t notificationFrameCount = *pNotificationFrameCount;
@@ -2319,6 +2342,25 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
         ALOGW("createTrack_l(): mismatch between requested flags (%08x) and output flags (%08x)",
               *flags, outputFlags);
         *flags = (audio_output_flags_t)(*flags & outputFlags);
+    }
+
+    if (isBitPerfect) {
+        sp<EffectChain> chain = getEffectChain_l(sessionId);
+        if (chain.get() != nullptr) {
+            // Bit-perfect is required according to the configuration and preferred mixer
+            // attributes, but it is not in the output flag from the client's request. Explicitly
+            // adding bit-perfect flag to check the compatibility
+            audio_output_flags_t flagsToCheck =
+                    (audio_output_flags_t)(*flags & AUDIO_OUTPUT_FLAG_BIT_PERFECT);
+            chain->checkOutputFlagCompatibility(&flagsToCheck);
+            if ((flagsToCheck & AUDIO_OUTPUT_FLAG_BIT_PERFECT) == AUDIO_OUTPUT_FLAG_NONE) {
+                ALOGE("%s cannot create track as there is data-processing effect attached to "
+                      "given session id(%d)", __func__, sessionId);
+                lStatus = BAD_VALUE;
+                goto Exit;
+            }
+            *flags = flagsToCheck;
+        }
     }
 
     // client expresses a preference for FAST, but we get the final say
@@ -2501,6 +2543,18 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
     *pNotificationFrameCount = notificationFrameCount;
 
     switch (mType) {
+    case BIT_PERFECT:
+        if (isBitPerfect) {
+            if (sampleRate != mSampleRate || format != mFormat || channelMask != mChannelMask) {
+                ALOGE("%s, bad parameter when request streaming bit-perfect, sampleRate=%u, "
+                      "format=%#x, channelMask=%#x, mSampleRate=%u, mFormat=%#x, mChannelMask=%#x",
+                      __func__, sampleRate, format, channelMask, mSampleRate, mFormat,
+                      mChannelMask);
+                lStatus = BAD_VALUE;
+                goto Exit;
+            }
+        }
+        break;
 
     case DIRECT:
         if (audio_is_linear_pcm(format)) { // TODO maybe use audio_has_proportional_frames()?
@@ -2582,7 +2636,7 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
                           nullptr /* buffer */, (size_t)0 /* bufferSize */, sharedBuffer,
                           sessionId, creatorPid, attributionSource, trackFlags,
                           TrackBase::TYPE_DEFAULT, portId, SIZE_MAX /*frameCountToBeReady*/,
-                          speed, isSpatialized);
+                          speed, isSpatialized, isBitPerfect);
 
         lStatus = track != 0 ? track->initCheck() : (status_t) NO_MEMORY;
         if (lStatus != NO_ERROR) {
@@ -2738,7 +2792,11 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
             }
             // abort if start is rejected by audio policy manager
             if (status != NO_ERROR) {
-                return PERMISSION_DENIED;
+                // Do not replace the error if it is DEAD_OBJECT. When this happens, it indicates
+                // current playback thread is reopened, which may happen when clients set preferred
+                // mixer configuration. Returning DEAD_OBJECT will make the client restore track
+                // immediately.
+                return status == DEAD_OBJECT ? status : PERMISSION_DENIED;
             }
 #ifdef ADD_BATTERY_DATA
             // to track the speaker usage
@@ -2918,7 +2976,14 @@ void AudioFlinger::PlaybackThread::onError()
 void AudioFlinger::PlaybackThread::onCodecFormatChanged(
         const std::basic_string<uint8_t>& metadataBs)
 {
-    std::thread([this, metadataBs]() {
+    wp<AudioFlinger::PlaybackThread> weakPointerThis = this;
+    std::thread([this, metadataBs, weakPointerThis]() {
+            sp<AudioFlinger::PlaybackThread> playbackThread = weakPointerThis.promote();
+            if (playbackThread == nullptr) {
+                ALOGW("PlaybackThread was destroyed, skip codec format change event");
+                return;
+            }
+
             audio_utils::metadata::Data metadata =
                     audio_utils::metadata::dataFromByteString(metadataBs);
             if (metadata.empty()) {
@@ -3533,6 +3598,28 @@ void AudioFlinger::PlaybackThread::invalidateTracks(audio_stream_type_t streamTy
     invalidateTracks_l(streamType);
 }
 
+void AudioFlinger::PlaybackThread::invalidateTracks(std::set<audio_port_handle_t>& portIds) {
+    Mutex::Autolock _l(mLock);
+    invalidateTracks_l(portIds);
+}
+
+bool AudioFlinger::PlaybackThread::invalidateTracks_l(std::set<audio_port_handle_t>& portIds) {
+    bool trackMatch = false;
+    const size_t size = mTracks.size();
+    for (size_t i = 0; i < size; i++) {
+        sp<Track> t = mTracks[i];
+        if (t->isExternalTrack() && portIds.find(t->portId()) != portIds.end()) {
+            t->invalidate();
+            portIds.erase(t->portId());
+            trackMatch = true;
+        }
+        if (portIds.empty()) {
+            break;
+        }
+    }
+    return trackMatch;
+}
+
 // getTrackById_l must be called with holding thread lock
 AudioFlinger::PlaybackThread::Track* AudioFlinger::PlaybackThread::getTrackById_l(
         audio_port_handle_t trackPortId) {
@@ -4039,7 +4126,8 @@ bool AudioFlinger::PlaybackThread::threadLoop()
             // Either threadLoop_mix() or threadLoop_sleepTime() should have set
             // mMixerBuffer with data if mMixerBufferValid is true and mSleepTimeUs == 0.
             // Merge mMixerBuffer data into mEffectBuffer (if any effects are valid)
-            // or mSinkBuffer (if there are no effects).
+            // or mSinkBuffer (if there are no effects and there is no data already copied to
+            // mSinkBuffer).
             //
             // This is done pre-effects computation; if effects change to
             // support higher precision, this needs to move.
@@ -4048,7 +4136,7 @@ bool AudioFlinger::PlaybackThread::threadLoop()
             // TODO use mSleepTimeUs == 0 as an additional condition.
             uint32_t mixerChannelCount = mEffectBufferValid ?
                         audio_channel_count_from_out_mask(mMixerChannelMask) : mChannelCount;
-            if (mMixerBufferValid) {
+            if (mMixerBufferValid && (mEffectBufferValid || !mHasDataCopiedToSinkBuffer)) {
                 void *buffer = mEffectBufferValid ? mEffectBuffer : mSinkBuffer;
                 audio_format_t format = mEffectBufferValid ? mEffectBufferFormat : mFormat;
 
@@ -4139,7 +4227,7 @@ bool AudioFlinger::PlaybackThread::threadLoop()
         // Effects buffer (buffer valid), we need to
         // copy into the sink buffer.
         // TODO use mSleepTimeUs == 0 as an additional condition.
-        if (mEffectBufferValid) {
+        if (mEffectBufferValid && !mHasDataCopiedToSinkBuffer) {
             //ALOGV("writing effect buffer to sink buffer format %#x", mFormat);
             void *effectBuffer = (mType == SPATIALIZER) ? mPostSpatializerBuffer : mEffectBuffer;
             if (requireMonoBlend()) {
@@ -4636,6 +4724,8 @@ status_t AudioFlinger::MixerThread::createAudioPatch_l(const struct audio_patch 
     } else {
         status = PlaybackThread::createAudioPatch_l(patch, handle);
     }
+
+    updateHalSupportedLatencyModes_l();
     return status;
 }
 
@@ -4791,6 +4881,7 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
     :   PlaybackThread(audioFlinger, output, id, type, systemReady, mixerConfig),
         // mAudioMixer below
         // mFastMixer below
+        mBluetoothLatencyModesEnabled(false),
         mFastMixerFutex(0),
         mMasterMono(false)
         // mOutputSink below
@@ -4826,7 +4917,7 @@ AudioFlinger::MixerThread::MixerThread(const sp<AudioFlinger>& audioFlinger, Aud
 
     // initialize fast mixer depending on configuration
     bool initFastMixer;
-    if (mType == SPATIALIZER) {
+    if (mType == SPATIALIZER || mType == BIT_PERFECT) {
         initFastMixer = false;
     } else {
         switch (kUseFastMixer) {
@@ -5008,6 +5099,21 @@ AudioFlinger::MixerThread::~MixerThread()
     delete mAudioMixer;
 }
 
+void AudioFlinger::MixerThread::onFirstRef() {
+    PlaybackThread::onFirstRef();
+
+    Mutex::Autolock _l(mLock);
+    if (mOutput != nullptr && mOutput->stream != nullptr) {
+        status_t status = mOutput->stream->setLatencyModeCallback(this);
+        if (status != INVALID_OPERATION) {
+            updateHalSupportedLatencyModes_l();
+        }
+        // Default to enabled if the HAL supports it. This can be changed by Audioflinger after
+        // the thread construction according to AudioFlinger::mBluetoothLatencyModesEnabled
+        mBluetoothLatencyModesEnabled.store(
+                mOutput->audioHwDev->supportsBluetoothVariableLatency());
+    }
+}
 
 uint32_t AudioFlinger::MixerThread::correctLatency_l(uint32_t latency) const
 {
@@ -5486,7 +5592,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 vlf *= volume;
                 vrf *= volume;
 
-                track->setFinalVolume((vlf + vrf) / 2.f);
+                track->setFinalVolume(vlf, vrf);
                 ++fastTracks;
             } else {
                 // was it previously active?
@@ -5685,7 +5791,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 vaf = v * sendLevel * (1. / MAX_GAIN_INT);
             }
 
-            track->setFinalVolume((vrf + vlf) / 2.f);
+            track->setFinalVolume(vrf, vlf);
 
             // Delegate volume control to effect in track effect chain if needed
             if (chain != 0 && chain->setVolume_l(&vl, &vr)) {
@@ -6218,6 +6324,100 @@ void AudioFlinger::MixerThread::cacheParameters_l()
     maxPeriod = seconds(mNormalFrameCount) / mSampleRate * 15;
 }
 
+void AudioFlinger::MixerThread::onHalLatencyModesChanged_l() {
+    mAudioFlinger->onSupportedLatencyModesChanged(mId, mSupportedLatencyModes);
+}
+
+void AudioFlinger::MixerThread::setHalLatencyMode_l() {
+    // Only handle latency mode if:
+    // - mBluetoothLatencyModesEnabled is true
+    // - the HAL supports latency modes
+    // - the selected device is Bluetooth LE or A2DP
+    if (!mBluetoothLatencyModesEnabled.load() || mSupportedLatencyModes.empty()) {
+        return;
+    }
+    if (mOutDeviceTypeAddrs.size() != 1
+            || !(audio_is_a2dp_out_device(mOutDeviceTypeAddrs[0].mType)
+                 || audio_is_ble_out_device(mOutDeviceTypeAddrs[0].mType))) {
+        return;
+    }
+
+    audio_latency_mode_t latencyMode = AUDIO_LATENCY_MODE_FREE;
+    if (mSupportedLatencyModes.size() == 1) {
+        // If the HAL only support one latency mode currently, confirm the choice
+        latencyMode = mSupportedLatencyModes[0];
+    } else if (mSupportedLatencyModes.size() > 1) {
+        // Request low latency if:
+        // - At least one active track is either:
+        //   - a fast track with gaming usage or
+        //   - a track with acessibility usage
+        for (const auto& track : mActiveTracks) {
+            if ((track->isFastTrack() && track->attributes().usage == AUDIO_USAGE_GAME)
+                    || track->attributes().usage == AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY) {
+                latencyMode = AUDIO_LATENCY_MODE_LOW;
+                break;
+            }
+        }
+    }
+
+    if (latencyMode != mSetLatencyMode) {
+        status_t status = mOutput->stream->setLatencyMode(latencyMode);
+        ALOGD("%s: thread(%d) setLatencyMode(%s) returned %d",
+                __func__, mId, toString(latencyMode).c_str(), status);
+        if (status == NO_ERROR) {
+            mSetLatencyMode = latencyMode;
+        }
+    }
+}
+
+void AudioFlinger::MixerThread::updateHalSupportedLatencyModes_l() {
+
+    if (mOutput == nullptr || mOutput->stream == nullptr) {
+        return;
+    }
+    std::vector<audio_latency_mode_t> latencyModes;
+    const status_t status = mOutput->stream->getRecommendedLatencyModes(&latencyModes);
+    if (status != NO_ERROR) {
+        latencyModes.clear();
+    }
+    if (latencyModes != mSupportedLatencyModes) {
+        ALOGD("%s: thread(%d) status %d supported latency modes: %s",
+            __func__, mId, status, toString(latencyModes).c_str());
+        mSupportedLatencyModes.swap(latencyModes);
+        sendHalLatencyModesChangedEvent_l();
+    }
+}
+
+status_t AudioFlinger::MixerThread::getSupportedLatencyModes(
+        std::vector<audio_latency_mode_t>* modes) {
+    if (modes == nullptr) {
+        return BAD_VALUE;
+    }
+    Mutex::Autolock _l(mLock);
+    *modes = mSupportedLatencyModes;
+    return NO_ERROR;
+}
+
+void AudioFlinger::MixerThread::onRecommendedLatencyModeChanged(
+        std::vector<audio_latency_mode_t> modes) {
+    Mutex::Autolock _l(mLock);
+    if (modes != mSupportedLatencyModes) {
+        ALOGD("%s: thread(%d) supported latency modes: %s",
+            __func__, mId, toString(modes).c_str());
+        mSupportedLatencyModes.swap(modes);
+        sendHalLatencyModesChangedEvent_l();
+    }
+}
+
+status_t AudioFlinger::MixerThread::setBluetoothVariableLatencyEnabled(bool enabled) {
+    if (mOutput == nullptr || mOutput->audioHwDev == nullptr
+            || !mOutput->audioHwDev->supportsBluetoothVariableLatency()) {
+        return INVALID_OPERATION;
+    }
+    mBluetoothLatencyModesEnabled.store(enabled);
+    return NO_ERROR;
+}
+
 // ----------------------------------------------------------------------------
 
 AudioFlinger::DirectOutputThread::DirectOutputThread(const sp<AudioFlinger>& audioFlinger,
@@ -6257,11 +6457,20 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
 {
     float left, right;
 
-
     // Ensure volumeshaper state always advances even when muted.
     const sp<AudioTrackServerProxy> proxy = track->mAudioTrackServerProxy;
-    const auto [shaperVolume, shaperActive] = track->getVolumeHandler()->getVolume(
-            proxy->framesReleased());
+
+    const size_t framesReleased = proxy->framesReleased();
+    const int64_t frames = mTimestamp.mPosition[ExtendedTimestamp::LOCATION_KERNEL];
+    const int64_t time = mTimestamp.mTimeNs[ExtendedTimestamp::LOCATION_KERNEL];
+
+    ALOGV("%s: Direct/Offload bufferConsumed:%zu  timestamp frames:%lld  time:%lld",
+            __func__, framesReleased, (long long)frames, (long long)time);
+
+    const int64_t volumeShaperFrames =
+            mMonotonicFrameCounter.updateAndGetMonotonicFrameCount(frames, time);
+    const auto [shaperVolume, shaperActive] =
+            track->getVolumeHandler()->getVolume(volumeShaperFrames);
     mVolumeShaperActive = shaperActive;
 
     gain_minifloat_packed_t vlr = proxy->getVolumeLR();
@@ -6296,7 +6505,7 @@ void AudioFlinger::DirectOutputThread::processVolume_l(Track *track, bool lastTr
                        shaperVolume == 0.f});
 
     if (lastTrack) {
-        track->setFinalVolume((left + right) / 2.f);
+        track->setFinalVolume(left, right);
         if (left != mLeftVolFloat || right != mRightVolFloat) {
             mLeftVolFloat = left;
             mRightVolFloat = right;
@@ -6779,6 +6988,7 @@ void AudioFlinger::DirectOutputThread::flushHw_l()
     mFramesWrittenForSleep = 0;
     mTimestampVerifier.discontinuity(discontinuityForStandbyOrFlush());
     mTimestamp.clear();
+    mMonotonicFrameCounter.onFlush();
 }
 
 status_t AudioFlinger::DirectOutputThread::getTimestamp_l(AudioTimestamp& timestamp)
@@ -7263,6 +7473,13 @@ void AudioFlinger::MixerThread::onIdleMixer()
     }
 }
 
+void AudioFlinger::OffloadThread::invalidateTracks(std::set<audio_port_handle_t>& portIds) {
+    Mutex::Autolock _l(mLock);
+    if (PlaybackThread::invalidateTracks_l(portIds)) {
+        mFlushPending = true;
+    }
+}
+
 // ----------------------------------------------------------------------------
 
 AudioFlinger::DuplicatingThread::DuplicatingThread(const sp<AudioFlinger>& audioFlinger,
@@ -7514,60 +7731,18 @@ AudioFlinger::SpatializerThread::SpatializerThread(const sp<AudioFlinger>& audio
 }
 
 void AudioFlinger::SpatializerThread::onFirstRef() {
-    PlaybackThread::onFirstRef();
+    MixerThread::onFirstRef();
 
-    Mutex::Autolock _l(mLock);
-    status_t status = mOutput->stream->setLatencyModeCallback(this);
-    if (status != INVALID_OPERATION) {
-        updateHalSupportedLatencyModes_l();
-    }
-
-    // update priority if specified.
-    constexpr int32_t kRTPriorityMin = 1;
-    constexpr int32_t kRTPriorityMax = 3;
-    const int32_t priorityBoost =
-            property_get_int32("audio.spatializer.priority", kRTPriorityMin);
-    if (priorityBoost >= kRTPriorityMin && priorityBoost <= kRTPriorityMax) {
-        const pid_t pid = getpid();
-        const pid_t tid = getTid();
-
-        if (tid == -1) {
-            // Unusual: PlaybackThread::onFirstRef() should set the threadLoop running.
-            ALOGW("%s: audio.spatializer.priority %d ignored, thread not running",
-                    __func__, priorityBoost);
-        } else {
-            ALOGD("%s: audio.spatializer.priority %d, allowing real time for pid %d  tid %d",
-                    __func__, priorityBoost, pid, tid);
-            sendPrioConfigEvent_l(pid, tid, priorityBoost, false /*forApp*/);
+    const pid_t tid = getTid();
+    if (tid == -1) {
+        // Unusual: PlaybackThread::onFirstRef() should set the threadLoop running.
+        ALOGW("%s: Cannot update Spatializer mixer thread priority, not running", __func__);
+    } else {
+        const int priorityBoost = requestSpatializerPriority(getpid(), tid);
+        if (priorityBoost > 0) {
             stream()->setHalThreadPriority(priorityBoost);
         }
     }
-}
-
-status_t AudioFlinger::SpatializerThread::createAudioPatch_l(const struct audio_patch *patch,
-                                                          audio_patch_handle_t *handle)
-{
-    status_t status = MixerThread::createAudioPatch_l(patch, handle);
-    updateHalSupportedLatencyModes_l();
-    return status;
-}
-
-void AudioFlinger::SpatializerThread::updateHalSupportedLatencyModes_l() {
-    std::vector<audio_latency_mode_t> latencyModes;
-    const status_t status = mOutput->stream->getRecommendedLatencyModes(&latencyModes);
-    if (status != NO_ERROR) {
-        latencyModes.clear();
-    }
-    if (latencyModes != mSupportedLatencyModes) {
-        ALOGD("%s: thread(%d) status %d supported latency modes: %s",
-            __func__, mId, status, toString(latencyModes).c_str());
-        mSupportedLatencyModes.swap(latencyModes);
-        sendHalLatencyModesChangedEvent_l();
-    }
-}
-
-void AudioFlinger::SpatializerThread::onHalLatencyModesChanged_l() {
-    mAudioFlinger->onSupportedLatencyModesChanged(mId, mSupportedLatencyModes);
 }
 
 void AudioFlinger::SpatializerThread::setHalLatencyMode_l() {
@@ -7614,16 +7789,6 @@ status_t AudioFlinger::SpatializerThread::setRequestedLatencyMode(audio_latency_
     }
     Mutex::Autolock _l(mLock);
     mRequestedLatencyMode = mode;
-    return NO_ERROR;
-}
-
-status_t AudioFlinger::SpatializerThread::getSupportedLatencyModes(
-        std::vector<audio_latency_mode_t>* modes) {
-    if (modes == nullptr) {
-        return BAD_VALUE;
-    }
-    Mutex::Autolock _l(mLock);
-    *modes = mSupportedLatencyModes;
     return NO_ERROR;
 }
 
@@ -7676,17 +7841,6 @@ void AudioFlinger::SpatializerThread::checkOutputStageEffects()
     {
         Mutex::Autolock _l(mLock);
         mFinalDownMixer = finalDownMixer;
-    }
-}
-
-void AudioFlinger::SpatializerThread::onRecommendedLatencyModeChanged(
-        std::vector<audio_latency_mode_t> modes) {
-    Mutex::Autolock _l(mLock);
-    if (modes != mSupportedLatencyModes) {
-        ALOGD("%s: thread(%d) supported latency modes: %s",
-            __func__, mId, toString(modes).c_str());
-        mSupportedLatencyModes.swap(modes);
-        sendHalLatencyModesChangedEvent_l();
     }
 }
 
@@ -7761,10 +7915,11 @@ AudioFlinger::RecordThread::RecordThread(const sp<AudioFlinger>& audioFlinger,
         ALOGV("%p kUseFastCapture = Always, initFastCapture = true", this);
         break;
     case FastCapture_Static:
-        initFastCapture = (mFrameCount * 1000) / mSampleRate < kMinNormalCaptureBufferSizeMs;
-        ALOGV("%p kUseFastCapture = Static, (%lld * 1000) / %u vs %u, initFastCapture = %d",
-                this, (long long)mFrameCount, mSampleRate, kMinNormalCaptureBufferSizeMs,
-                initFastCapture);
+        initFastCapture = !mIsMsdDevice // Disable fast capture for MSD BUS devices.
+                && (mFrameCount * 1000) / mSampleRate < kMinNormalCaptureBufferSizeMs;
+        ALOGV("%p kUseFastCapture = Static, (%lld * 1000) / %u vs %u, initFastCapture = %d "
+                "mIsMsdDevice = %d", this, (long long)mFrameCount, mSampleRate,
+                kMinNormalCaptureBufferSizeMs, initFastCapture, mIsMsdDevice);
         break;
     // case FastCapture_Dynamic:
     }
@@ -9895,6 +10050,7 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
         audio_port_handle_t deviceId = mDeviceId;
         std::vector<audio_io_handle_t> secondaryOutputs;
         bool isSpatialized;
+        bool isBitPerfect;
         ret = AudioSystem::getOutputForAttr(&mAttr, &io,
                                             mSessionId,
                                             &stream,
@@ -9904,7 +10060,8 @@ status_t AudioFlinger::MmapThread::start(const AudioClient& client,
                                             &deviceId,
                                             &portId,
                                             &secondaryOutputs,
-                                            &isSpatialized);
+                                            &isSpatialized,
+                                            &isBitPerfect);
         ALOGD_IF(!secondaryOutputs.empty(),
                  "MmapThread::start does not support secondary outputs, ignoring them");
     } else {
@@ -10621,6 +10778,25 @@ void AudioFlinger::MmapPlaybackThread::invalidateTracks(audio_stream_type_t stre
     }
 }
 
+void AudioFlinger::MmapPlaybackThread::invalidateTracks(std::set<audio_port_handle_t>& portIds)
+{
+    Mutex::Autolock _l(mLock);
+    bool trackMatch = false;
+    for (const sp<MmapTrack> &track : mActiveTracks) {
+        if (portIds.find(track->portId()) != portIds.end()) {
+            track->invalidate();
+            trackMatch = true;
+            portIds.erase(track->portId());
+        }
+        if (portIds.empty()) {
+            break;
+        }
+    }
+    if (trackMatch) {
+        broadcast_l();
+    }
+}
+
 void AudioFlinger::MmapPlaybackThread::processVolume_l()
 {
     float volume;
@@ -10851,6 +11027,50 @@ status_t AudioFlinger::MmapCaptureThread::getExternalPosition(
         return NO_INIT;
     }
     return mInput->getCapturePosition((int64_t*)position, timeNanos);
+}
+
+// ----------------------------------------------------------------------------
+
+AudioFlinger::BitPerfectThread::BitPerfectThread(const sp<AudioFlinger> &audioflinger,
+        AudioStreamOut *output, audio_io_handle_t id, bool systemReady)
+        : MixerThread(audioflinger, output, id, systemReady, BIT_PERFECT) {}
+
+AudioFlinger::PlaybackThread::mixer_state AudioFlinger::BitPerfectThread::prepareTracks_l(
+        Vector<sp<Track>> *tracksToRemove) {
+    mixer_state result = MixerThread::prepareTracks_l(tracksToRemove);
+    // If there is only one active track and it is bit-perfect, enable tee buffer.
+    float volumeLeft = 1.0f;
+    float volumeRight = 1.0f;
+    if (mActiveTracks.size() == 1 && mActiveTracks[0]->isBitPerfect()) {
+        const int trackId = mActiveTracks[0]->id();
+        mAudioMixer->setParameter(
+                    trackId, AudioMixer::TRACK, AudioMixer::TEE_BUFFER, (void *)mSinkBuffer);
+        mAudioMixer->setParameter(
+                    trackId, AudioMixer::TRACK, AudioMixer::TEE_BUFFER_FRAME_COUNT,
+                    (void *)(uintptr_t)mNormalFrameCount);
+        mActiveTracks[0]->getFinalVolume(&volumeLeft, &volumeRight);
+        mIsBitPerfect = true;
+    } else {
+        mIsBitPerfect = false;
+        // No need to copy bit-perfect data directly to sink buffer given there are multiple tracks
+        // active.
+        for (const auto& track : mActiveTracks) {
+            const int trackId = track->id();
+            mAudioMixer->setParameter(
+                        trackId, AudioMixer::TRACK, AudioMixer::TEE_BUFFER, nullptr);
+        }
+    }
+    if (mVolumeLeft != volumeLeft || mVolumeRight != volumeRight) {
+        mVolumeLeft = volumeLeft;
+        mVolumeRight = volumeRight;
+        setVolumeForOutput_l(volumeLeft, volumeRight);
+    }
+    return result;
+}
+
+void AudioFlinger::BitPerfectThread::threadLoop_mix() {
+    MixerThread::threadLoop_mix();
+    mHasDataCopiedToSinkBuffer = mIsBitPerfect;
 }
 
 } // namespace android

@@ -70,6 +70,8 @@ static const std::vector<Equalizer::Preset> kEqPresets = {
 static const Equalizer::Capability kEqCap = {.bandFrequencies = kEqBandFrequency,
                                              .presets = kEqPresets};
 
+static const std::string kEqualizerEffectName = "EqualizerBundle";
+
 static const Descriptor kEqualizerDesc = {
         .common = {.id = {.type = kEqualizerTypeUUID,
                           .uuid = kEqualizerBundleImplUUID,
@@ -77,14 +79,66 @@ static const Descriptor kEqualizerDesc = {
                    .flags = {.type = Flags::Type::INSERT,
                              .insert = Flags::Insert::FIRST,
                              .volume = Flags::Volume::CTRL},
-                   .name = "EqualizerBundle",
+                   .name = kEqualizerEffectName,
                    .implementor = "NXP Software Ltd."},
         .capability = Capability::make<Capability::equalizer>(kEqCap)};
 
-// TODO: add descriptors for other bundle effect types here.
-static const Descriptor kVirtualizerDesc;
-static const Descriptor kBassBoostDesc;
-static const Descriptor kVolumeDesc;
+static const bool mStrengthSupported = true;
+
+static const BassBoost::Capability kBassBoostCap = {.maxStrengthPm = 1000,
+                                                    .strengthSupported = mStrengthSupported};
+
+static const std::string kBassBoostEffectName = "Dynamic Bass Boost";
+
+static const Descriptor kBassBoostDesc = {
+        .common = {.id = {.type = kBassBoostTypeUUID,
+                          .uuid = kBassBoostBundleImplUUID,
+                          .proxy = kBassBoostProxyUUID},
+                   .flags = {.type = Flags::Type::INSERT,
+                             .insert = Flags::Insert::FIRST,
+                             .volume = Flags::Volume::CTRL,
+                             .deviceIndication = true},
+                   .cpuLoad = BASS_BOOST_CUP_LOAD_ARM9E,
+                   .memoryUsage = BUNDLE_MEM_USAGE,
+                   .name = kBassBoostEffectName,
+                   .implementor = "NXP Software Ltd."},
+        .capability = Capability::make<Capability::bassBoost>(kBassBoostCap)};
+
+static const Virtualizer::Capability kVirtualizerCap = {.maxStrengthPm = 1000,
+                                                        .strengthSupported = mStrengthSupported};
+
+static const std::string kVirtualizerEffectName = "Virtualizer";
+
+static const Descriptor kVirtualizerDesc = {
+        .common = {.id = {.type = kVirtualizerTypeUUID,
+                          .uuid = kVirtualizerBundleImplUUID,
+                          .proxy = kVirtualizerProxyUUID},
+                   .flags = {.type = Flags::Type::INSERT,
+                             .insert = Flags::Insert::LAST,
+                             .volume = Flags::Volume::CTRL,
+                             .deviceIndication = true},
+                   .cpuLoad = VIRTUALIZER_CUP_LOAD_ARM9E,
+                   .memoryUsage = BUNDLE_MEM_USAGE,
+                   .name = kVirtualizerEffectName,
+                   .implementor = "NXP Software Ltd."},
+        .capability = Capability::make<Capability::virtualizer>(kVirtualizerCap)};
+
+static const Volume::Capability kVolumeCap = {.minLevelDb = -9600, .maxLevelDb = 0};
+
+static const std::string kVolumeEffectName = "Volume";
+
+static const Descriptor kVolumeDesc = {
+        .common = {.id = {.type = kVolumeTypeUUID,
+                          .uuid = kVolumeBundleImplUUID,
+                          .proxy = std::nullopt},
+                   .flags = {.type = Flags::Type::INSERT,
+                             .insert = Flags::Insert::LAST,
+                             .volume = Flags::Volume::CTRL},
+                   .cpuLoad = VOLUME_CUP_LOAD_ARM9E,
+                   .memoryUsage = BUNDLE_MEM_USAGE,
+                   .name = kVolumeEffectName,
+                   .implementor = "NXP Software Ltd."},
+        .capability = Capability::make<Capability::volume>(kVolumeCap)};
 
 /* The following tables have been computed using the actual levels measured by the output of
  * white noise or pink noise (IEC268-1) for the EQ and BassBoost Effects. These are estimates of

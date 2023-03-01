@@ -17,7 +17,9 @@
 #pragma once
 
 #include <android-base/logging.h>
+#include <android-base/thread_annotations.h>
 #include <array>
+#include <cstddef>
 
 #include "BundleTypes.h"
 #include "effect-impl/EffectContext.h"
@@ -41,11 +43,11 @@ class BundleContext final : public EffectContext {
     lvm::BundleEffectType getBundleType() const { return mType; }
 
     RetCode enable();
+    RetCode enableOperatingMode();
     RetCode disable();
+    RetCode disableOperatingMode();
 
-    LVM_Handle_t getLvmInstance() const { return mInstance; }
-
-    void setSampleRate (const int sampleRate) { mSampleRate = sampleRate; }
+    void setSampleRate(const int sampleRate) { mSampleRate = sampleRate; }
     int getSampleRate() const { return mSampleRate; }
 
     void setChannelMask(const aidl::android::media::audio::common::AudioChannelLayout& chMask) {
@@ -54,19 +56,45 @@ class BundleContext final : public EffectContext {
     aidl::android::media::audio::common::AudioChannelLayout getChannelMask() const {
         return mChMask;
     }
+    bool isDeviceSupportedBassBoost(
+            const std::vector<aidl::android::media::audio::common::AudioDeviceDescription>&
+                    devices);
+    bool isDeviceSupportedVirtualizer(
+            const std::vector<aidl::android::media::audio::common::AudioDeviceDescription>&
+                    devices);
+    RetCode setOutputDevice(
+            const std::vector<aidl::android::media::audio::common::AudioDeviceDescription>& devices)
+            override;
 
-    RetCode setEqualizerPreset(const int presetIdx);
+    RetCode setEqualizerPreset(const std::size_t presetIdx);
     int getEqualizerPreset() const { return mCurPresetIdx; }
     RetCode setEqualizerBandLevels(const std::vector<Equalizer::BandLevel>& bandLevels);
     std::vector<Equalizer::BandLevel> getEqualizerBandLevels() const;
 
+    RetCode setBassBoostStrength(int strength);
+    int getBassBoostStrength() const { return mBassStrengthSaved; }
+
+    RetCode setVolumeLevel(int level);
+    int getVolumeLevel() const;
+
+    RetCode setVolumeMute(bool mute);
+    int getVolumeMute() const { return mMuteEnabled; }
+
+    RetCode setVirtualizerStrength(int strength);
+    int getVirtualizerStrength() const { return mVirtStrengthSaved; }
+
     RetCode setVolumeStereo(const Parameter::VolumeStereo& volumeStereo) override;
-    Parameter::VolumeStereo getVolumeStereo() override { return mVolumeStereo; };
+    Parameter::VolumeStereo getVolumeStereo() override { return mVolumeStereo; }
+
+    IEffect::Status lvmProcess(float* in, float* out, int samples);
+
+    IEffect::Status processEffect(float* in, float* out, int sampleToProcess);
 
   private:
+    std::mutex mMutex;
     const lvm::BundleEffectType mType;
     bool mEnabled = false;
-    LVM_Handle_t mInstance = nullptr;
+    LVM_Handle_t mInstance GUARDED_BY(mMutex);
 
     aidl::android::media::audio::common::AudioDeviceDescription mVirtualizerForcedDevice;
     aidl::android::media::audio::common::AudioChannelLayout mChMask;
@@ -87,7 +115,7 @@ class BundleContext final : public EffectContext {
     int mEffectProcessCalled = 0;
     int mNumberEffectsEnabled = 0;
     int mNumberEffectsCalled = 0;
-    bool mFirstVolume = false;
+    bool mFirstVolume = true;
     // Bass
     bool mBassTempDisabled = false;
     int mBassStrengthSaved = 0;
@@ -99,10 +127,12 @@ class BundleContext final : public EffectContext {
     bool mVirtualizerTempDisabled = false;
     // Volume
     int mLevelSaved = 0; /* for when mute is set, level must be saved */
+    int mVolume = 0;
     bool mMuteEnabled = false; /* Must store as mute = -96dB level */
 
     void initControlParameter(LVM_ControlParams_t& params) const;
     void initHeadroomParameter(LVM_HeadroomParams_t& params) const;
+    RetCode limitLevel();
     int16_t VolToDb(uint32_t vol) const;
     LVM_INT16 LVC_ToDB_s32Tos16(LVM_INT32 Lin_fix) const;
     RetCode updateControlParameter(const std::vector<Equalizer::BandLevel>& bandLevels);

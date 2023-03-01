@@ -84,7 +84,8 @@ class Camera3Device :
   public:
 
     explicit Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraServiceProxyWrapper,
-            const String8& id, bool overrideForPerfClass, bool legacyClient = false);
+            const String8& id, bool overrideForPerfClass, bool overrideToPortrait,
+            bool legacyClient = false);
 
     virtual ~Camera3Device();
     // Delete and optionally close native handles and clear the input vector afterward
@@ -152,7 +153,8 @@ class Camera3Device :
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
             int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
-            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED,
+            bool useReadoutTimestamp = false)
             override;
 
     status_t createStream(const std::vector<sp<Surface>>& consumers,
@@ -169,7 +171,8 @@ class Camera3Device :
             int64_t streamUseCase = ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES_DEFAULT,
             int timestampBase = OutputConfiguration::TIMESTAMP_BASE_DEFAULT,
             int mirrorMode = OutputConfiguration::MIRROR_MODE_AUTO,
-            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED)
+            int32_t colorSpace = ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED,
+            bool useReadoutTimestamp = false)
             override;
 
     status_t createInputStream(
@@ -299,6 +302,13 @@ class Camera3Device :
      * Enables/disables camera service watchdog
      */
     status_t setCameraServiceWatchdog(bool enabled);
+
+    // Set stream use case overrides
+    void setStreamUseCaseOverrides(
+            const std::vector<int64_t>& useCaseOverrides);
+
+    // Clear stream use case overrides
+    void clearStreamUseCaseOverrides();
 
     // Get the status trackeer for the camera device
     wp<camera3::StatusTracker> getStatusTracker() { return mStatusTracker; }
@@ -831,7 +841,8 @@ class Camera3Device :
                 sp<HalInterface> interface,
                 const Vector<int32_t>& sessionParamKeys,
                 bool useHalBufManager,
-                bool supportCameraMute);
+                bool supportCameraMute,
+                bool overrideToPortrait);
         ~RequestThread();
 
         void     setNotificationListener(wp<NotificationListener> listener);
@@ -1119,6 +1130,7 @@ class Camera3Device :
 
         const bool         mUseHalBufManager;
         const bool         mSupportCameraMute;
+        const bool         mOverrideToPortrait;
     };
 
     virtual sp<RequestThread> createNewRequestThread(wp<Camera3Device> /*parent*/,
@@ -1126,7 +1138,8 @@ class Camera3Device :
                 sp<HalInterface> /*interface*/,
                 const Vector<int32_t>& /*sessionParamKeys*/,
                 bool /*useHalBufManager*/,
-                bool /*supportCameraMute*/) = 0;
+                bool /*supportCameraMute*/,
+                bool /*overrideToPortrait*/) = 0;
 
     sp<RequestThread> mRequestThread;
 
@@ -1396,6 +1409,13 @@ class Camera3Device :
     // performance class.
     bool mOverrideForPerfClass;
 
+    // Whether the camera framework overrides the device characteristics for
+    // app compatibility reasons.
+    bool mOverrideToPortrait;
+
+    // Current active physical id of the logical multi-camera, if any
+    std::string mActivePhysicalId;
+
     // The current minimum expected frame duration based on AE_TARGET_FPS_RANGE
     nsecs_t mMinExpectedDuration = 0;
     // Whether the camera device runs at fixed frame rate based on AE_MODE and
@@ -1483,6 +1503,8 @@ class Camera3Device :
             createCamera3DeviceInjectionMethods(wp<Camera3Device>) = 0;
 
     sp<Camera3DeviceInjectionMethods> mInjectionMethods;
+
+    void overrideStreamUseCaseLocked();
 
 }; // class Camera3Device
 

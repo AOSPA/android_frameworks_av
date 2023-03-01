@@ -17,13 +17,20 @@
 
 #pragma once
 
-#include <audio_utils/MelProcessor.h>
+#include <aidl/android/hardware/audio/core/sounddose/ISoundDose.h>
+#include <aidl/android/media/audio/common/AudioDevice.h>
+#include <android/media/BnSoundDose.h>
+#include <android/media/ISoundDoseCallback.h>
+#include <media/AudioDeviceTypeAddr.h>
 #include <audio_utils/MelAggregator.h>
+#include <audio_utils/MelProcessor.h>
+#include <binder/Status.h>
 #include <mutex>
 #include <unordered_map>
-#include <utils/Errors.h>
 
 namespace android {
+
+using aidl::android::hardware::audio::core::sounddose::ISoundDose;
 
 class SoundDoseManager : public audio_utils::MelProcessor::MelCallback {
 public:
@@ -40,24 +47,23 @@ public:
      * \brief Creates or gets the MelProcessor assigned to the streamHandle
      *
      * \param deviceId          id for the devices where the stream is active.
-     * \param streanHandle      handle to the stream
+     * \param streamHandle      handle to the stream
      * \param sampleRate        sample rate for the processor
      * \param channelCount      number of channels to be processed.
      * \param format            format of the input samples.
      *
      * \return MelProcessor assigned to the stream and device id.
      */
-    sp<audio_utils::MelProcessor> getOrCreateProcessorForDevice(
-        audio_port_handle_t deviceId,
-        audio_io_handle_t streamHandle,
-        uint32_t sampleRate,
-        size_t channelCount,
-        audio_format_t format);
+    sp<audio_utils::MelProcessor> getOrCreateProcessorForDevice(audio_port_handle_t deviceId,
+                                                                audio_io_handle_t streamHandle,
+                                                                uint32_t sampleRate,
+                                                                size_t channelCount,
+                                                                audio_format_t format);
 
     /**
      * \brief Removes stream processor when MEL computation is not needed anymore
      *
-     * \param streanHandle      handle to the stream
+     * \param streamHandle      handle to the stream
      */
     void removeStreamProcessor(audio_io_handle_t streamHandle);
 
@@ -69,28 +75,119 @@ public:
      */
     void setOutputRs2(float rs2Value);
 
+    /**
+     * \brief Registers the interface for passing callbacks to the AudioService and gets
+     * the ISoundDose interface.
+     *
+     * \returns the sound dose binder to send commands to the SoundDoseManager
+     **/
+    sp<media::ISoundDose> getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback);
+
+    /**
+     * Sets the HAL sound dose interface to use for the MEL computation. Use nullptr
+     * for using the internal MEL computation.
+     *
+     * @return true if setting the HAL sound dose value was successful, false otherwise.
+     */
+    bool setHalSoundDoseInterface(const std::shared_ptr<ISoundDose>& halSoundDose);
+
+    /** Returns the cached audio port id from the active devices. */
+    audio_port_handle_t getIdForAudioDevice(
+            const aidl::android::media::audio::common::AudioDevice& audioDevice) const;
+
+    /** Caches mapping between address and device port id. */
+    void mapAddressToDeviceId(const AudioDeviceTypeAddr& adt,
+                              const audio_port_handle_t deviceId);
+
+    /** Clear all map entries with passed audio_port_handle_t. */
+    void clearMapDeviceIdEntries(audio_port_handle_t deviceId);
+
     std::string dump() const;
 
-    // used for testing
+    // used for testing only
     size_t getCachedMelRecordsSize() const;
+    bool forceUseFrameworkMel() const;
+    bool forceComputeCsdOnAllDevices() const;
+
+    /** Method for converting from audio_utils::CsdRecord to media::SoundDoseRecord. */
+    static media::SoundDoseRecord csdRecordToSoundDoseRecord(const audio_utils::CsdRecord& legacy);
 
     // ------ Override audio_utils::MelProcessor::MelCallback ------
-    void onNewMelValues(const std::vector<float>& mels,
-                        size_t offset,
-                        size_t length,
+    void onNewMelValues(const std::vector<float>& mels, size_t offset, size_t length,
                         audio_port_handle_t deviceId) const override;
 
     void onMomentaryExposure(float currentMel, audio_port_handle_t deviceId) const override;
+
 private:
+    class SoundDose : public media::BnSoundDose,
+                      public IBinder::DeathRecipient {
+    public:
+        SoundDose(SoundDoseManager* manager, const sp<media::ISoundDoseCallback>& callback)
+            : mSoundDoseManager(manager),
+              mSoundDoseCallback(callback) {}
+
+        /** IBinder::DeathRecipient. Listen to the death of ISoundDoseCallback. */
+        virtual void binderDied(const wp<IBinder>& who);
+
+        /** BnSoundDose override */
+        binder::Status setOutputRs2(float value) override;
+        binder::Status resetCsd(float currentCsd,
+                                const std::vector<media::SoundDoseRecord>& records) override;
+        binder::Status getOutputRs2(float* value);
+        binder::Status getCsd(float* value);
+        binder::Status forceUseFrameworkMel(bool useFrameworkMel);
+        binder::Status forceComputeCsdOnAllDevices(bool computeCsdOnAllDevices);
+
+        wp<SoundDoseManager> mSoundDoseManager;
+        const sp<media::ISoundDoseCallback> mSoundDoseCallback;
+    };
+
+    class HalSoundDoseCallback : public ISoundDose::BnHalSoundDoseCallback {
+    public:
+        explicit HalSoundDoseCallback(SoundDoseManager* manager)
+            : mSoundDoseManager(manager) {}
+
+        ndk::ScopedAStatus onMomentaryExposureWarning(
+                float in_currentDbA,
+                const aidl::android::media::audio::common::AudioDevice& in_audioDevice) override;
+        ndk::ScopedAStatus onNewMelValues(
+                const ISoundDose::IHalSoundDoseCallback::MelRecord& in_melRecord,
+                const aidl::android::media::audio::common::AudioDevice& in_audioDevice) override;
+
+        wp<SoundDoseManager> mSoundDoseManager;
+    };
+
+    void resetSoundDose();
+
+    void resetCsd(float currentCsd, const std::vector<media::SoundDoseRecord>& records);
+
+    sp<media::ISoundDoseCallback> getSoundDoseCallback() const;
+
+    void setUseFrameworkMel(bool useFrameworkMel);
+    void setComputeCsdOnAllDevices(bool computeCsdOnAllDevices);
+    /** Returns the HAL sound dose interface or null if internal MEL computation is used. */
+    void getHalSoundDose(std::shared_ptr<ISoundDose>* halSoundDose) const;
+
     mutable std::mutex mLock;
 
     // no need for lock since MelAggregator is thread-safe
     const sp<audio_utils::MelAggregator> mMelAggregator;
 
-    std::unordered_map<audio_io_handle_t,
-                       wp<audio_utils::MelProcessor>> mActiveProcessors GUARDED_BY(mLock);
+    std::unordered_map<audio_io_handle_t, wp<audio_utils::MelProcessor>> mActiveProcessors
+            GUARDED_BY(mLock);
+
+    // map active device address and type to device id
+    std::map<AudioDeviceTypeAddr, audio_port_handle_t> mActiveDevices GUARDED_BY(mLock);
 
     float mRs2Value GUARDED_BY(mLock);
+
+    sp<SoundDose> mSoundDose GUARDED_BY(mLock);
+
+    std::shared_ptr<ISoundDose> mHalSoundDose GUARDED_BY(mLock);
+    std::shared_ptr<HalSoundDoseCallback> mHalSoundDoseCallback GUARDED_BY(mLock);
+
+    bool mUseFrameworkMel GUARDED_BY(mLock) = false;
+    bool mComputeCsdOnAllDevices GUARDED_BY(mLock) = false;
 };
 
 }  // namespace android

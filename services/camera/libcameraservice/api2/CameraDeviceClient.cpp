@@ -36,6 +36,7 @@
 
 #include "DepthCompositeStream.h"
 #include "HeicCompositeStream.h"
+#include "JpegRCompositeStream.h"
 
 // Convenience methods for constructing binder::Status objects for error returns
 
@@ -65,7 +66,8 @@ CameraDeviceClientBase::CameraDeviceClientBase(
         int sensorOrientation,
         int clientPid,
         uid_t clientUid,
-        int servicePid) :
+        int servicePid,
+        bool overrideToPortrait) :
     BasicClient(cameraService,
             IInterface::asBinder(remoteCallback),
             clientPackageName,
@@ -76,7 +78,8 @@ CameraDeviceClientBase::CameraDeviceClientBase(
             sensorOrientation,
             clientPid,
             clientUid,
-            servicePid),
+            servicePid,
+            overrideToPortrait),
     mRemoteCallback(remoteCallback) {
     // We don't need it for API2 clients, but Camera2ClientBase requires it.
     (void) api1CameraId;
@@ -96,10 +99,12 @@ CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
         int clientPid,
         uid_t clientUid,
         int servicePid,
-        bool overrideForPerfClass) :
+        bool overrideForPerfClass,
+        bool overrideToPortrait) :
     Camera2ClientBase(cameraService, remoteCallback, cameraServiceProxyWrapper, clientPackageName,
             systemNativeClient, clientFeatureId, cameraId, /*API1 camera ID*/ -1, cameraFacing,
-            sensorOrientation, clientPid, clientUid, servicePid, overrideForPerfClass),
+            sensorOrientation, clientPid, clientUid, servicePid, overrideForPerfClass,
+            overrideToPortrait),
     mInputStream(),
     mStreamingRequestId(REQUEST_ID_NONE),
     mRequestIdCounter(0),
@@ -893,6 +898,7 @@ binder::Status CameraDeviceClient::createStream(
     int timestampBase = outputConfiguration.getTimestampBase();
     int mirrorMode = outputConfiguration.getMirrorMode();
     int32_t colorSpace = outputConfiguration.getColorSpace();
+    bool useReadoutTimestamp = outputConfiguration.useReadoutTimestamp();
 
     res = SessionConfigurationUtils::checkSurfaceType(numBufferProducers, deferredConsumer,
             outputConfiguration.getSurfaceType());
@@ -962,20 +968,26 @@ binder::Status CameraDeviceClient::createStream(
     std::vector<int> surfaceIds;
     bool isDepthCompositeStream =
             camera3::DepthCompositeStream::isDepthCompositeStream(surfaces[0]);
-    bool isHeicCompisiteStream = camera3::HeicCompositeStream::isHeicCompositeStream(surfaces[0]);
-    if (isDepthCompositeStream || isHeicCompisiteStream) {
+    bool isHeicCompositeStream = camera3::HeicCompositeStream::isHeicCompositeStream(surfaces[0]);
+    bool isJpegRCompositeStream =
+        camera3::JpegRCompositeStream::isJpegRCompositeStream(surfaces[0]);
+    if (isDepthCompositeStream || isHeicCompositeStream || isJpegRCompositeStream) {
         sp<CompositeStream> compositeStream;
         if (isDepthCompositeStream) {
             compositeStream = new camera3::DepthCompositeStream(mDevice, getRemoteCallback());
-        } else {
+        } else if (isHeicCompositeStream) {
             compositeStream = new camera3::HeicCompositeStream(mDevice, getRemoteCallback());
+        } else {
+            compositeStream = new camera3::JpegRCompositeStream(mDevice, getRemoteCallback());
         }
 
         err = compositeStream->createStream(surfaces, deferredConsumer, streamInfo.width,
                 streamInfo.height, streamInfo.format,
                 static_cast<camera_stream_rotation_t>(outputConfiguration.getRotation()),
                 &streamId, physicalCameraId, streamInfo.sensorPixelModesUsed, &surfaceIds,
-                outputConfiguration.getSurfaceSetID(), isShared, isMultiResolution);
+                outputConfiguration.getSurfaceSetID(), isShared, isMultiResolution,
+                streamInfo.colorSpace, streamInfo.dynamicRangeProfile, streamInfo.streamUseCase,
+                useReadoutTimestamp);
         if (err == OK) {
             Mutex::Autolock l(mCompositeLock);
             mCompositeStreamMap.add(IInterface::asBinder(surfaces[0]->getIGraphicBufferProducer()),
@@ -988,7 +1000,8 @@ binder::Status CameraDeviceClient::createStream(
                 &streamId, physicalCameraId, streamInfo.sensorPixelModesUsed, &surfaceIds,
                 outputConfiguration.getSurfaceSetID(), isShared, isMultiResolution,
                 /*consumerUsage*/0, streamInfo.dynamicRangeProfile, streamInfo.streamUseCase,
-                streamInfo.timestampBase, streamInfo.mirrorMode, streamInfo.colorSpace);
+                streamInfo.timestampBase, streamInfo.mirrorMode, streamInfo.colorSpace,
+                useReadoutTimestamp);
     }
 
     if (err != OK) {
@@ -1087,7 +1100,8 @@ binder::Status CameraDeviceClient::createDeferredSurfaceStreamLocked(
             outputConfiguration.isMultiResolution(), consumerUsage,
             outputConfiguration.getDynamicRangeProfile(),
             outputConfiguration.getStreamUseCase(),
-            outputConfiguration.getMirrorMode());
+            outputConfiguration.getMirrorMode(),
+            outputConfiguration.useReadoutTimestamp());
 
     if (err != OK) {
         res = STATUS_ERROR_FMT(CameraService::ERROR_INVALID_OPERATION,
@@ -1787,6 +1801,15 @@ status_t CameraDeviceClient::setCameraMute(bool enabled) {
     return mDevice->setCameraMute(enabled);
 }
 
+void CameraDeviceClient::setStreamUseCaseOverrides(
+        const std::vector<int64_t>& useCaseOverrides) {
+    mDevice->setStreamUseCaseOverrides(useCaseOverrides);
+}
+
+void CameraDeviceClient::clearStreamUseCaseOverrides() {
+    mDevice->clearStreamUseCaseOverrides();
+}
+
 binder::Status CameraDeviceClient::switchToOffline(
         const sp<hardware::camera2::ICameraDeviceCallbacks>& cameraCb,
         const std::vector<int>& offlineOutputIds,
@@ -1839,7 +1862,8 @@ binder::Status CameraDeviceClient::switchToOffline(
         for (const auto& gbp : mConfiguredOutputs.valueAt(index).getGraphicBufferProducers()) {
             sp<Surface> s = new Surface(gbp, false /*controlledByApp*/);
             isCompositeStream = camera3::DepthCompositeStream::isDepthCompositeStream(s) ||
-                camera3::HeicCompositeStream::isHeicCompositeStream(s);
+                camera3::HeicCompositeStream::isHeicCompositeStream(s) ||
+                camera3::JpegRCompositeStream::isJpegRCompositeStream(s);
             if (isCompositeStream) {
                 auto compositeIdx = mCompositeStreamMap.indexOfKey(IInterface::asBinder(gbp));
                 if (compositeIdx == NAME_NOT_FOUND) {

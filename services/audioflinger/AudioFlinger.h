@@ -88,6 +88,7 @@
 #include <audio_utils/TimestampVerifier.h>
 
 #include <sounddose/SoundDoseManager.h>
+#include <timing/MonotonicFrameCounter.h>
 
 #include "FastCapture.h"
 #include "FastMixer.h"
@@ -123,6 +124,7 @@ class DevicesFactoryHalInterface;
 class EffectsFactoryHalInterface;
 class FastMixer;
 class IAudioManager;
+class ISoundDoseCallback;
 class PassthruBufferProvider;
 class RecordBufferConverter;
 class ServerProxy;
@@ -137,6 +139,7 @@ using android::content::AttributionSourceState;
 
 class AudioFlinger : public AudioFlingerServerAdapter::Delegate
 {
+    friend class sp<AudioFlinger>;
 public:
     static void instantiate() ANDROID_API;
 
@@ -207,8 +210,6 @@ public:
                                media::OpenInputResponse* response);
 
     virtual status_t closeInput(audio_io_handle_t input);
-
-    virtual status_t invalidateStream(audio_stream_type_t stream);
 
     virtual status_t setVoiceVolume(float volume);
 
@@ -304,6 +305,17 @@ public:
 
     virtual status_t getSupportedLatencyModes(audio_io_handle_t output,
             std::vector<audio_latency_mode_t>* modes);
+
+    virtual status_t setBluetoothVariableLatencyEnabled(bool enabled);
+
+    virtual status_t isBluetoothVariableLatencyEnabled(bool* enabled);
+
+    virtual status_t supportsBluetoothVariableLatency(bool* support);
+
+    virtual status_t getSoundDoseInterface(const sp<media::ISoundDoseCallback>& callback,
+                                           sp<media::ISoundDose>* soundDose);
+
+    status_t invalidateTracks(const std::vector<audio_port_handle_t>& portIds) override;
 
     status_t onTransactWrapper(TransactionCode code, const Parcel& data, uint32_t flags,
         const std::function<status_t()>& delegate) override;
@@ -587,6 +599,7 @@ private:
     class OffloadThread;
     class DuplicatingThread;
     class AsyncCallbackThread;
+    class BitPerfectThread;
     class Track;
     class RecordTrack;
     class EffectBase;
@@ -689,14 +702,16 @@ using effect_buffer_t = int16_t;
         binder::Status getVolumeShaperState(
                 int32_t id,
                 std::optional<media::VolumeShaperState>* _aidl_return) override;
-        binder::Status getDualMonoMode(media::AudioDualMonoMode* _aidl_return) override;
-        binder::Status setDualMonoMode(media::AudioDualMonoMode mode) override;
+        binder::Status getDualMonoMode(
+                media::audio::common::AudioDualMonoMode* _aidl_return) override;
+        binder::Status setDualMonoMode(
+                media::audio::common::AudioDualMonoMode mode) override;
         binder::Status getAudioDescriptionMixLevel(float* _aidl_return) override;
         binder::Status setAudioDescriptionMixLevel(float leveldB) override;
         binder::Status getPlaybackRateParameters(
-                media::AudioPlaybackRate* _aidl_return) override;
+                media::audio::common::AudioPlaybackRate* _aidl_return) override;
         binder::Status setPlaybackRateParameters(
-                const media::AudioPlaybackRate& playbackRate) override;
+                const media::audio::common::AudioPlaybackRate& playbackRate) override;
 
     private:
         const sp<PlaybackThread::Track> mTrack;
@@ -1047,6 +1062,9 @@ private:
 
     /** Interface for interacting with the AudioService. */
     mediautils::atomic_sp<IAudioManager>       mAudioManager;
+
+    // Bluetooth Variable latency control logic is enabled or disabled
+    std::atomic_bool mBluetoothLatencyModesEnabled;
 };
 
 #undef INCLUDING_FROM_AUDIOFLINGER_H

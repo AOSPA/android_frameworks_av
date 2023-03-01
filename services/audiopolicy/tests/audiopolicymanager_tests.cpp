@@ -35,7 +35,6 @@
 
 #include "AudioPolicyInterface.h"
 #include "AudioPolicyManagerTestClient.h"
-#include "AudioPolicyManagerTestClientForHdmi.h"
 #include "AudioPolicyTestClient.h"
 #include "AudioPolicyTestManager.h"
 
@@ -161,7 +160,9 @@ class AudioPolicyManagerTest : public testing::Test {
             audio_io_handle_t *output = nullptr,
             audio_port_handle_t *portId = nullptr,
             audio_attributes_t attr = {},
-            audio_session_t session = AUDIO_SESSION_NONE);
+            audio_session_t session = AUDIO_SESSION_NONE,
+            int uid = 0,
+            bool* isBitPerfect = nullptr);
     void getInputForAttr(
             const audio_attributes_t &attr,
             audio_session_t session,
@@ -245,7 +246,9 @@ void AudioPolicyManagerTest::getOutputForAttr(
         audio_io_handle_t *output,
         audio_port_handle_t *portId,
         audio_attributes_t attr,
-        audio_session_t session) {
+        audio_session_t session,
+        int uid,
+        bool* isBitPerfect) {
     audio_io_handle_t localOutput;
     if (!output) output = &localOutput;
     *output = AUDIO_IO_HANDLE_NONE;
@@ -259,13 +262,15 @@ void AudioPolicyManagerTest::getOutputForAttr(
     *portId = AUDIO_PORT_HANDLE_NONE;
     AudioPolicyInterface::output_type_t outputType;
     bool isSpatialized;
+    bool isBitPerfectInternal;
     // TODO b/182392769: use attribution source util
     AttributionSourceState attributionSource = AttributionSourceState();
-    attributionSource.uid = 0;
+    attributionSource.uid = uid;
     attributionSource.token = sp<BBinder>::make();
     ASSERT_EQ(OK, mManager->getOutputForAttr(
                     &attr, output, session, &stream, attributionSource, &config, &flags,
-                    selectedDeviceId, portId, {}, &outputType, &isSpatialized));
+                    selectedDeviceId, portId, {}, &outputType, &isSpatialized,
+                    isBitPerfect == nullptr ? &isBitPerfectInternal : isBitPerfect));
     ASSERT_NE(AUDIO_PORT_HANDLE_NONE, *portId);
     ASSERT_NE(AUDIO_IO_HANDLE_NONE, *output);
 }
@@ -459,7 +464,7 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
     sp<AudioProfile> ac3OutputProfile = new AudioProfile(
             AUDIO_FORMAT_AC3, AUDIO_CHANNEL_OUT_5POINT1, k48000SamplingRate);
     sp<AudioProfile> iec958OutputProfile = new AudioProfile(
-            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_OUT_STEREO, k48000SamplingRate);
+            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_INDEX_MASK_24, k48000SamplingRate);
     mMsdOutputDevice->addAudioProfile(pcmOutputProfile);
     mMsdOutputDevice->addAudioProfile(ac3OutputProfile);
     mMsdOutputDevice->addAudioProfile(iec958OutputProfile);
@@ -532,7 +537,7 @@ void AudioPolicyManagerTestMsd::SetUpManagerConfig() {
     // Add HDMI input device with IEC60958 profile for HDMI in -> MSD patching.
     mHdmiInputDevice = new DeviceDescriptor(AUDIO_DEVICE_IN_HDMI);
     sp<AudioProfile> iec958InputProfile = new AudioProfile(
-            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_IN_STEREO, k48000SamplingRate);
+            AUDIO_FORMAT_IEC60958, AUDIO_CHANNEL_INDEX_MASK_24, k48000SamplingRate);
     mHdmiInputDevice->addAudioProfile(iec958InputProfile);
     config.addDevice(mHdmiInputDevice);
     sp<InputProfile> hdmiInputProfile = new InputProfile("hdmi input");
@@ -690,8 +695,8 @@ TEST_P(AudioPolicyManagerTestMsd, PatchCreationFromHdmiInToMsd) {
     ASSERT_EQ(AUDIO_PORT_ROLE_SINK, patch->mPatch.sinks[0].role);
     ASSERT_EQ(AUDIO_FORMAT_IEC60958, patch->mPatch.sources[0].format);
     ASSERT_EQ(AUDIO_FORMAT_IEC60958, patch->mPatch.sinks[0].format);
-    ASSERT_EQ(AUDIO_CHANNEL_IN_STEREO, patch->mPatch.sources[0].channel_mask);
-    ASSERT_EQ(AUDIO_CHANNEL_OUT_STEREO, patch->mPatch.sinks[0].channel_mask);
+    ASSERT_EQ(AUDIO_CHANNEL_INDEX_MASK_24, patch->mPatch.sources[0].channel_mask);
+    ASSERT_EQ(AUDIO_CHANNEL_INDEX_MASK_24, patch->mPatch.sinks[0].channel_mask);
     ASSERT_EQ(k48000SamplingRate, patch->mPatch.sources[0].sample_rate);
     ASSERT_EQ(k48000SamplingRate, patch->mPatch.sinks[0].sample_rate);
     ASSERT_EQ(1, patchCount.deltaFromSnapshot());
@@ -767,7 +772,7 @@ TEST_P(AudioPolicyManagerTestMsd, IsDirectPlaybackSupportedWithMsd) {
     audio_config_base_t msdDirectConfig2 = AUDIO_CONFIG_BASE_INITIALIZER;
     msdDirectConfig2.format = AUDIO_FORMAT_IEC60958;
     msdDirectConfig2.sample_rate = 48000;
-    msdDirectConfig2.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
+    msdDirectConfig2.channel_mask = AUDIO_CHANNEL_INDEX_MASK_24;
 
     audio_config_base_t msdNonDirectConfig = AUDIO_CONFIG_BASE_INITIALIZER;
     msdNonDirectConfig.format = AUDIO_FORMAT_PCM_16_BIT;
@@ -834,7 +839,7 @@ TEST_P(AudioPolicyManagerTestMsd, GetDirectPlaybackSupportWithMsd) {
     audio_config_t msdDirectConfig2 = AUDIO_CONFIG_INITIALIZER;
     msdDirectConfig2.format = AUDIO_FORMAT_IEC60958;
     msdDirectConfig2.sample_rate = 48000;
-    msdDirectConfig2.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
+    msdDirectConfig2.channel_mask = AUDIO_CHANNEL_INDEX_MASK_24;
 
     audio_config_t msdNonDirectConfig = AUDIO_CONFIG_INITIALIZER;
     msdNonDirectConfig.format = AUDIO_FORMAT_PCM_16_BIT;
@@ -980,6 +985,251 @@ TEST_F(AudioPolicyManagerTestWithConfigurationFile, HandleDeviceConfigChange) {
         const auto currCounter = mClient->getRoutingUpdatedCounter();
         EXPECT_GT(currCounter, prevCounter);
     }
+}
+
+TEST_F(AudioPolicyManagerTestWithConfigurationFile, PreferredMixerAttributes) {
+    mClient->addSupportedFormat(AUDIO_FORMAT_PCM_16_BIT);
+    mClient->addSupportedChannelMask(AUDIO_CHANNEL_OUT_STEREO);
+    ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_USB_DEVICE,
+                                                           AUDIO_POLICY_DEVICE_STATE_AVAILABLE,
+                                                           "", "", AUDIO_FORMAT_DEFAULT));
+    auto devices = mManager->getAvailableOutputDevices();
+    audio_port_handle_t maxPortId = 0;
+    audio_port_handle_t speakerPortId;
+    audio_port_handle_t usbPortId;
+    for (auto device : devices) {
+        maxPortId = std::max(maxPortId, device->getId());
+        if (device->type() == AUDIO_DEVICE_OUT_SPEAKER) {
+            speakerPortId = device->getId();
+        } else if (device->type() == AUDIO_DEVICE_OUT_USB_DEVICE) {
+            usbPortId = device->getId();
+        }
+    }
+
+    const uid_t uid = 1234;
+    const uid_t otherUid = 4321;
+    const audio_attributes_t mediaAttr = {
+            .content_type = AUDIO_CONTENT_TYPE_MUSIC,
+            .usage = AUDIO_USAGE_MEDIA,
+    };
+    const audio_attributes_t alarmAttr = {
+            .content_type = AUDIO_CONTENT_TYPE_SONIFICATION,
+            .usage = AUDIO_USAGE_ALARM,
+    };
+
+    std::vector<audio_mixer_attributes_t> mixerAttributes;
+    EXPECT_EQ(NO_ERROR, mManager->getSupportedMixerAttributes(usbPortId, mixerAttributes));
+    for (const auto attrToSet : mixerAttributes) {
+        audio_mixer_attributes_t attrFromQuery = AUDIO_MIXER_ATTRIBUTES_INITIALIZER;
+
+        // The given device is not available
+        EXPECT_EQ(BAD_VALUE,
+                  mManager->setPreferredMixerAttributes(
+                          &mediaAttr, maxPortId + 1, uid, &attrToSet));
+        // The only allowed device is USB
+        EXPECT_EQ(BAD_VALUE,
+                  mManager->setPreferredMixerAttributes(
+                          &mediaAttr, speakerPortId, uid, &attrToSet));
+        // The only allowed usage is media
+        EXPECT_EQ(BAD_VALUE,
+                  mManager->setPreferredMixerAttributes(&alarmAttr, usbPortId, uid, &attrToSet));
+        // Nothing set yet, must get null when query
+        EXPECT_EQ(NAME_NOT_FOUND,
+                  mManager->getPreferredMixerAttributes(&mediaAttr, usbPortId, &attrFromQuery));
+        EXPECT_EQ(NO_ERROR,
+                  mManager->setPreferredMixerAttributes(
+                          &mediaAttr, usbPortId, uid, &attrToSet));
+        EXPECT_EQ(NO_ERROR,
+                  mManager->getPreferredMixerAttributes(&mediaAttr, usbPortId, &attrFromQuery));
+        EXPECT_EQ(attrToSet.config.format, attrFromQuery.config.format);
+        EXPECT_EQ(attrToSet.config.sample_rate, attrFromQuery.config.sample_rate);
+        EXPECT_EQ(attrToSet.config.channel_mask, attrFromQuery.config.channel_mask);
+        EXPECT_EQ(attrToSet.mixer_behavior, attrFromQuery.mixer_behavior);
+        EXPECT_EQ(NAME_NOT_FOUND,
+                  mManager->clearPreferredMixerAttributes(&mediaAttr, speakerPortId, uid));
+        EXPECT_EQ(PERMISSION_DENIED,
+                  mManager->clearPreferredMixerAttributes(&mediaAttr, usbPortId, otherUid));
+        EXPECT_EQ(NO_ERROR,
+                  mManager->clearPreferredMixerAttributes(&mediaAttr, usbPortId, uid));
+    }
+
+    ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_USB_DEVICE,
+                                                           AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
+                                                           "", "", AUDIO_FORMAT_LDAC));
+}
+
+TEST_F(AudioPolicyManagerTestWithConfigurationFile, RoutingChangedWithPreferredMixerAttributes) {
+    mClient->addSupportedFormat(AUDIO_FORMAT_PCM_16_BIT);
+    mClient->addSupportedChannelMask(AUDIO_CHANNEL_OUT_STEREO);
+    ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_USB_DEVICE,
+                                                           AUDIO_POLICY_DEVICE_STATE_AVAILABLE,
+                                                           "", "", AUDIO_FORMAT_DEFAULT));
+    auto devices = mManager->getAvailableOutputDevices();
+    audio_port_handle_t usbPortId = AUDIO_PORT_HANDLE_NONE;
+    for (auto device : devices) {
+        if (device->type() == AUDIO_DEVICE_OUT_USB_DEVICE) {
+            usbPortId = device->getId();
+            break;
+        }
+    }
+    EXPECT_NE(AUDIO_PORT_HANDLE_NONE, usbPortId);
+
+    const uid_t uid = 1234;
+    const audio_attributes_t mediaAttr = {
+            .content_type = AUDIO_CONTENT_TYPE_MUSIC,
+            .usage = AUDIO_USAGE_MEDIA,
+    };
+
+    std::vector<audio_mixer_attributes_t> mixerAttributes;
+    EXPECT_EQ(NO_ERROR, mManager->getSupportedMixerAttributes(usbPortId, mixerAttributes));
+    EXPECT_GT(mixerAttributes.size(), 0);
+    EXPECT_EQ(NO_ERROR,
+              mManager->setPreferredMixerAttributes(
+                      &mediaAttr, usbPortId, uid, &mixerAttributes[0]));
+
+    audio_io_handle_t output = AUDIO_IO_HANDLE_NONE;
+    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+            48000, AUDIO_OUTPUT_FLAG_NONE, &output, &portId, mediaAttr,
+            AUDIO_SESSION_NONE, uid);
+    status_t status = mManager->startOutput(portId);
+    if (status == DEAD_OBJECT) {
+        getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+                48000, AUDIO_OUTPUT_FLAG_NONE, &output, &portId, mediaAttr,
+                AUDIO_SESSION_NONE, uid);
+        status = mManager->startOutput(portId);
+    }
+    EXPECT_EQ(NO_ERROR, status);
+    EXPECT_NE(AUDIO_IO_HANDLE_NONE, output);
+    EXPECT_NE(nullptr, mManager->getOutputs().valueFor(output));
+    EXPECT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                                           AUDIO_POLICY_DEVICE_STATE_AVAILABLE,
+                                                           "", "", AUDIO_FORMAT_LDAC));
+    // When BT device is connected, it will be selected as media device and trigger routing changed.
+    // When this happens, existing output that is opened with preferred mixer attributes will be
+    // closed and reopened with default config.
+    EXPECT_EQ(nullptr, mManager->getOutputs().valueFor(output));
+
+    EXPECT_EQ(NO_ERROR,
+              mManager->clearPreferredMixerAttributes(&mediaAttr, usbPortId, uid));
+
+    EXPECT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_BLUETOOTH_A2DP,
+                                                           AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
+                                                           "", "", AUDIO_FORMAT_LDAC));
+    ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_USB_DEVICE,
+                                                           AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
+                                                           "", "", AUDIO_FORMAT_LDAC));
+}
+
+TEST_F(AudioPolicyManagerTestWithConfigurationFile, BitPerfectPlayback) {
+    const audio_format_t bitPerfectFormat = AUDIO_FORMAT_PCM_16_BIT;
+    const audio_channel_mask_t bitPerfectChannelMask = AUDIO_CHANNEL_OUT_QUAD;
+    const uint32_t bitPerfectSampleRate = 48000;
+    mClient->addSupportedFormat(bitPerfectFormat);
+    mClient->addSupportedChannelMask(bitPerfectChannelMask);
+    ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_USB_DEVICE,
+                                                           AUDIO_POLICY_DEVICE_STATE_AVAILABLE,
+                                                           "", "", AUDIO_FORMAT_DEFAULT));
+    auto devices = mManager->getAvailableOutputDevices();
+    audio_port_handle_t usbPortId = AUDIO_PORT_HANDLE_NONE;
+    for (auto device : devices) {
+        if (device->type() == AUDIO_DEVICE_OUT_USB_DEVICE) {
+            usbPortId = device->getId();
+            break;
+        }
+    }
+    EXPECT_NE(AUDIO_PORT_HANDLE_NONE, usbPortId);
+
+    const uid_t uid = 1234;
+    const uid_t anotherUid = 5678;
+    const audio_attributes_t mediaAttr = {
+            .content_type = AUDIO_CONTENT_TYPE_MUSIC,
+            .usage = AUDIO_USAGE_MEDIA,
+    };
+
+    std::vector<audio_mixer_attributes_t> mixerAttributes;
+    EXPECT_EQ(NO_ERROR, mManager->getSupportedMixerAttributes(usbPortId, mixerAttributes));
+    EXPECT_GT(mixerAttributes.size(), 0);
+    size_t bitPerfectIndex = 0;
+    for (; bitPerfectIndex < mixerAttributes.size(); ++bitPerfectIndex) {
+        if (mixerAttributes[bitPerfectIndex].mixer_behavior == AUDIO_MIXER_BEHAVIOR_BIT_PERFECT) {
+            break;
+        }
+    }
+    EXPECT_LT(bitPerfectIndex, mixerAttributes.size());
+    EXPECT_EQ(bitPerfectFormat, mixerAttributes[bitPerfectIndex].config.format);
+    EXPECT_EQ(bitPerfectChannelMask, mixerAttributes[bitPerfectIndex].config.channel_mask);
+    EXPECT_EQ(bitPerfectSampleRate, mixerAttributes[bitPerfectIndex].config.sample_rate);
+    EXPECT_EQ(NO_ERROR,
+              mManager->setPreferredMixerAttributes(
+                      &mediaAttr, usbPortId, uid, &mixerAttributes[bitPerfectIndex]));
+
+    audio_io_handle_t bitPerfectOutput = AUDIO_IO_HANDLE_NONE;
+    audio_io_handle_t output = AUDIO_IO_HANDLE_NONE;
+    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    audio_port_handle_t bitPerfectPortId = AUDIO_PORT_HANDLE_NONE;
+    audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
+    bool isBitPerfect;
+
+    // When there is no active bit-perfect playback, the output selection will follow default
+    // routing strategy.
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+            48000, AUDIO_OUTPUT_FLAG_NONE, &output, &portId, mediaAttr, AUDIO_SESSION_NONE,
+            uid, &isBitPerfect);
+    EXPECT_FALSE(isBitPerfect);
+    EXPECT_NE(AUDIO_IO_HANDLE_NONE, output);
+    const auto outputDesc = mManager->getOutputs().valueFor(output);
+    EXPECT_NE(nullptr, outputDesc);
+    EXPECT_NE(AUDIO_OUTPUT_FLAG_BIT_PERFECT, outputDesc->mFlags & AUDIO_OUTPUT_FLAG_BIT_PERFECT);
+
+    // Start bit-perfect playback
+    getOutputForAttr(&selectedDeviceId, bitPerfectFormat, bitPerfectChannelMask,
+            bitPerfectSampleRate, AUDIO_OUTPUT_FLAG_NONE, &bitPerfectOutput, &bitPerfectPortId,
+            mediaAttr, AUDIO_SESSION_NONE, uid, &isBitPerfect);
+    status_t status = mManager->startOutput(bitPerfectPortId);
+    if (status == DEAD_OBJECT) {
+        getOutputForAttr(&selectedDeviceId, bitPerfectFormat, bitPerfectChannelMask,
+                bitPerfectSampleRate, AUDIO_OUTPUT_FLAG_NONE, &bitPerfectOutput, &bitPerfectPortId,
+                mediaAttr, AUDIO_SESSION_NONE, uid, &isBitPerfect);
+        status = mManager->startOutput(bitPerfectPortId);
+    }
+    EXPECT_EQ(NO_ERROR, status);
+    EXPECT_TRUE(isBitPerfect);
+    EXPECT_NE(AUDIO_IO_HANDLE_NONE, bitPerfectOutput);
+    const auto bitPerfectOutputDesc = mManager->getOutputs().valueFor(bitPerfectOutput);
+    EXPECT_NE(nullptr, bitPerfectOutputDesc);
+    EXPECT_EQ(AUDIO_OUTPUT_FLAG_BIT_PERFECT,
+              bitPerfectOutputDesc->mFlags & AUDIO_OUTPUT_FLAG_BIT_PERFECT);
+
+    // If the playback is from preferred mixer attributes owner but the request doesn't match
+    // preferred mixer attributes, it will not be bit-perfect.
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+            48000, AUDIO_OUTPUT_FLAG_NONE, &output, &portId, mediaAttr, AUDIO_SESSION_NONE,
+            uid, &isBitPerfect);
+    EXPECT_FALSE(isBitPerfect);
+    EXPECT_EQ(bitPerfectOutput, output);
+
+    // When bit-perfect playback is active, all other playback will be routed to bit-perfect output.
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+            48000, AUDIO_OUTPUT_FLAG_NONE, &output, &portId, mediaAttr, AUDIO_SESSION_NONE,
+            anotherUid, &isBitPerfect);
+    EXPECT_FALSE(isBitPerfect);
+    EXPECT_EQ(bitPerfectOutput, output);
+
+    // When configuration matches preferred mixer attributes, which is bit-perfect, but the client
+    // is not the owner of preferred mixer attributes, the playback will not be bit-perfect.
+    getOutputForAttr(&selectedDeviceId, bitPerfectFormat, bitPerfectChannelMask,
+            bitPerfectSampleRate, AUDIO_OUTPUT_FLAG_NONE, &output, &portId, mediaAttr,
+            AUDIO_SESSION_NONE, anotherUid, &isBitPerfect);
+    EXPECT_FALSE(isBitPerfect);
+    EXPECT_EQ(bitPerfectOutput, output);
+
+    EXPECT_EQ(NO_ERROR,
+              mManager->clearPreferredMixerAttributes(&mediaAttr, usbPortId, uid));
+    ASSERT_EQ(NO_ERROR, mManager->setDeviceConnectionState(AUDIO_DEVICE_OUT_USB_DEVICE,
+                                                           AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
+                                                           "", "", AUDIO_FORMAT_LDAC));
 }
 
 class AudioPolicyManagerTestDynamicPolicy : public AudioPolicyManagerTestWithConfigurationFile {
@@ -1143,9 +1393,6 @@ protected:
     std::map<audio_format_t, bool> getSurroundFormatsHelper();
     std::vector<audio_format_t> getReportedSurroundFormatsHelper();
     std::unordered_set<audio_format_t> getFormatsFromPorts();
-    AudioPolicyManagerTestClient* getClient() override {
-        return new AudioPolicyManagerTestClientForHdmi;
-    }
     void TearDown() override;
 
     static const std::string sTvConfig;
@@ -1873,7 +2120,7 @@ TEST_P(AudioPolicyManagerTestDeviceConnection, PassingExtraAudioDescriptors) {
     }
     const std::string name = std::get<1>(GetParam());
     const std::string address = std::get<2>(GetParam());
-    android::media::AudioPort audioPort;
+    android::media::AudioPortFw audioPort;
     ASSERT_EQ(NO_ERROR,
             mManager->deviceToAudioPort(type, address.c_str(), name.c_str(), &audioPort));
     android::media::audio::common::AudioPort& port = audioPort.hal;

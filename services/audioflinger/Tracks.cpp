@@ -440,7 +440,8 @@ Status AudioFlinger::TrackHandle::getVolumeShaperState(
     return Status::ok();
 }
 
-Status AudioFlinger::TrackHandle::getDualMonoMode(media::AudioDualMonoMode* _aidl_return)
+Status AudioFlinger::TrackHandle::getDualMonoMode(
+        media::audio::common::AudioDualMonoMode* _aidl_return)
 {
     audio_dual_mono_mode_t mode = AUDIO_DUAL_MONO_MODE_OFF;
     const status_t status = mTrack->getDualMonoMode(&mode)
@@ -453,7 +454,7 @@ Status AudioFlinger::TrackHandle::getDualMonoMode(media::AudioDualMonoMode* _aid
 }
 
 Status AudioFlinger::TrackHandle::setDualMonoMode(
-        media::AudioDualMonoMode mode)
+        media::audio::common::AudioDualMonoMode mode)
 {
     const auto localMonoMode = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioDualMonoMode_audio_dual_mono_mode_t(mode));
@@ -477,7 +478,7 @@ Status AudioFlinger::TrackHandle::setAudioDescriptionMixLevel(float leveldB)
 }
 
 Status AudioFlinger::TrackHandle::getPlaybackRateParameters(
-        media::AudioPlaybackRate* _aidl_return)
+        media::audio::common::AudioPlaybackRate* _aidl_return)
 {
     audio_playback_rate_t localPlaybackRate{};
     status_t status = mTrack->getPlaybackRateParameters(&localPlaybackRate)
@@ -490,7 +491,7 @@ Status AudioFlinger::TrackHandle::getPlaybackRateParameters(
 }
 
 Status AudioFlinger::TrackHandle::setPlaybackRateParameters(
-        const media::AudioPlaybackRate& playbackRate)
+        const media::audio::common::AudioPlaybackRate& playbackRate)
 {
     const audio_playback_rate_t localPlaybackRate = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioPlaybackRate_audio_playback_rate_t(playbackRate));
@@ -633,7 +634,8 @@ AudioFlinger::PlaybackThread::Track::Track(
             audio_port_handle_t portId,
             size_t frameCountToBeReady,
             float speed,
-            bool isSpatialized)
+            bool isSpatialized,
+            bool isBitPerfect)
     :   TrackBase(thread, client, attr, sampleRate, format, channelMask, frameCount,
                   // TODO: Using unsecurePointer() has some associated security pitfalls
                   //       (see declaration for details).
@@ -668,7 +670,8 @@ AudioFlinger::PlaybackThread::Track::Track(
     mFlushHwPending(false),
     mFlags(flags),
     mSpeed(speed),
-    mIsSpatialized(isSpatialized)
+    mIsSpatialized(isSpatialized),
+    mIsBitPerfect(isBitPerfect)
 {
     // client == 0 implies sharedBuffer == 0
     ALOG_ASSERT(!(client == 0 && sharedBuffer != 0));
@@ -790,7 +793,7 @@ void AudioFlinger::PlaybackThread::Track::appendDumpHeader(String8& result)
                         "  Format Chn mask  SRate "
                         "ST Usg CT "
                         " G db  L dB  R dB  VS dB "
-                        "  Server FrmCnt  FrmRdy F Underruns  Flushed"
+                        "  Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect"
                         "%s\n",
                         isServerLatencySupported() ? "   Latency" : "");
 }
@@ -876,7 +879,7 @@ void AudioFlinger::PlaybackThread::Track::appendDump(String8& result, bool activ
                         "%08X %08X %6u "
                         "%2u %3x %2x "
                         "%5.2g %5.2g %5.2g %5.2g%c "
-                        "%08X %6zu%c %6zu %c %9u%c %7u",
+                        "%08X %6zu%c %6zu %c %9u%c %7u %10s",
             active ? "yes" : "no",
             (mClient == 0) ? getpid() : mClient->pid(),
             mSessionId,
@@ -905,7 +908,8 @@ void AudioFlinger::PlaybackThread::Track::appendDump(String8& result, bool activ
             fillingStatus,
             mAudioTrackServerProxy->getUnderrunFrames(),
             nowInUnderrun,
-            (unsigned)mAudioTrackServerProxy->framesFlushed() % 10000000
+            (unsigned)mAudioTrackServerProxy->framesFlushed() % 10000000,
+            isBitPerfect() ? "true" : "false"
             );
 
     if (isServerLatencySupported()) {
@@ -1116,10 +1120,10 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
             mObservedUnderruns = playbackThread->getFastTrackUnderruns(mFastIndex);
         }
         status = playbackThread->addTrack_l(this);
-        if (status == INVALID_OPERATION || status == PERMISSION_DENIED) {
+        if (status == INVALID_OPERATION || status == PERMISSION_DENIED || status == DEAD_OBJECT) {
             triggerEvents(AudioSystem::SYNC_EVENT_PRESENTATION_COMPLETE);
             //  restore previous state if start was rejected by policy manager
-            if (status == PERMISSION_DENIED) {
+            if (status == PERMISSION_DENIED || status == DEAD_OBJECT) {
                 mState = state;
             }
         }
@@ -1158,6 +1162,23 @@ status_t AudioFlinger::PlaybackThread::Track::start(AudioSystem::sync_event_t ev
     }
     if (status == NO_ERROR) {
         forEachTeePatchTrack([](auto patchTrack) { patchTrack->start(); });
+
+        // send format to AudioManager for playback activity monitoring
+        sp<IAudioManager> audioManager = thread->mAudioFlinger->getOrCreateAudioManager();
+        if (audioManager && mPortId != AUDIO_PORT_HANDLE_NONE) {
+            std::unique_ptr<os::PersistableBundle> bundle =
+                    std::make_unique<os::PersistableBundle>();
+        bundle->putBoolean(String16(kExtraPlayerEventSpatializedKey),
+                           isSpatialized());
+        bundle->putInt(String16(kExtraPlayerEventSampleRateKey), mSampleRate);
+        bundle->putInt(String16(kExtraPlayerEventChannelMaskKey), mChannelMask);
+        status_t result = audioManager->portEvent(mPortId,
+                                                  PLAYER_UPDATE_FORMAT, bundle);
+        if (result != OK) {
+            ALOGE("%s: unable to send playback format for port ID %d, status error %d",
+                  __func__, mPortId, result);
+        }
+      }
     }
     return status;
 }
@@ -1360,25 +1381,7 @@ VolumeShaper::Status AudioFlinger::PlaybackThread::Track::applyVolumeShaper(
         const sp<VolumeShaper::Configuration>& configuration,
         const sp<VolumeShaper::Operation>& operation)
 {
-    sp<VolumeShaper::Configuration> newConfiguration;
-
-    if (isOffloadedOrDirect()) {
-        const VolumeShaper::Configuration::OptionFlag optionFlag
-            = configuration->getOptionFlags();
-        if ((optionFlag & VolumeShaper::Configuration::OPTION_FLAG_CLOCK_TIME) == 0) {
-            ALOGW("%s(%d): %s tracks do not support frame counted VolumeShaper,"
-                    " using clock time instead",
-                    __func__, mId,
-                    isOffloaded() ? "Offload" : "Direct");
-            newConfiguration = new VolumeShaper::Configuration(*configuration);
-            newConfiguration->setOptionFlags(
-                VolumeShaper::Configuration::OptionFlag(optionFlag
-                        | VolumeShaper::Configuration::OPTION_FLAG_CLOCK_TIME));
-        }
-    }
-
-    VolumeShaper::Status status = mVolumeHandler->applyVolumeShaper(
-            (newConfiguration.get() != nullptr ? newConfiguration : configuration), operation);
+    VolumeShaper::Status status = mVolumeHandler->applyVolumeShaper(configuration, operation);
 
     if (isOffloadedOrDirect()) {
         // Signal thread to fetch new volume.
@@ -1399,8 +1402,11 @@ sp<VolumeShaper::State> AudioFlinger::PlaybackThread::Track::getVolumeShaperStat
     return mVolumeHandler->getVolumeShaperState(id);
 }
 
-void AudioFlinger::PlaybackThread::Track::setFinalVolume(float volume)
+void AudioFlinger::PlaybackThread::Track::setFinalVolume(float volumeLeft, float volumeRight)
 {
+    mFinalVolumeLeft = volumeLeft;
+    mFinalVolumeRight = volumeRight;
+    const float volume = (volumeLeft + volumeRight) * 0.5f;
     if (mFinalVolume != volume) { // Compare to an epsilon if too many meaningless updates
         mFinalVolume = volume;
         setMetadataHasChanged();
