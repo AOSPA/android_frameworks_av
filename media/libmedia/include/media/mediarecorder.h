@@ -104,6 +104,7 @@ enum audio_encoder {
     AUDIO_ENCODER_QCELP = 11,
     AUDIO_ENCODER_LPCM = 12,
     AUDIO_ENCODER_MPEGH = 13,
+    AUDIO_ENCODER_HE_AAC_V2 = 14,
     AUDIO_ENCODER_LIST_END // must be the last - used to validate the audio encoder type
 };
 
