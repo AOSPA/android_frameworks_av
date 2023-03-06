@@ -221,7 +221,7 @@ protected:
 
     // Encoding parameter handling utilities
     status_t setParameter(const String8 &key, const String8 &value);
-    status_t setParamAudioEncodingBitRate(int32_t bitRate);
+    virtual status_t setParamAudioEncodingBitRate(int32_t bitRate);
     status_t setParamAudioNumberOfChannels(int32_t channles);
     status_t setParamAudioSamplingRate(int32_t sampleRate);
     status_t setParamAudioTimeScale(int32_t timeScale);
