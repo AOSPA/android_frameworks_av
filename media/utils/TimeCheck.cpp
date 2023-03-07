@@ -30,7 +30,6 @@
 
 namespace android::mediautils {
 
-uint32_t TimeCheck::sTimeOutMs = 0;
 /**
  * Returns the std::string "HH:MM:SS.MSc" from a system_clock time_point.
  */
@@ -135,9 +134,10 @@ TimerThread& TimeCheck::getTimeCheckThread() {
 }
 
 
-void TimeCheck::setSystemReadyTimeoutMs(uint32_t timeoutMs)
-{
-    sTimeOutMs = timeoutMs;
+static bool sSystemReady = false;
+
+void TimeCheck::setSystemReady() {
+    sSystemReady = true;
 }
 
 /* static */
@@ -153,7 +153,7 @@ TimeCheck::TimeCheck(std::string_view tag, OnTimerFunc&& onTimer, Duration reque
     : mTimeCheckHandler{ std::make_shared<TimeCheckHandler>(
             tag, std::move(onTimer), crashOnTimeout, requestedTimeoutDuration,
             secondChanceDuration, std::chrono::system_clock::now(), gettid()) }
-    , mTimerHandle(requestedTimeoutDuration.count() == 0
+    , mTimerHandle((requestedTimeoutDuration.count() == 0 || !sSystemReady)
               /* for TimeCheck we don't consider a non-zero secondChanceDuration here */
               ? getTimeCheckThread().trackTask(mTimeCheckHandler->tag)
               : getTimeCheckThread().scheduleTask(
