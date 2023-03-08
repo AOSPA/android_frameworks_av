@@ -26,7 +26,6 @@
 #include <media/AudioTimestamp.h>
 #include <media/MediaMetricsItem.h>
 #include <media/Modulo.h>
-#include <media/MicrophoneInfo.h>
 #include <media/RecordingActivityTracker.h>
 #include <utils/RefBase.h>
 #include <utils/threads.h>
@@ -592,10 +591,11 @@ public:
     /* Get parameters */
             String8     getParameters(const String8& keys);
 
-    /* Get active microphones. A empty vector of MicrophoneInfo will be passed as a parameter,
+    /* Get active microphones. A empty vector of MicrophoneInfoFw will be passed as a parameter,
      * the data will be filled when querying the hal.
      */
-            status_t    getActiveMicrophones(std::vector<media::MicrophoneInfo>* activeMicrophones);
+            status_t    getActiveMicrophones(
+                    std::vector<media::MicrophoneInfoFw>* activeMicrophones);
 
     /* Set the Microphone direction (for processing purposes).
      */

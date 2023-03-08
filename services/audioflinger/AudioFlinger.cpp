@@ -2860,7 +2860,7 @@ sp<IAudioManager> AudioFlinger::getOrCreateAudioManager()
     return mAudioManager.load();
 }
 
-status_t AudioFlinger::getMicrophones(std::vector<media::MicrophoneInfo> *microphones)
+status_t AudioFlinger::getMicrophones(std::vector<media::MicrophoneInfoFw> *microphones)
 {
     AutoMutex lock(mHardwareLock);
     status_t status = INVALID_OPERATION;
@@ -2873,8 +2873,12 @@ status_t AudioFlinger::getMicrophones(std::vector<media::MicrophoneInfo> *microp
         mHardwareStatus = AUDIO_HW_IDLE;
         if (devStatus == NO_ERROR) {
             // report success if at least one HW module supports the function.
-            std::transform(mics.begin(), mics.end(), std::back_inserter(*microphones),
-                           [](auto& mic) { return media::MicrophoneInfo(mic); });
+            std::transform(mics.begin(), mics.end(), std::back_inserter(*microphones), [](auto& mic)
+            {
+                auto microphone =
+                        legacy2aidl_audio_microphone_characteristic_t_MicrophoneInfoFw(mic);
+                return microphone.ok() ? microphone.value() : media::MicrophoneInfoFw{};
+            });
             status = NO_ERROR;
         }
     }

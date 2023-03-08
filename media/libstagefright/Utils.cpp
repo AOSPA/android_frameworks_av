@@ -803,6 +803,8 @@ static std::vector<std::pair<const char *, uint32_t>> int32Mappings {
         { "vendor.qti-ext-enc-nal-length-bs.num-bytes",  kKeyVendorFeatureNalLength },
         { "dvb-teletext-magazine-number", kKeyDvbTeletextMagazineNumber},
         { "dvb-teletext-page-number", kKeyDvbTeletextPageNumber},
+        { "profile", kKeyAudioProfile },
+        { "level", kKeyAudioLevel },
     }
 };
 

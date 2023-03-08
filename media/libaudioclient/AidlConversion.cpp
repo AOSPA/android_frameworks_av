@@ -724,11 +724,6 @@ aidl2legacy_AudioPortDeviceExt_audio_port_device_ext(
             aidl2legacy_AudioPortDeviceExt_audio_port_device_ext(aidl));
     legacy.hw_module = VALUE_OR_RETURN(
             aidl2legacy_int32_t_audio_module_handle_t(aidlSys.hwModule));
-    legacy.encapsulation_modes = VALUE_OR_RETURN(
-            aidl2legacy_AudioEncapsulationMode_mask(aidlSys.encapsulationModes));
-    legacy.encapsulation_metadata_types = VALUE_OR_RETURN(
-            aidl2legacy_AudioEncapsulationMetadataType_mask(
-                    aidlSys.encapsulationMetadataTypes));
     return legacy;
 }
 
@@ -738,10 +733,6 @@ status_t legacy2aidl_audio_port_device_ext_AudioPortDeviceExt(
     *aidl = VALUE_OR_RETURN_STATUS(legacy2aidl_audio_port_device_ext_AudioPortDeviceExt(legacy));
     aidlDeviceExt->hwModule = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_module_handle_t_int32_t(legacy.hw_module));
-    aidlDeviceExt->encapsulationModes = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_AudioEncapsulationMode_mask(legacy.encapsulation_modes));
-    aidlDeviceExt->encapsulationMetadataTypes = VALUE_OR_RETURN_STATUS(
-            legacy2aidl_AudioEncapsulationMetadataType_mask(legacy.encapsulation_metadata_types));
     return OK;
 }
 
@@ -990,4 +981,24 @@ ConversionResult<int32_t> legacy2aidl_audio_direct_mode_t_int32_t_mask(audio_dir
             indexToEnum_bitmask<audio_direct_mode_t>,
             enumToMask_index<int32_t, media::AudioDirectMode>);
 }
+
+ConversionResult<audio_microphone_characteristic_t>
+aidl2legacy_MicrophoneInfoFw_audio_microphone_characteristic_t(
+        const media::MicrophoneInfoFw& aidl) {
+    audio_microphone_characteristic_t legacy =
+            VALUE_OR_RETURN(aidl2legacy_MicrophoneInfos_audio_microphone_characteristic_t(
+                            aidl.info, aidl.dynamic));
+    legacy.id = VALUE_OR_RETURN(aidl2legacy_int32_t_audio_port_handle_t(aidl.portId));
+    return legacy;
+}
+ConversionResult<media::MicrophoneInfoFw>
+legacy2aidl_audio_microphone_characteristic_t_MicrophoneInfoFw(
+        const audio_microphone_characteristic_t& legacy) {
+    media::MicrophoneInfoFw aidl;
+    RETURN_IF_ERROR(legacy2aidl_audio_microphone_characteristic_t_MicrophoneInfos(
+                    legacy, &aidl.info, &aidl.dynamic));
+    aidl.portId = VALUE_OR_RETURN(legacy2aidl_audio_port_handle_t_int32_t(legacy.id));
+    return aidl;
+}
+
 }  // namespace android

@@ -1497,7 +1497,7 @@ binder::Status CameraDeviceClient::flush(
 
 binder::Status CameraDeviceClient::prepare(int streamId) {
     ATRACE_CALL();
-    ALOGV("%s", __FUNCTION__);
+    ALOGV("%s stream id %d", __FUNCTION__, streamId);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -1537,7 +1537,7 @@ binder::Status CameraDeviceClient::prepare(int streamId) {
 
 binder::Status CameraDeviceClient::prepare2(int maxCount, int streamId) {
     ATRACE_CALL();
-    ALOGV("%s", __FUNCTION__);
+    ALOGV("%s stream id %d", __FUNCTION__, streamId);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -1913,6 +1913,10 @@ binder::Status CameraDeviceClient::switchToOffline(
         mCompositeStreamMap.clear();
         mInputStream = {false, 0, 0, 0, 0};
     } else {
+        // In case we failed to register the offline client, ensure that it still initialized
+        // so that all failing requests can return back correctly once the object is released.
+        offlineClient->initialize(nullptr /*cameraProviderManager*/, String8()/*monitorTags*/);
+
         switch(ret) {
             case BAD_VALUE:
                 return STATUS_ERROR_FMT(CameraService::ERROR_ILLEGAL_ARGUMENT,
@@ -2066,6 +2070,7 @@ void CameraDeviceClient::notifyPrepared(int streamId) {
     // Thread safe. Don't bother locking.
     sp<hardware::camera2::ICameraDeviceCallbacks> remoteCb = getRemoteCallback();
     if (remoteCb != 0) {
+        ALOGV("%s: stream id %d", __FUNCTION__, streamId);
         remoteCb->onPrepared(streamId);
     }
 }
