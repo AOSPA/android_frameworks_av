@@ -281,7 +281,7 @@ public:
             bool isAudioPolicyReady() const { return mAudioPolicyReady.load(); }
 
 
-    virtual status_t getMicrophones(std::vector<media::MicrophoneInfo> *microphones);
+    virtual status_t getMicrophones(std::vector<media::MicrophoneInfoFw> *microphones);
 
     virtual status_t setAudioHalPids(const std::vector<pid_t>& pids);
 
@@ -726,7 +726,7 @@ using effect_buffer_t = int16_t;
                 int /*audio_session_t*/ triggerSession);
         virtual binder::Status   stop();
         virtual binder::Status   getActiveMicrophones(
-                std::vector<media::MicrophoneInfoData>* activeMicrophones);
+                std::vector<media::MicrophoneInfoFw>* activeMicrophones);
         virtual binder::Status   setPreferredMicrophoneDirection(
                 int /*audio_microphone_direction_t*/ direction);
         virtual binder::Status   setPreferredMicrophoneFieldDimension(float zoom);
@@ -757,6 +757,7 @@ using effect_buffer_t = int16_t;
                                audio_port_handle_t *handle);
         virtual status_t stop(audio_port_handle_t handle);
         virtual status_t standby();
+                status_t reportData(const void* buffer, size_t frameCount) override;
 
     private:
         const sp<MmapThread> mThread;

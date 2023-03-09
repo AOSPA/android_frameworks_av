@@ -1936,7 +1936,7 @@ AudioSystem::getStreamVolumeDB(audio_stream_type_t stream, int index, audio_devi
     return result.value_or(NAN);
 }
 
-status_t AudioSystem::getMicrophones(std::vector<media::MicrophoneInfo>* microphones) {
+status_t AudioSystem::getMicrophones(std::vector<media::MicrophoneInfoFw>* microphones) {
     const sp<IAudioFlinger>& af = AudioSystem::get_audio_flinger();
     if (af == 0) return PERMISSION_DENIED;
     return af->getMicrophones(microphones);
@@ -2136,8 +2136,7 @@ audio_stream_type_t AudioSystem::attributesToStreamType(const audio_attributes_t
         if (strategy.getId() == psId) {
             auto attrVect = strategy.getVolumeGroupAttributes();
             auto iter = std::find_if(begin(attrVect), end(attrVect), [&attr](const auto& refAttr) {
-                return AudioProductStrategy::attributesMatches(
-                        refAttr.getAttributes(), attr);
+                return refAttr.matchesScore(attr) > 0;
             });
             if (iter != end(attrVect)) {
                 return iter->getStreamType();

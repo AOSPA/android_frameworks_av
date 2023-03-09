@@ -1959,7 +1959,7 @@ void Camera3Device::notifyStatus(bool idle) {
                     streamUseCase = camera3Stream->getStreamUseCase();
                 }
                 streamStats.emplace_back(stream->getWidth(), stream->getHeight(),
-                    stream->getFormat(), streamMaxPreviewFps, stream->getDataSpace(), usage,
+                    stream->getOriginalFormat(), streamMaxPreviewFps, stream->getDataSpace(), usage,
                     stream->getMaxHalBuffers(),
                     stream->getMaxTotalBuffers() - stream->getMaxHalBuffers(),
                     stream->getDynamicRangeProfile(), streamUseCase,
@@ -4961,7 +4961,8 @@ status_t Camera3Device::PreparerThread::prepare(int maxCount, sp<Camera3StreamIn
     }
 
     // queue up the work
-    mPendingStreams.emplace(maxCount, stream);
+    mPendingStreams.push_back(
+            std::tuple<int, sp<camera3::Camera3StreamInterface>>(maxCount, stream));
     ALOGV("%s: Stream %d queued for preparing", __FUNCTION__, stream->getId());
 
     return OK;
@@ -4972,8 +4973,8 @@ void Camera3Device::PreparerThread::pause() {
 
     Mutex::Autolock l(mLock);
 
-    std::unordered_map<int, sp<camera3::Camera3StreamInterface> > pendingStreams;
-    pendingStreams.insert(mPendingStreams.begin(), mPendingStreams.end());
+    std::list<std::tuple<int, sp<camera3::Camera3StreamInterface>>> pendingStreams;
+    pendingStreams.insert(pendingStreams.begin(), mPendingStreams.begin(), mPendingStreams.end());
     sp<camera3::Camera3StreamInterface> currentStream = mCurrentStream;
     int currentMaxCount = mCurrentMaxCount;
     mPendingStreams.clear();
@@ -4994,18 +4995,19 @@ void Camera3Device::PreparerThread::pause() {
     //of the streams in the pending list.
     if (currentStream != nullptr) {
         if (!mCurrentPrepareComplete) {
-            pendingStreams.emplace(currentMaxCount, currentStream);
+            pendingStreams.push_back(std::tuple(currentMaxCount, currentStream));
         }
     }
 
-    mPendingStreams.insert(pendingStreams.begin(), pendingStreams.end());
+    mPendingStreams.insert(mPendingStreams.begin(), pendingStreams.begin(), pendingStreams.end());
     for (const auto& it : mPendingStreams) {
-        it.second->cancelPrepare();
+        std::get<1>(it)->cancelPrepare();
     }
 }
 
 status_t Camera3Device::PreparerThread::resume() {
     ATRACE_CALL();
+    ALOGV("%s: PreparerThread", __FUNCTION__);
     status_t res;
 
     Mutex::Autolock l(mLock);
@@ -5018,10 +5020,10 @@ status_t Camera3Device::PreparerThread::resume() {
 
     auto it = mPendingStreams.begin();
     for (; it != mPendingStreams.end();) {
-        res = it->second->startPrepare(it->first, true /*blockRequest*/);
+        res = std::get<1>(*it)->startPrepare(std::get<0>(*it), true /*blockRequest*/);
         if (res == OK) {
             if (listener != NULL) {
-                listener->notifyPrepared(it->second->getId());
+                listener->notifyPrepared(std::get<1>(*it)->getId());
             }
             it = mPendingStreams.erase(it);
         } else if (res != NOT_ENOUGH_DATA) {
@@ -5055,7 +5057,7 @@ status_t Camera3Device::PreparerThread::clear() {
     Mutex::Autolock l(mLock);
 
     for (const auto& it : mPendingStreams) {
-        it.second->cancelPrepare();
+        std::get<1>(it)->cancelPrepare();
     }
     mPendingStreams.clear();
     mCancelNow = true;
@@ -5086,8 +5088,8 @@ bool Camera3Device::PreparerThread::threadLoop() {
 
             // Get next stream to prepare
             auto it = mPendingStreams.begin();
-            mCurrentStream = it->second;
-            mCurrentMaxCount = it->first;
+            mCurrentMaxCount = std::get<0>(*it);
+            mCurrentStream = std::get<1>(*it);
             mCurrentPrepareComplete = false;
             mPendingStreams.erase(it);
             ATRACE_ASYNC_BEGIN("stream prepare", mCurrentStream->getId());
