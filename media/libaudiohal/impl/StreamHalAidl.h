@@ -43,24 +43,28 @@ class StreamContextAidl {
             ::aidl::android::hardware::common::fmq::SynchronizedReadWrite> DataMQ;
 
     explicit StreamContextAidl(
-            const ::aidl::android::hardware::audio::core::StreamDescriptor& descriptor)
+            const ::aidl::android::hardware::audio::core::StreamDescriptor& descriptor,
+            bool isAsynchronous)
         : mFrameSizeBytes(descriptor.frameSizeBytes),
           mCommandMQ(new CommandMQ(descriptor.command)),
           mReplyMQ(new ReplyMQ(descriptor.reply)),
           mBufferSizeFrames(descriptor.bufferSizeFrames),
-          mDataMQ(maybeCreateDataMQ(descriptor)) {}
+          mDataMQ(maybeCreateDataMQ(descriptor)),
+          mIsAsynchronous(isAsynchronous) {}
     StreamContextAidl(StreamContextAidl&& other) :
             mFrameSizeBytes(other.mFrameSizeBytes),
             mCommandMQ(std::move(other.mCommandMQ)),
             mReplyMQ(std::move(other.mReplyMQ)),
             mBufferSizeFrames(other.mBufferSizeFrames),
-            mDataMQ(std::move(other.mDataMQ)) {}
+            mDataMQ(std::move(other.mDataMQ)),
+            mIsAsynchronous(other.mIsAsynchronous) {}
     StreamContextAidl& operator=(StreamContextAidl&& other) {
         mFrameSizeBytes = other.mFrameSizeBytes;
         mCommandMQ = std::move(other.mCommandMQ);
         mReplyMQ = std::move(other.mReplyMQ);
         mBufferSizeFrames = other.mBufferSizeFrames;
         mDataMQ = std::move(other.mDataMQ);
+        mIsAsynchronous = other.mIsAsynchronous;
         return *this;
     }
     bool isValid() const {
@@ -78,6 +82,7 @@ class StreamContextAidl {
     DataMQ* getDataMQ() const { return mDataMQ.get(); }
     size_t getFrameSizeBytes() const { return mFrameSizeBytes; }
     ReplyMQ* getReplyMQ() const { return mReplyMQ.get(); }
+    bool isAsynchronous() const { return mIsAsynchronous; }
 
   private:
     static std::unique_ptr<DataMQ> maybeCreateDataMQ(
@@ -94,6 +99,7 @@ class StreamContextAidl {
     std::unique_ptr<ReplyMQ> mReplyMQ;
     size_t mBufferSizeFrames;
     std::unique_ptr<DataMQ> mDataMQ;
+    bool mIsAsynchronous;
 };
 
 class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelperAidl {
@@ -328,7 +334,7 @@ class StreamInHalAidl : public StreamInHalInterface, public StreamHalAidl {
     status_t getCapturePosition(int64_t *frames, int64_t *time) override;
 
     // Get active microphones
-    status_t getActiveMicrophones(std::vector<media::MicrophoneInfo> *microphones) override;
+    status_t getActiveMicrophones(std::vector<media::MicrophoneInfoFw> *microphones) override;
 
     // Set microphone direction (for processing)
     status_t setPreferredMicrophoneDirection(

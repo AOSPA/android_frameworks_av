@@ -24,6 +24,7 @@
 #include <media/AidlConversionNdk.h>
 #include <media/AidlConversionEffect.h>
 #include <media/audiohal/AudioEffectUuid.h>
+#include <system/audio_effects/aidl_effects_utils.h>
 #include <system/audio_effects/effect_bassboost.h>
 
 #include <utils/Log.h>
@@ -37,6 +38,7 @@ using ::aidl::android::convertIntegral;
 using ::aidl::android::aidl_utils::statusTFromBinderStatus;
 using ::aidl::android::hardware::audio::effect::BassBoost;
 using ::aidl::android::hardware::audio::effect::Parameter;
+using ::aidl::android::hardware::audio::effect::Range;
 using ::android::status_t;
 using utils::EffectParamReader;
 using utils::EffectParamWriter;
@@ -80,7 +82,7 @@ status_t AidlConversionBassBoost::getParameter(EffectParamWriter& param) {
     Parameter aidlParam;
     switch (type) {
         case BASSBOOST_PARAM_STRENGTH: {
-            uint32_t value;
+            uint16_t value;
             Parameter::Id id =
                     MAKE_SPECIFIC_PARAMETER_ID(BassBoost, bassBoostTag, BassBoost::strengthPm);
             RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mEffect->getParameter(id, &aidlParam)));
@@ -89,10 +91,10 @@ status_t AidlConversionBassBoost::getParameter(EffectParamWriter& param) {
             return param.writeToValue(&value);
         }
         case BASSBOOST_PARAM_STRENGTH_SUPPORTED: {
-            uint16_t value;
-            const auto& cap =
-                    VALUE_OR_RETURN_STATUS(aidl::android::UNION_GET(mDesc.capability, bassBoost));
-            value = VALUE_OR_RETURN_STATUS(convertIntegral<uint32_t>(cap.strengthSupported));
+            // an invalid range indicates not setting support for this parameter
+            uint32_t value =
+                    ::aidl::android::hardware::audio::effect::isRangeValid<Range::Tag::bassBoost>(
+                            BassBoost::strengthPm, mDesc.capability);
             return param.writeToValue(&value);
         }
         default: {

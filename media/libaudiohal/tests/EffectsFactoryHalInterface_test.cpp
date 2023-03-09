@@ -27,12 +27,14 @@
 #include <media/audiohal/EffectsFactoryHalInterface.h>
 #include <system/audio_effects/audio_effects_utils.h>
 #include <system/audio_effects/effect_aec.h>
+#include <system/audio_effects/effect_agc.h>
 #include <system/audio_effects/effect_agc2.h>
 #include <system/audio_effects/effect_bassboost.h>
 #include <system/audio_effects/effect_downmix.h>
 #include <system/audio_effects/effect_dynamicsprocessing.h>
 #include <system/audio_effects/effect_hapticgenerator.h>
 #include <system/audio_effects/effect_loudnessenhancer.h>
+#include <system/audio_effects/effect_ns.h>
 #include <system/audio_effect.h>
 
 #include <gtest/gtest.h>
@@ -149,10 +151,16 @@ enum ParamName { TUPLE_UUID, TUPLE_PARAM_COMBINATION };
 using EffectParamTestTuple =
         std::tuple<const effect_uuid_t* /* type UUID */, std::shared_ptr<EffectParamCombination>>;
 
+static const effect_uuid_t EXTEND_EFFECT_TYPE_UUID = {
+        0xfa81dbde, 0x588b, 0x11ed, 0x9b6a, {0x02, 0x42, 0xac, 0x12, 0x00, 0x02}};
+
 std::vector<EffectParamTestTuple> testPairs = {
         std::make_tuple(FX_IID_AEC,
                         createEffectParamCombination(AEC_PARAM_ECHO_DELAY, 0xff /* echoDelayMs */,
                                                      sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(FX_IID_AGC,
+                        createEffectParamCombination(AGC_PARAM_TARGET_LEVEL, 20 /* targetLevel */,
+                                                     sizeof(int16_t) /* returnValueSize */)),
         std::make_tuple(FX_IID_AGC2, createEffectParamCombination(
                                              AGC2_PARAM_FIXED_DIGITAL_GAIN, 15 /* digitalGainDb */,
                                              sizeof(int32_t) /* returnValueSize */)),
@@ -161,7 +169,7 @@ std::vector<EffectParamTestTuple> testPairs = {
                                                      sizeof(int32_t) /* returnValueSize */)),
         std::make_tuple(EFFECT_UIID_DOWNMIX,
                         createEffectParamCombination(DOWNMIX_PARAM_TYPE, DOWNMIX_TYPE_FOLD,
-                                                     sizeof(int32_t) /* returnValueSize */)),
+                                                     sizeof(int16_t) /* returnValueSize */)),
         std::make_tuple(SL_IID_DYNAMICSPROCESSING,
                         createEffectParamCombination(
                                 std::array<uint32_t, 2>({DP_PARAM_INPUT_GAIN, 0 /* channel */}),
@@ -176,7 +184,12 @@ std::vector<EffectParamTestTuple> testPairs = {
         std::make_tuple(
                 FX_IID_LOUDNESS_ENHANCER,
                 createEffectParamCombination(LOUDNESS_ENHANCER_PARAM_TARGET_GAIN_MB, 5 /* gain */,
-                                             sizeof(int32_t) /* returnValueSize */))};
+                                             sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(FX_IID_NS,
+                        createEffectParamCombination(NS_PARAM_LEVEL, 1 /* level */,
+                                                     sizeof(int32_t) /* returnValueSize */)),
+        std::make_tuple(&EXTEND_EFFECT_TYPE_UUID,
+                        createEffectParamCombination(1, 0xbead, sizeof(int32_t)))};
 
 class libAudioHalEffectParamTest : public ::testing::TestWithParam<EffectParamTestTuple> {
   public:
@@ -200,6 +213,7 @@ class libAudioHalEffectParamTest : public ::testing::TestWithParam<EffectParamTe
           }()) {}
 
     void SetUp() override {
+        ASSERT_NE(0ul, mDescs.size());
         for (const auto& desc : mDescs) {
             sp<EffectHalInterface> interface = createEffectHal(desc);
             ASSERT_NE(nullptr, interface);
@@ -254,7 +268,8 @@ class libAudioHalEffectParamTest : public ::testing::TestWithParam<EffectParamTe
         if (mCombination->valueSize) {
             std::vector<uint8_t> response(mCombination->valueSize);
             EXPECT_EQ(OK, parameterGet.readFromValue(response.data(), mCombination->valueSize))
-                << parameterGet.toString();
+                    << " try get valueSize " << mCombination->valueSize << " from "
+                    << parameterGet.toString();
             EXPECT_EQ(response, mExpectedValue);
         }
     }

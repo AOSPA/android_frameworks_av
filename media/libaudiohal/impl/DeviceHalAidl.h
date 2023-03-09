@@ -183,7 +183,7 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
             const ::aidl::android::media::audio::common::AudioPortConfig& p);
     status_t createPortConfig(
             const ::aidl::android::media::audio::common::AudioPortConfig& requestedPortConfig,
-            ::aidl::android::media::audio::common::AudioPortConfig* appliedPortConfig);
+            PortConfigs::iterator* result);
     status_t findOrCreatePatch(
         const std::set<int32_t>& sourcePortConfigIds,
         const std::set<int32_t>& sinkPortConfigIds,
@@ -254,7 +254,6 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
     int32_t mDefaultOutputPortId = -1;
     PortConfigs mPortConfigs;
     Patches mPatches;
-    std::map<audio_patch_handle_t, int32_t /*patch ID*/> mFwkHandles;
     std::mutex mLock;
     std::map<void*, Callbacks> mCallbacks GUARDED_BY(mLock);
 };

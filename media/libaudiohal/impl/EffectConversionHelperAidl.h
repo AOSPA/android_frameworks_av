@@ -30,6 +30,10 @@ class EffectConversionHelperAidl {
     status_t handleCommand(uint32_t cmdCode, uint32_t cmdSize, void* pCmdData, uint32_t* replySize,
                            void* pReplyData);
     virtual ~EffectConversionHelperAidl() {}
+    const ::aidl::android::hardware::audio::effect::IEffect::OpenEffectReturn&
+    getEffectReturnParam() const {
+        return mOpenReturn;
+    }
 
   protected:
     const int32_t mSessionId;
@@ -92,12 +96,20 @@ class EffectConversionHelperAidl {
                              void* pReplyData);
     status_t handleSetOffload(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                               void* pReplyData);
-    status_t handleFirstPriority(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
-                                 void* pReplyData);
+    status_t handleVisualizerCapture(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
+                                     void* pReplyData);
+    status_t handleVisualizerMeasure(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
+                                     void* pReplyData);
 
     // implemented by conversion of each effect
     virtual status_t setParameter(utils::EffectParamReader& param) = 0;
     virtual status_t getParameter(utils::EffectParamWriter& param) = 0;
+    virtual status_t visualizerCapture(uint32_t* replySize __unused, void* pReplyData __unused) {
+        return BAD_VALUE;
+    }
+    virtual status_t visualizerMeasure(uint32_t* replySize __unused, void* pReplyData __unused) {
+        return BAD_VALUE;
+    }
 };
 
 }  // namespace effect

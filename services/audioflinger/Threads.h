@@ -1991,7 +1991,8 @@ public:
             // Sets the UID records silence
             void        setRecordSilenced(audio_port_handle_t portId, bool silenced);
 
-            status_t    getActiveMicrophones(std::vector<media::MicrophoneInfo>* activeMicrophones);
+            status_t    getActiveMicrophones(
+                    std::vector<media::MicrophoneInfoFw>* activeMicrophones);
 
             status_t    setPreferredMicrophoneDirection(audio_microphone_direction_t direction);
             status_t    setPreferredMicrophoneFieldDimension(float zoom);
@@ -2138,6 +2139,7 @@ class MmapThread : public ThreadBase
     status_t stop(audio_port_handle_t handle);
     status_t standby();
     virtual status_t getExternalPosition(uint64_t *position, int64_t *timeNaos) = 0;
+    virtual status_t reportData(const void* buffer, size_t frameCount);
 
     // RefBase
     virtual     void        onFirstRef();
@@ -2279,6 +2281,8 @@ public:
     virtual     bool        isStreamInitialized() {
                                 return !(mOutput == nullptr || mOutput->stream == nullptr);
                             }
+
+                status_t    reportData(const void* buffer, size_t frameCount) override;
 
 protected:
                 void        dumpInternals_l(int fd, const Vector<String16>& args) override;
