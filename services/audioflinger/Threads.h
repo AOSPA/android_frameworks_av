@@ -1035,6 +1035,8 @@ public:
                             }
 
                 bool        isTimestampCorrectionEnabled() const override {
+	                            // Is currently disabled. Before enabling,
+	                            // verify compressed record timestamps.
                                 return audio_is_output_devices(mTimestampCorrectedDevice)
                                         && outDeviceTypes().count(mTimestampCorrectedDevice) != 0;
                             }
