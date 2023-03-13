@@ -17,46 +17,123 @@
 #define LOG_TAG "EffectHalAidl"
 //#define LOG_NDEBUG 0
 
+#include <memory>
+
 #include <error/expected_utils.h>
 #include <media/AidlConversionCppNdk.h>
-#include <media/AidlConversionNdk.h>
+#include <media/AidlConversionEffect.h>
 #include <media/AidlConversionUtil.h>
+#include <media/audiohal/AudioEffectUuid.h>
 #include <media/EffectsFactoryApi.h>
 #include <mediautils/TimeCheck.h>
+#include <system/audio.h>
 #include <utils/Log.h>
-
-#include <system/audio_effects/effect_aec.h>
-#include <system/audio_effects/effect_downmix.h>
-#include <system/audio_effects/effect_dynamicsprocessing.h>
-#include <system/audio_effects/effect_hapticgenerator.h>
-#include <system/audio_effects/effect_ns.h>
-#include <system/audio_effects/effect_spatializer.h>
-#include <system/audio_effects/effect_visualizer.h>
 
 #include "EffectHalAidl.h"
 
-#include <system/audio.h>
 #include <aidl/android/hardware/audio/effect/IEffect.h>
+
+#include "effectsAidlConversion/AidlConversionAec.h"
+#include "effectsAidlConversion/AidlConversionAgc2.h"
+#include "effectsAidlConversion/AidlConversionBassBoost.h"
+#include "effectsAidlConversion/AidlConversionDownmix.h"
+#include "effectsAidlConversion/AidlConversionDynamicsProcessing.h"
+#include "effectsAidlConversion/AidlConversionEnvReverb.h"
+#include "effectsAidlConversion/AidlConversionEq.h"
+#include "effectsAidlConversion/AidlConversionHapticGenerator.h"
+#include "effectsAidlConversion/AidlConversionLoudnessEnhancer.h"
+#include "effectsAidlConversion/AidlConversionNoiseSuppression.h"
+#include "effectsAidlConversion/AidlConversionPresetReverb.h"
+#include "effectsAidlConversion/AidlConversionSpatializer.h"
+#include "effectsAidlConversion/AidlConversionVendorExtension.h"
+#include "effectsAidlConversion/AidlConversionVirtualizer.h"
+#include "effectsAidlConversion/AidlConversionVisualizer.h"
 
 using ::aidl::android::aidl_utils::statusTFromBinderStatus;
 using ::aidl::android::hardware::audio::effect::CommandId;
 using ::aidl::android::hardware::audio::effect::Descriptor;
 using ::aidl::android::hardware::audio::effect::IEffect;
+using ::aidl::android::hardware::audio::effect::IFactory;
 using ::aidl::android::hardware::audio::effect::Parameter;
 
 namespace android {
 namespace effect {
 
-EffectHalAidl::EffectHalAidl(const std::shared_ptr<IEffect>& effect, uint64_t effectId,
-                             int32_t sessionId, int32_t ioId, const Descriptor& desc)
-    : EffectConversionHelperAidl(effect, sessionId, ioId, desc.common.id.type),
+EffectHalAidl::EffectHalAidl(
+        const std::shared_ptr<::aidl::android::hardware::audio::effect::IFactory>& factory,
+        const std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect>& effect,
+        uint64_t effectId, int32_t sessionId, int32_t ioId,
+        const ::aidl::android::hardware::audio::effect::Descriptor& desc)
+    : mFactory(factory),
+      mEffect(effect),
       mEffectId(effectId),
       mSessionId(sessionId),
       mIoId(ioId),
-      mEffect(effect),
-      mDesc(desc) {}
+      mDesc(desc) {
+    createAidlConversion(effect, sessionId, ioId, desc);
+}
 
-EffectHalAidl::~EffectHalAidl() {}
+EffectHalAidl::~EffectHalAidl() {
+    if (mFactory) {
+        mFactory->destroyEffect(mEffect);
+    }
+}
+
+status_t EffectHalAidl::createAidlConversion(
+        std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect> effect,
+        int32_t sessionId, int32_t ioId,
+        const ::aidl::android::hardware::audio::effect::Descriptor& desc) {
+    const auto& typeUuid = desc.common.id.type;
+    ALOGI("%s create UUID %s", __func__, typeUuid.toString().c_str());
+    if (typeUuid == kAcousticEchoCancelerTypeUUID) {
+        mConversion =
+                std::make_unique<android::effect::AidlConversionAec>(effect, sessionId, ioId, desc);
+    } else if (typeUuid == kAutomaticGainControl2TypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionAgc2>(effect, sessionId, ioId,
+                                                                            desc);
+    } else if (typeUuid == kBassBoostTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionBassBoost>(effect, sessionId,
+                                                                                 ioId, desc);
+    } else if (typeUuid == kDownmixTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionDownmix>(effect, sessionId,
+                                                                               ioId, desc);
+    } else if (typeUuid == kDynamicsProcessingTypeUUID) {
+        mConversion =
+                std::make_unique<android::effect::AidlConversionDp>(effect, sessionId, ioId, desc);
+    } else if (typeUuid == kEnvReverbTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionEnvReverb>(effect, sessionId,
+                                                                                 ioId, desc);
+    } else if (typeUuid == kEqualizerTypeUUID) {
+        mConversion =
+                std::make_unique<android::effect::AidlConversionEq>(effect, sessionId, ioId, desc);
+    } else if (typeUuid == kHapticGeneratorTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionHapticGenerator>(
+                effect, sessionId, ioId, desc);
+    } else if (typeUuid == kLoudnessEnhancerTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionLoudnessEnhancer>(
+                effect, sessionId, ioId, desc);
+    } else if (typeUuid == kNoiseSuppressionTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionNoiseSuppression>(
+                effect, sessionId, ioId, desc);
+    } else if (typeUuid == kPresetReverbTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionPresetReverb>(
+                effect, sessionId, ioId, desc);
+    } else if (typeUuid == kSpatializerTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionSpatializer>(
+                effect, sessionId, ioId, desc);
+    } else if (typeUuid == kVirtualizerTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionVirtualizer>(
+                effect, sessionId, ioId, desc);
+    } else if (typeUuid == kVisualizerTypeUUID) {
+        mConversion = std::make_unique<android::effect::AidlConversionVisualizer>(effect, sessionId,
+                                                                                  ioId, desc);
+    } else {
+        // For unknown UUID, use vendor extension implementation
+        mConversion = std::make_unique<android::effect::AidlConversionVendorExtension>(
+                effect, sessionId, ioId, desc);
+    }
+    return OK;
+}
 
 status_t EffectHalAidl::setInBuffer(const sp<EffectBufferHalInterface>& buffer) {
     if (buffer == nullptr) {
@@ -88,7 +165,9 @@ status_t EffectHalAidl::processReverse() {
 
 status_t EffectHalAidl::command(uint32_t cmdCode, uint32_t cmdSize, void* pCmdData,
                                 uint32_t* replySize, void* pReplyData) {
-    return handleCommand(cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+    return mConversion
+                   ? mConversion->handleCommand(cmdCode, cmdSize, pCmdData, replySize, pReplyData)
+                   : INVALID_OPERATION;
 }
 
 status_t EffectHalAidl::getDescriptor(effect_descriptor_t* pDescriptor) {
@@ -105,8 +184,7 @@ status_t EffectHalAidl::getDescriptor(effect_descriptor_t* pDescriptor) {
 }
 
 status_t EffectHalAidl::close() {
-    RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mEffect->close()));
-    return OK;
+    return statusTFromBinderStatus(mEffect->close());
 }
 
 status_t EffectHalAidl::dump(int fd) {

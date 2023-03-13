@@ -149,11 +149,10 @@ TimerThread& TimeCheck::getTimeCheckThread() {
     return sTimeCheckThread;
 }
 
-static uint32_t timeOutMs = TimeCheck::kDefaultTimeoutDuration.count();
+static bool sSystemReady = false;
 
-void TimeCheck::setSystemReadyTimeoutMs(uint32_t timeout_ms)
-{
-    timeOutMs = timeout_ms;
+void TimeCheck::setSystemReady() {
+    sSystemReady = true;
 }
 
 /* static */
@@ -169,7 +168,7 @@ TimeCheck::TimeCheck(std::string_view tag, OnTimerFunc&& onTimer, Duration reque
     : mTimeCheckHandler{ std::make_shared<TimeCheckHandler>(
             tag, std::move(onTimer), crashOnTimeout, requestedTimeoutDuration,
             secondChanceDuration, std::chrono::system_clock::now(), getThreadIdWrapper()) }
-    , mTimerHandle(requestedTimeoutDuration.count() == 0
+    , mTimerHandle((requestedTimeoutDuration.count() == 0 || !sSystemReady)
               /* for TimeCheck we don't consider a non-zero secondChanceDuration here */
               ? getTimeCheckThread().trackTask(mTimeCheckHandler->tag)
               : getTimeCheckThread().scheduleTask(

@@ -16,47 +16,53 @@
 
 #pragma once
 
-#include <cstddef>
-#include <map>
-#include <memory>
 #include <utils/Errors.h>
 
-#include <aidl/android/hardware/audio/effect/IEffect.h>
-
-#include <media/AidlConversionNdk.h>
+#include <aidl/android/hardware/audio/effect/BpEffect.h>
 #include <system/audio_effect.h>
-#include <system/audio_effects/effect_aec.h>
-#include <system/audio_effects/effect_downmix.h>
-#include <system/audio_effects/effect_dynamicsprocessing.h>
-#include <system/audio_effects/effect_hapticgenerator.h>
-#include <system/audio_effects/effect_ns.h>
-#include <system/audio_effects/effect_visualizer.h>
+#include <system/audio_effects/audio_effects_utils.h>
 
 namespace android {
 namespace effect {
 
-static const size_t kEffectParamSize = sizeof(effect_param_t);
-static const size_t kEffectConfigSize = sizeof(effect_config_t);
-
 class EffectConversionHelperAidl {
-  protected:
-    EffectConversionHelperAidl(
-            std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect> effect,
-            int32_t sessionId, int32_t ioId, ::aidl::android::media::audio::common::AudioUuid uuid)
-        : mSessionId(sessionId),
-          mIoId(ioId),
-          mTypeUuid(std::move(uuid)),
-          mEffect(std::move(effect)) {}
-
+  public:
     status_t handleCommand(uint32_t cmdCode, uint32_t cmdSize, void* pCmdData, uint32_t* replySize,
                            void* pReplyData);
+    virtual ~EffectConversionHelperAidl() {}
 
-  private:
+  protected:
     const int32_t mSessionId;
     const int32_t mIoId;
-    ::aidl::android::media::audio::common::AudioUuid mTypeUuid;
+    const ::aidl::android::hardware::audio::effect::Descriptor mDesc;
     const std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect> mEffect;
+    ::aidl::android::hardware::audio::effect::IEffect::OpenEffectReturn mOpenReturn;
+    ::aidl::android::hardware::audio::effect::Parameter::Common mCommon;
 
+    EffectConversionHelperAidl(
+            std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect> effect,
+            int32_t sessionId, int32_t ioId,
+            const ::aidl::android::hardware::audio::effect::Descriptor& desc);
+
+    status_t handleSetParameter(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
+                                void* pReplyData);
+    status_t handleGetParameter(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
+                                void* pReplyData);
+
+  private:
+    const aidl::android::media::audio::common::AudioFormatDescription kDefaultFormatDescription = {
+            .type = aidl::android::media::audio::common::AudioFormatType::PCM,
+            .pcm = aidl::android::media::audio::common::PcmType::FLOAT_32_BIT};
+
+    static constexpr int kDefaultframeCount = 0x100;
+
+    using AudioChannelLayout = aidl::android::media::audio::common::AudioChannelLayout;
+    const aidl::android::media::audio::common::AudioConfig kDefaultAudioConfig = {
+            .base = {.sampleRate = 44100,
+                     .channelMask = AudioChannelLayout::make<AudioChannelLayout::layoutMask>(
+                             AudioChannelLayout::LAYOUT_STEREO),
+                     .format = kDefaultFormatDescription},
+            .frameCount = kDefaultframeCount};
     // command handler map
     typedef status_t (EffectConversionHelperAidl::*CommandHandler)(uint32_t /* cmdSize */,
                                                                    const void* /* pCmdData */,
@@ -64,30 +70,8 @@ class EffectConversionHelperAidl {
                                                                    void* /* pReplyData */);
     static const std::map<uint32_t /* effect_command_e */, CommandHandler> mCommandHandlerMap;
 
-    // parameter set/get handler map
-    typedef status_t (EffectConversionHelperAidl::*SetParameter)(const effect_param_t& param);
-    typedef status_t (EffectConversionHelperAidl::*GetParameter)(effect_param_t& param);
-    static const std::map<::aidl::android::media::audio::common::AudioUuid /* TypeUUID */,
-                          std::pair<SetParameter, GetParameter>>
-            mParameterHandlerMap;
-
-    // align to 32 bit boundary
-    static constexpr size_t padding(size_t size) {
-        return ((size - 1) / sizeof(int) + 1) * sizeof(int);
-    }
-    static constexpr bool validatePVsize(const effect_param_t& param, size_t p, size_t v) {
-        return padding(param.psize) == p && param.vsize == v;
-    }
-    static constexpr bool validateCommandSize(const effect_param_t& param, size_t size) {
-        return padding(param.psize) + param.vsize + kEffectParamSize <= size;
-    }
-
     status_t handleInit(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                         void* pReplyData);
-    status_t handleSetParameter(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
-                                void* pReplyData);
-    status_t handleGetParameter(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
-                                void* pReplyData);
     status_t handleSetConfig(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                              void* pReplyData);
     status_t handleGetConfig(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
@@ -98,6 +82,10 @@ class EffectConversionHelperAidl {
                            void* pReplyData);
     status_t handleReset(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                          void* pReplyData);
+    status_t handleSetAudioSource(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
+                                  void* pReplyData);
+    status_t handleSetAudioMode(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
+                                void* pReplyData);
     status_t handleSetDevice(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                              void* pReplyData);
     status_t handleSetVolume(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
@@ -107,9 +95,9 @@ class EffectConversionHelperAidl {
     status_t handleFirstPriority(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                                  void* pReplyData);
 
-    // AEC parameter handler
-    status_t setAecParameter(const effect_param_t& param);
-    status_t getAecParameter(effect_param_t& param);
+    // implemented by conversion of each effect
+    virtual status_t setParameter(utils::EffectParamReader& param) = 0;
+    virtual status_t getParameter(utils::EffectParamWriter& param) = 0;
 };
 
 }  // namespace effect

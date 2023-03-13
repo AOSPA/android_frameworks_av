@@ -63,7 +63,6 @@ struct AudioSource;
  */
 struct AVFactory {
     virtual sp<ACodec> createACodec();
-    virtual sp<CodecBase> createMediaFilter();
     virtual ElementaryStreamQueue* createESQueue(
             ElementaryStreamQueue::Mode mode, uint32_t flags = 0);
     virtual CameraSource *CreateCameraSourceFromCamera(

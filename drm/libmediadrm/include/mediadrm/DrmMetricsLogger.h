@@ -26,8 +26,7 @@
 namespace android {
 
 struct SessionContext {
-    int64_t mNonceMsb;
-    int64_t mNonceLsb;
+    std::string mNonce;
     int64_t mTargetSecurityLevel;
     DrmPlugin::SecurityLevel mActualSecurityLevel;
 };
@@ -40,10 +39,13 @@ class DrmMetricsLogger : public IDrm {
 
     virtual DrmStatus initCheck() const;
 
-    virtual DrmStatus isCryptoSchemeSupported(const uint8_t uuid[16], const String8& mimeType,
-                                              DrmPlugin::SecurityLevel securityLevel, bool* result);
+    virtual DrmStatus isCryptoSchemeSupported(const uint8_t uuid[IDRM_UUID_SIZE],
+                                              const String8& mimeType,
+                                              DrmPlugin::SecurityLevel securityLevel,
+                                              bool* result);
 
-    virtual DrmStatus createPlugin(const uint8_t uuid[16], const String8& appPackageName);
+    virtual DrmStatus createPlugin(const uint8_t uuid[IDRM_UUID_SIZE],
+                                   const String8& appPackageName);
 
     virtual DrmStatus destroyPlugin();
 
@@ -150,12 +152,15 @@ class DrmMetricsLogger : public IDrm {
             const DrmStatus& error_code, const char* api,
             const std::vector<uint8_t>& sessionId = std::vector<uint8_t>()) const;
 
-    DrmStatus checkGetRandom(int64_t* nonce, const char* api);
+    DrmStatus generateNonce(std::string* out, size_t size, const char* api);
 
   private:
+    static const size_t kNonceSize = 16;
+    static const std::map<std::array<int64_t, 2>, std::string> kUuidSchemeMap;
     sp<IDrm> mImpl;
-    int64_t mUuid[2] = {};
-    int64_t mObjNonceMsb, mObjNonceLsb;
+    std::array<int64_t, 2> mUuid;
+    std::string mObjNonce;
+    std::string mScheme;
     std::map<std::vector<uint8_t>, SessionContext> mSessionMap;
     mutable std::mutex mSessionMapMutex;
     IDrmFrontend mFrontend;

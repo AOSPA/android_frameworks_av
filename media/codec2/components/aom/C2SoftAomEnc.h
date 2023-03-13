@@ -102,8 +102,10 @@ struct C2SoftAomEnc : public SimpleC2Component {
     std::shared_ptr<C2StreamIntraRefreshTuning::output> mIntraRefresh;
     std::shared_ptr<C2StreamFrameRateInfo::output> mFrameRate;
     std::shared_ptr<C2StreamBitrateInfo::output> mBitrate;
+    std::shared_ptr<C2StreamQualityTuning::output> mQuality;
     std::shared_ptr<C2StreamBitrateModeTuning::output> mBitrateMode;
     std::shared_ptr<C2StreamRequestSyncFrameTuning::output> mRequestSync;
+    std::shared_ptr<C2StreamColorAspectsInfo::output> mColorAspects;
 
     aom_codec_err_t setupCodecParameters();
 };
@@ -126,6 +128,7 @@ class C2SoftAomEnc::IntfImpl : public SimpleInterface<void>::BaseParams {
     }
     std::shared_ptr<C2StreamFrameRateInfo::output> getFrameRate_l() const { return mFrameRate; }
     std::shared_ptr<C2StreamBitrateInfo::output> getBitrate_l() const { return mBitrate; }
+    std::shared_ptr<C2StreamQualityTuning::output> getQuality_l() const { return mQuality; }
     std::shared_ptr<C2StreamBitrateModeTuning::output> getBitrateMode_l() const {
         return mBitrateMode;
     }
@@ -135,7 +138,7 @@ class C2SoftAomEnc::IntfImpl : public SimpleInterface<void>::BaseParams {
     std::shared_ptr<C2StreamColorAspectsInfo::output> getCodedColorAspects_l() const {
         return mCodedColorAspects;
     }
-    std::shared_ptr<C2StreamPixelFormatInfo::output> getPixelFormat_l() const {
+    std::shared_ptr<C2StreamPixelFormatInfo::input> getPixelFormat_l() const {
         return mPixelFormat;
     }
     uint32_t getSyncFramePeriod() const;
@@ -151,11 +154,12 @@ class C2SoftAomEnc::IntfImpl : public SimpleInterface<void>::BaseParams {
     std::shared_ptr<C2StreamRequestSyncFrameTuning::output> mRequestSync;
     std::shared_ptr<C2StreamSyncFrameIntervalTuning::output> mSyncFramePeriod;
     std::shared_ptr<C2StreamBitrateInfo::output> mBitrate;
+    std::shared_ptr<C2StreamQualityTuning::output> mQuality;
     std::shared_ptr<C2StreamBitrateModeTuning::output> mBitrateMode;
     std::shared_ptr<C2StreamProfileLevelInfo::output> mProfileLevel;
     std::shared_ptr<C2StreamColorAspectsInfo::input> mColorAspects;
     std::shared_ptr<C2StreamColorAspectsInfo::output> mCodedColorAspects;
-    std::shared_ptr<C2StreamPixelFormatInfo::output> mPixelFormat;
+    std::shared_ptr<C2StreamPixelFormatInfo::input> mPixelFormat;
 
 };
 
