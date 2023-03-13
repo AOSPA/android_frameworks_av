@@ -48,6 +48,11 @@ struct AudioSource : public MediaSource, public MediaBufferObserver {
         audio_microphone_direction_t selectedMicDirection = MIC_DIRECTION_UNSPECIFIED,
         float selectedMicFieldDimension = MIC_FIELD_DIMENSION_NORMAL);
 
+    /* a default constructor for non-pcm format */
+    AudioSource() {}
+
+    virtual int64_t getFirstSampleSystemTimeUs() { return -1LL; }
+
     status_t initCheck() const;
 
     virtual status_t start(MetaData *params = NULL);
