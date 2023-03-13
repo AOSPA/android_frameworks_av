@@ -120,7 +120,7 @@ protected:
     audio_encoder mAudioEncoder;
     video_encoder mVideoEncoder;
     bool mUse64BitFileOffset;
-    bool mEnabledCompressAACRecording;
+    bool mEnabledCompressAudioRecording;
     int32_t mVideoWidth, mVideoHeight;
     int32_t mFrameRate;
     int32_t mVideoBitRate;
@@ -267,8 +267,8 @@ protected:
     virtual status_t handleCustomAudioSource(sp<AMessage> /*format*/) {return UNKNOWN_ERROR;}
     virtual status_t handleCustomAudioEncoder() {return UNKNOWN_ERROR;}
     virtual sp<MediaSource> setPCMRecording() {return NULL;}
-    bool isCompressAACRecordingSupported();
-    virtual sp<AudioSource> setAACCompressRecording() {return NULL;}
+    virtual bool isCompressAudioRecordingSupported() { return false; }
+    virtual sp<AudioSource> setCompressAudioRecording() { return nullptr; }
 
     StagefrightRecorder(const StagefrightRecorder &);
     StagefrightRecorder &operator=(const StagefrightRecorder &);
