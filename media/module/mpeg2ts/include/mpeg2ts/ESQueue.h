@@ -47,6 +47,9 @@ struct ElementaryStreamQueue {
         MPEG4_VIDEO,
         PCM_AUDIO,
         METADATA,
+        DTS,
+        DTS_HD,
+        DTS_UHD,
     };
 
     enum Flags {
@@ -128,6 +131,8 @@ protected:
     sp<ABuffer> dequeueAccessUnitMPEG4Video();
     sp<ABuffer> dequeueAccessUnitPCMAudio();
     sp<ABuffer> dequeueAccessUnitMetadata();
+    sp<ABuffer> dequeueAccessUnitDTSOrDTSHD();
+    sp<ABuffer> dequeueAccessUnitDTSUHD();
 
     // consume a logical (compressed) access unit of size "size",
     // returns its timestamp in us (or -1 if no time information).
