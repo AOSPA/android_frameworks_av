@@ -489,6 +489,13 @@ status_t MediaRecorder::setParameters(const String8& params) {
             mOutputFormat == OUTPUT_FORMAT_RTP_AVP)
             isInvalidState = false;
     }
+
+    // allow the "audio-param-encoding-bitrate" in all states except in error
+    if (isInvalidState && params.contains("audio-param-encoding-bitrate") &&
+        mCurrentState != MEDIA_RECORDER_ERROR) {
+        isInvalidState = false;
+    }
+
     if (isInvalidState) {
         ALOGE("setParameters is called in an invalid state: %d", mCurrentState);
         return INVALID_OPERATION;
