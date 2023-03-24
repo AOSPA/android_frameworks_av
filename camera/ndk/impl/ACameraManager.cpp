@@ -692,11 +692,10 @@ camera_status_t ACameraManager::getCameraCharacteristics(
         ALOGE("%s: Cannot reach camera service!", __FUNCTION__);
         return ACAMERA_ERROR_CAMERA_DISCONNECTED;
     }
-
     CameraMetadata rawMetadata;
     int targetSdkVersion = android_get_application_target_sdk_version();
     binder::Status serviceRet = cs->getCameraCharacteristics(String16(cameraIdStr),
-            targetSdkVersion, /*overrideToPortrait*/true, &rawMetadata);
+            targetSdkVersion, &rawMetadata);
     if (!serviceRet.isOk()) {
         switch(serviceRet.serviceSpecificErrorCode()) {
             case hardware::ICameraService::ERROR_DISCONNECTED:
@@ -748,7 +747,7 @@ ACameraManager::openCamera(
     binder::Status serviceRet = cs->connectDevice(
             callbacks, String16(cameraId), String16(""), {},
             hardware::ICameraService::USE_CALLING_UID, /*oomScoreOffset*/0,
-            targetSdkVersion, /*overrideToPortrait*/true, /*out*/&deviceRemote);
+            targetSdkVersion, /*out*/&deviceRemote);
 
     if (!serviceRet.isOk()) {
         ALOGE("%s: connect camera device failed: %s", __FUNCTION__, serviceRet.toString8().string());

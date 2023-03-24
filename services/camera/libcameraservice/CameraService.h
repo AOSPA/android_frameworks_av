@@ -127,10 +127,10 @@ public:
     // ICameraService
     virtual binder::Status     getNumberOfCameras(int32_t type, int32_t* numCameras);
 
-    virtual binder::Status     getCameraInfo(int cameraId, bool overrideToPortrait,
-            hardware::CameraInfo* cameraInfo) override;
+    virtual binder::Status     getCameraInfo(int cameraId,
+            hardware::CameraInfo* cameraInfo);
     virtual binder::Status     getCameraCharacteristics(const String16& cameraId,
-            int targetSdkVersion, bool overrideToPortrait, CameraMetadata* cameraInfo) override;
+            int targetSdkVersion, CameraMetadata* cameraInfo);
     virtual binder::Status     getCameraVendorTagDescriptor(
             /*out*/
             hardware::camera2::params::VendorTagDescriptor* desc);
@@ -141,14 +141,13 @@ public:
     virtual binder::Status     connect(const sp<hardware::ICameraClient>& cameraClient,
             int32_t cameraId, const String16& clientPackageName,
             int32_t clientUid, int clientPid, int targetSdkVersion,
-            bool overrideToPortrait,
             /*out*/
-            sp<hardware::ICamera>* device) override;
+            sp<hardware::ICamera>* device);
 
     virtual binder::Status     connectDevice(
             const sp<hardware::camera2::ICameraDeviceCallbacks>& cameraCb, const String16& cameraId,
             const String16& clientPackageName, const std::optional<String16>& clientFeatureId,
-            int32_t clientUid, int scoreOffset, int targetSdkVersion, bool overrideToPortrait,
+            int32_t clientUid, int scoreOffset, int targetSdkVersion,
             /*out*/
             sp<hardware::camera2::ICameraDeviceUser>* device);
 
@@ -244,9 +243,8 @@ public:
 
     /////////////////////////////////////////////////////////////////////
     // CameraDeviceFactory functionality
-    std::pair<int, IPCTransport>    getDeviceVersion(const String8& cameraId,
-            bool overrideToPortrait, int* portraitRotation,
-            int* facing = nullptr, int* orientation = nullptr);
+    std::pair<int, IPCTransport>    getDeviceVersion(const String8& cameraId, int* facing = nullptr,
+            int* orientation = nullptr);
 
     /////////////////////////////////////////////////////////////////////
     // Methods to be used in CameraService class tests only
@@ -284,10 +282,6 @@ public:
         // Return the remote callback binder object (e.g. ICameraDeviceCallbacks)
         sp<IBinder>            getRemote() {
             return mRemoteBinder;
-        }
-
-        bool getOverrideToPortrait() const {
-            return mOverrideToPortrait;
         }
 
         // Disallows dumping over binder interface
@@ -369,8 +363,7 @@ public:
                 int sensorOrientation,
                 int clientPid,
                 uid_t clientUid,
-                int servicePid,
-                bool overrideToPortrait);
+                int servicePid);
 
         virtual ~BasicClient();
 
@@ -393,7 +386,6 @@ public:
         const pid_t                     mServicePid;
         bool                            mDisconnected;
         bool                            mUidIsTrusted;
-        bool                            mOverrideToPortrait;
 
         mutable Mutex                   mAudioRestrictionLock;
         int32_t                         mAudioRestriction;
@@ -483,8 +475,7 @@ public:
                 int sensorOrientation,
                 int clientPid,
                 uid_t clientUid,
-                int servicePid,
-                bool overrideToPortrait);
+                int servicePid);
         ~Client();
 
         // return our camera client
@@ -854,7 +845,7 @@ private:
             int api1CameraId, const String16& clientPackageNameMaybe, bool systemNativeClient,
             const std::optional<String16>& clientFeatureId, int clientUid, int clientPid,
             apiLevel effectiveApiLevel, bool shimUpdateOnly, int scoreOffset, int targetSdkVersion,
-            bool overrideToPortrait, /*out*/sp<CLIENT>& device);
+            /*out*/sp<CLIENT>& device);
 
     // Lock guarding camera service state
     Mutex               mServiceLock;
@@ -1269,7 +1260,7 @@ private:
             const String8& cameraId, int api1CameraId, int facing, int sensorOrientation,
             int clientPid, uid_t clientUid, int servicePid,
             std::pair<int, IPCTransport> deviceVersionAndIPCTransport, apiLevel effectiveApiLevel,
-            bool overrideForPerfClass, bool overrideToPortrait, /*out*/sp<BasicClient>* client);
+            bool overrideForPerfClass, /*out*/sp<BasicClient>* client);
 
     status_t checkCameraAccess(const String16& opPackageName);
 
@@ -1365,9 +1356,6 @@ private:
     bool mInjectionInitPending = false;
     // Guard mInjectionInternalCamId and mInjectionInitPending.
     Mutex mInjectionParametersLock;
-
-    // Track the folded/unfoled device state. 0 == UNFOLDED, 4 == FOLDED
-    int64_t mDeviceState;
 
     void updateTorchUidMapLocked(const String16& cameraId, int uid);
 };

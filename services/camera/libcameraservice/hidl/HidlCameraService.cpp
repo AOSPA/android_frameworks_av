@@ -65,8 +65,7 @@ HidlCameraService::getCameraCharacteristics(const hidl_string& cameraId,
     HStatus status = HStatus::NO_ERROR;
     binder::Status serviceRet =
         mAidlICameraService->getCameraCharacteristics(String16(cameraId.c_str()),
-                /*targetSdkVersion*/__ANDROID_API_FUTURE__, /*overrideToPortrait*/true,
-                &cameraMetadata);
+                /*targetSdkVersion*/__ANDROID_API_FUTURE__, &cameraMetadata);
     HCameraMetadata hidlMetadata;
     if (!serviceRet.isOk()) {
         switch(serviceRet.serviceSpecificErrorCode()) {
@@ -117,8 +116,7 @@ Return<void> HidlCameraService::connectDevice(const sp<HCameraDeviceCallback>& h
     binder::Status serviceRet = mAidlICameraService->connectDevice(
             callbacks, String16(cameraId.c_str()), String16(""), {},
             hardware::ICameraService::USE_CALLING_UID, 0/*oomScoreOffset*/,
-            /*targetSdkVersion*/__ANDROID_API_FUTURE__, /*overrideToPortrait*/true,
-            /*out*/&deviceRemote);
+            /*targetSdkVersion*/__ANDROID_API_FUTURE__, /*out*/&deviceRemote);
     HStatus status = HStatus::NO_ERROR;
     if (!serviceRet.isOk()) {
         ALOGE("%s: Unable to connect to camera device", __FUNCTION__);

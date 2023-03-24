@@ -67,7 +67,7 @@ interface ICameraService
     /**
      * Fetch basic camera information for a camera device
      */
-    CameraInfo getCameraInfo(int cameraId, boolean overrideToPortrait);
+    CameraInfo getCameraInfo(int cameraId);
 
     /**
      * Default UID/PID values for non-privileged callers of
@@ -83,8 +83,7 @@ interface ICameraService
             int cameraId,
             String opPackageName,
             int clientUid, int clientPid,
-            int targetSdkVersion,
-            boolean overrideToPortrait);
+            int targetSdkVersion);
 
     /**
      * Open a camera device through the new camera API
@@ -95,8 +94,7 @@ interface ICameraService
             String opPackageName,
             @nullable String featureId,
             int clientUid, int oomScoreOffset,
-            int targetSdkVersion,
-            boolean overrideToPortrait);
+            int targetSdkVersion);
 
     /**
      * Add listener for changes to camera device and flashlight state.
@@ -137,8 +135,7 @@ interface ICameraService
      * Read the static camera metadata for a camera device.
      * Only supported for device HAL versions >= 3.2
      */
-    CameraMetadataNative getCameraCharacteristics(String cameraId, int targetSdkVersion,
-            boolean overrideToPortrait);
+    CameraMetadataNative getCameraCharacteristics(String cameraId, int targetSdkVersion);
 
     /**
      * Read in the vendor tag descriptors from the camera module HAL.

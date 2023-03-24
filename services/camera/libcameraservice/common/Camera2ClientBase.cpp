@@ -60,11 +60,10 @@ Camera2ClientBase<TClientBase>::Camera2ClientBase(
         uid_t clientUid,
         int servicePid,
         bool overrideForPerfClass,
-        bool overrideToPortrait,
         bool legacyClient):
         TClientBase(cameraService, remoteCallback, clientPackageName, systemNativeClient,
                 clientFeatureId, cameraId, api1CameraId, cameraFacing, sensorOrientation, clientPid,
-                clientUid, servicePid, overrideToPortrait),
+                clientUid, servicePid),
         mSharedCameraCallbacks(remoteCallback),
         mDeviceActive(false), mApi1CameraId(api1CameraId)
 {
@@ -118,12 +117,12 @@ status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr
         case IPCTransport::HIDL:
             mDevice =
                     new HidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
-                            TClientBase::mOverrideToPortrait, mLegacyClient);
+                            mLegacyClient);
             break;
         case IPCTransport::AIDL:
             mDevice =
                     new AidlCamera3Device(TClientBase::mCameraIdStr, mOverrideForPerfClass,
-                            TClientBase::mOverrideToPortrait, mLegacyClient);
+                            mLegacyClient);
              break;
         default:
             ALOGE("%s Invalid transport for camera id %s", __FUNCTION__,

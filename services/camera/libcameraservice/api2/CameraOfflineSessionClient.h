@@ -56,8 +56,7 @@ public:
                     IInterface::asBinder(remoteCallback),
                     // (v)ndk doesn't have offline session support
                     clientPackageName, /*overridePackageName*/false, clientFeatureId,
-                    cameraIdStr, cameraFacing, sensorOrientation, clientPid, clientUid, servicePid,
-                    /*overrideToPortrait*/false),
+                    cameraIdStr, cameraFacing, sensorOrientation, clientPid, clientUid, servicePid),
             mRemoteCallback(remoteCallback), mOfflineSession(session),
             mCompositeStreamMap(offlineCompositeStreamMap) {}
 

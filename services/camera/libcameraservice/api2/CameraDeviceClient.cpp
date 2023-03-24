@@ -66,8 +66,7 @@ CameraDeviceClientBase::CameraDeviceClientBase(
         int sensorOrientation,
         int clientPid,
         uid_t clientUid,
-        int servicePid,
-        bool overrideToPortrait) :
+        int servicePid) :
     BasicClient(cameraService,
             IInterface::asBinder(remoteCallback),
             clientPackageName,
@@ -78,8 +77,7 @@ CameraDeviceClientBase::CameraDeviceClientBase(
             sensorOrientation,
             clientPid,
             clientUid,
-            servicePid,
-            overrideToPortrait),
+            servicePid),
     mRemoteCallback(remoteCallback) {
     // We don't need it for API2 clients, but Camera2ClientBase requires it.
     (void) api1CameraId;
@@ -98,11 +96,10 @@ CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
         int clientPid,
         uid_t clientUid,
         int servicePid,
-        bool overrideForPerfClass,
-        bool overrideToPortrait) :
+        bool overrideForPerfClass) :
     Camera2ClientBase(cameraService, remoteCallback, clientPackageName, systemNativeClient,
                 clientFeatureId, cameraId, /*API1 camera ID*/ -1, cameraFacing, sensorOrientation,
-                clientPid, clientUid, servicePid, overrideForPerfClass, overrideToPortrait),
+                clientPid, clientUid, servicePid, overrideForPerfClass),
     mInputStream(),
     mStreamingRequestId(REQUEST_ID_NONE),
     mRequestIdCounter(0),
