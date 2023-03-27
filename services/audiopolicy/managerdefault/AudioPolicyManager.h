@@ -1261,7 +1261,8 @@ protected:
         bool areAllDevicesSupported(
                 const AudioDeviceTypeAddrVector& devices,
                 std::function<bool(audio_devices_t)> predicate,
-                const char* context);
+                const char* context,
+                bool matchAddress = true);
 
         bool isScoRequestedForComm() const;
 
