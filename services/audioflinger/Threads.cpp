@@ -2051,6 +2051,21 @@ product_strategy_t AudioFlinger::ThreadBase::getStrategyForStream(audio_stream_t
     return AudioSystem::getStrategyForStream(stream);
 }
 
+// startMelComputation_l() must be called with AudioFlinger::mLock held
+void AudioFlinger::ThreadBase::startMelComputation_l(
+        const sp<audio_utils::MelProcessor>& /*processor*/)
+{
+    // Do nothing
+    ALOGW("%s: ThreadBase does not support CSD", __func__);
+}
+
+// stopMelComputation_l() must be called with AudioFlinger::mLock held
+void AudioFlinger::ThreadBase::stopMelComputation_l()
+{
+    // Do nothing
+    ALOGW("%s: ThreadBase does not support CSD", __func__);
+}
+
 // ----------------------------------------------------------------------------
 //      Playback
 // ----------------------------------------------------------------------------
@@ -2171,9 +2186,19 @@ void AudioFlinger::PlaybackThread::onFirstRef()
     if (!isStreamInitialized()) {
         ALOGE("The stream is not open yet"); // This should not happen.
     } else {
-        // setEventCallback will need a strong pointer as a parameter. Calling it
-        // here instead of constructor of PlaybackThread so that the onFirstRef
-        // callback would not be made on an incompletely constructed object.
+        // Callbacks take strong or weak pointers as a parameter.
+        // Since PlaybackThread passes itself as a callback handler, it can only
+        // be done outside of the constructor. Creating weak and especially strong
+        // pointers to a refcounted object in its own constructor is strongly
+        // discouraged, see comments in system/core/libutils/include/utils/RefBase.h.
+        // Even if a function takes a weak pointer, it is possible that it will
+        // need to convert it to a strong pointer down the line.
+        if (mOutput->flags & AUDIO_OUTPUT_FLAG_NON_BLOCKING &&
+                mOutput->stream->setCallback(this) == OK) {
+            mUseAsyncWrite = true;
+            mCallbackThread = new AudioFlinger::AsyncCallbackThread(this);
+        }
+
         if (mOutput->stream->setEventCallback(this) != OK) {
             ALOGD("Failed to add event callback");
         }
@@ -3074,13 +3099,6 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
                 mFrameCount);
     }
 
-    if (mOutput->flags & AUDIO_OUTPUT_FLAG_NON_BLOCKING) {
-        if (mOutput->stream->setCallback(this) == OK) {
-            mUseAsyncWrite = true;
-            mCallbackThread = new AudioFlinger::AsyncCallbackThread(this);
-        }
-    }
-
     mHwSupportsPause = false;
     if (mOutput->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
         bool supportsPause = false, supportsResume = false;
@@ -3445,12 +3463,6 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
         if (framesWritten > 0) {
             bytesWritten = framesWritten * mFrameSize;
 
-            // Send to MelProcessor for sound dose measurement.
-            auto processor = mMelProcessor.load();
-            if (processor) {
-                processor->process((char *)mSinkBuffer + offset, bytesWritten);
-            }
-
 #ifdef TEE_SINK
             mTee.write((char *)mSinkBuffer + offset, framesWritten);
 #endif
@@ -3493,17 +3505,22 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
     return bytesWritten;
 }
 
-void AudioFlinger::PlaybackThread::startMelComputation(
+// startMelComputation_l() must be called with AudioFlinger::mLock held
+void AudioFlinger::PlaybackThread::startMelComputation_l(
         const sp<audio_utils::MelProcessor>& processor)
 {
-    ALOGV("%s: starting mel processor for thread %d", __func__, id());
-    mMelProcessor = processor;
+    auto outputSink = static_cast<AudioStreamOutSink*>(mOutputSink.get());
+    if (outputSink != nullptr) {
+        outputSink->startMelComputation(processor);
+    }
 }
 
-void AudioFlinger::PlaybackThread::stopMelComputation() {
-    if (mMelProcessor.load() != nullptr) {
-        ALOGV("%s: stopping mel processor for thread %d", __func__, id());
-        mMelProcessor = nullptr;
+// stopMelComputation_l() must be called with AudioFlinger::mLock held
+void AudioFlinger::PlaybackThread::stopMelComputation_l()
+{
+    auto outputSink = static_cast<AudioStreamOutSink*>(mOutputSink.get());
+    if (outputSink != nullptr) {
+        outputSink->stopMelComputation();
     }
 }
 
@@ -9063,7 +9080,7 @@ status_t AudioFlinger::RecordThread::setSyncEvent(const sp<SyncEvent>& event __u
 }
 
 status_t AudioFlinger::RecordThread::getActiveMicrophones(
-        std::vector<media::MicrophoneInfo>* activeMicrophones)
+        std::vector<media::MicrophoneInfoFw>* activeMicrophones)
 {
     ALOGV("RecordThread::getActiveMicrophones");
     AutoMutex _l(mLock);
@@ -9938,6 +9955,10 @@ status_t AudioFlinger::MmapThreadHandle::standby()
     return mThread->standby();
 }
 
+status_t AudioFlinger::MmapThreadHandle::reportData(const void* buffer, size_t frameCount) {
+    return mThread->reportData(buffer, frameCount);
+}
+
 
 AudioFlinger::MmapThread::MmapThread(
         const sp<AudioFlinger>& audioFlinger, audio_io_handle_t id,
@@ -10248,6 +10269,10 @@ status_t AudioFlinger::MmapThread::standby()
     return NO_ERROR;
 }
 
+status_t AudioFlinger::MmapThread::reportData(const void* /*buffer*/, size_t /*frameCount*/) {
+    // This is a stub implementation. The MmapPlaybackThread overrides this function.
+    return INVALID_OPERATION;
+}
 
 void AudioFlinger::MmapThread::readHalParameters_l()
 {
@@ -10930,6 +10955,33 @@ status_t AudioFlinger::MmapPlaybackThread::getExternalPosition(uint64_t *positio
         *timeNanos = timestamp.tv_sec * NANOS_PER_SECOND + timestamp.tv_nsec;
     }
     return status;
+}
+
+status_t AudioFlinger::MmapPlaybackThread::reportData(const void* buffer, size_t frameCount) {
+    // Send to MelProcessor for sound dose measurement.
+    auto processor = mMelProcessor.load();
+    if (processor) {
+        processor->process(buffer, frameCount * mFrameSize);
+    }
+
+    return NO_ERROR;
+}
+
+// startMelComputation_l() must be called with AudioFlinger::mLock held
+void AudioFlinger::MmapPlaybackThread::startMelComputation_l(
+        const sp<audio_utils::MelProcessor>& processor)
+{
+    ALOGV("%s: starting mel processor for thread %d", __func__, id());
+    if (processor != nullptr) {
+        mMelProcessor = processor;
+    }
+}
+
+// stopMelComputation_l() must be called with AudioFlinger::mLock held
+void AudioFlinger::MmapPlaybackThread::stopMelComputation_l()
+{
+    ALOGV("%s: stopping mel processor for thread %d", __func__, id());
+    mMelProcessor = nullptr;
 }
 
 void AudioFlinger::MmapPlaybackThread::dumpInternals_l(int fd, const Vector<String16>& args)

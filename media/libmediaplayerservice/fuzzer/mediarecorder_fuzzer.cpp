@@ -21,7 +21,7 @@
 #include <AudioFlinger.h>
 #include <MediaPlayerService.h>
 #include <ResourceManagerService.h>
-#include <ServiceManager.h>
+#include <fakeservicemanager/FakeServiceManager.h>
 #include <StagefrightRecorder.h>
 #include <camera/Camera.h>
 #include <camera/android/hardware/ICamera.h>
@@ -198,7 +198,7 @@ void MediaRecorderClientFuzzer::getConfig() {
     mStfRecorder->setInputDevice(deviceId);
     mStfRecorder->getRoutedDeviceId(&deviceId);
 
-    vector<android::media::MicrophoneInfo> activeMicrophones{};
+    vector<android::media::MicrophoneInfoFw> activeMicrophones{};
     mStfRecorder->getActiveMicrophones(&activeMicrophones);
 
     int32_t portId;
@@ -315,7 +315,7 @@ extern "C" int LLVMFuzzerInitialize(int /* *argc */, char /* ***argv */) {
      * Initializing a FakeServiceManager and adding the instances
      * of all the required services
      */
-    sp<IServiceManager> fakeServiceManager = new ServiceManager();
+    sp<IServiceManager> fakeServiceManager = new FakeServiceManager();
     setDefaultServiceManager(fakeServiceManager);
     MediaPlayerService::instantiate();
     AudioFlinger::instantiate();

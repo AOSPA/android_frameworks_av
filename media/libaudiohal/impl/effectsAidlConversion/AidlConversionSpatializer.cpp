@@ -20,6 +20,8 @@
 #define LOG_TAG "AidlConversionSpatializer"
 //#define LOG_NDEBUG 0
 
+#include <aidl/android/hardware/audio/effect/DefaultExtension.h>
+#include <aidl/android/hardware/audio/effect/VendorExtension.h>
 #include <error/expected_utils.h>
 #include <media/AidlConversionNdk.h>
 #include <media/AidlConversionEffect.h>
@@ -34,34 +36,37 @@ namespace android {
 namespace effect {
 
 using ::aidl::android::aidl_utils::statusTFromBinderStatus;
+using ::aidl::android::hardware::audio::effect::DefaultExtension;
 using ::aidl::android::hardware::audio::effect::Parameter;
+using ::aidl::android::hardware::audio::effect::VendorExtension;
 using ::android::status_t;
 using utils::EffectParamReader;
 using utils::EffectParamWriter;
 
 status_t AidlConversionSpatializer::setParameter(EffectParamReader& param) {
-    uint32_t type = 0;
-    uint16_t value = 0;
-    if (!param.validateParamValueSize(sizeof(uint32_t), sizeof(uint16_t)) ||
-        OK != param.readFromParameter(&type) || OK != param.readFromValue(&value)) {
-        ALOGE("%s invalid param %s", __func__, param.toString().c_str());
-        return BAD_VALUE;
-    }
-    Parameter aidlParam;
-    // TODO
+    Parameter aidlParam = VALUE_OR_RETURN_STATUS(
+            ::aidl::android::legacy2aidl_EffectParameterReader_ParameterExtension(param));
     return statusTFromBinderStatus(mEffect->setParameter(aidlParam));
 }
 
 status_t AidlConversionSpatializer::getParameter(EffectParamWriter& param) {
-    uint32_t type = 0, value = 0;
-    if (!param.validateParamValueSize(sizeof(uint32_t), sizeof(uint32_t)) ||
-        OK != param.readFromParameter(&type)) {
+    DefaultExtension defaultExt;
+    // read parameters into DefaultExtension vector<uint8_t>
+    if (OK != param.readFromParameter(defaultExt.bytes.data(), param.getParameterSize())) {
         ALOGE("%s invalid param %s", __func__, param.toString().c_str());
         param.setStatus(BAD_VALUE);
         return BAD_VALUE;
     }
-    // TODO
-    return param.writeToValue(&value);
+
+    VendorExtension idTag;
+    idTag.extension.setParcelable(defaultExt);
+    Parameter::Id id = UNION_MAKE(Parameter::Id, vendorEffectTag, idTag);
+    Parameter aidlParam;
+    RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mEffect->getParameter(id, &aidlParam)));
+    // copy the AIDL extension data back to effect_param_t
+    return VALUE_OR_RETURN_STATUS(
+            ::aidl::android::aidl2legacy_ParameterExtension_EffectParameterWriter(aidlParam,
+                                                                                  param));
 }
 
 } // namespace effect

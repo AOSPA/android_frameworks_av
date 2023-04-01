@@ -21,15 +21,19 @@
 #include <mutex>
 #include <string_view>
 
+#include <aidl/android/hardware/audio/common/AudioOffloadMetadata.h>
 #include <aidl/android/hardware/audio/core/BpStreamCommon.h>
 #include <aidl/android/hardware/audio/core/BpStreamIn.h>
 #include <aidl/android/hardware/audio/core/BpStreamOut.h>
 #include <fmq/AidlMessageQueue.h>
 #include <media/audiohal/EffectHalInterface.h>
 #include <media/audiohal/StreamHalInterface.h>
+#include <media/AudioParameter.h>
 
 #include "ConversionHelperAidl.h"
 #include "StreamPowerLog.h"
+
+using ::aidl::android::hardware::audio::common::AudioOffloadMetadata;
 
 namespace android {
 
@@ -43,24 +47,28 @@ class StreamContextAidl {
             ::aidl::android::hardware::common::fmq::SynchronizedReadWrite> DataMQ;
 
     explicit StreamContextAidl(
-            const ::aidl::android::hardware::audio::core::StreamDescriptor& descriptor)
+            const ::aidl::android::hardware::audio::core::StreamDescriptor& descriptor,
+            bool isAsynchronous)
         : mFrameSizeBytes(descriptor.frameSizeBytes),
           mCommandMQ(new CommandMQ(descriptor.command)),
           mReplyMQ(new ReplyMQ(descriptor.reply)),
           mBufferSizeFrames(descriptor.bufferSizeFrames),
-          mDataMQ(maybeCreateDataMQ(descriptor)) {}
+          mDataMQ(maybeCreateDataMQ(descriptor)),
+          mIsAsynchronous(isAsynchronous) {}
     StreamContextAidl(StreamContextAidl&& other) :
             mFrameSizeBytes(other.mFrameSizeBytes),
             mCommandMQ(std::move(other.mCommandMQ)),
             mReplyMQ(std::move(other.mReplyMQ)),
             mBufferSizeFrames(other.mBufferSizeFrames),
-            mDataMQ(std::move(other.mDataMQ)) {}
+            mDataMQ(std::move(other.mDataMQ)),
+            mIsAsynchronous(other.mIsAsynchronous) {}
     StreamContextAidl& operator=(StreamContextAidl&& other) {
         mFrameSizeBytes = other.mFrameSizeBytes;
         mCommandMQ = std::move(other.mCommandMQ);
         mReplyMQ = std::move(other.mReplyMQ);
         mBufferSizeFrames = other.mBufferSizeFrames;
         mDataMQ = std::move(other.mDataMQ);
+        mIsAsynchronous = other.mIsAsynchronous;
         return *this;
     }
     bool isValid() const {
@@ -78,6 +86,7 @@ class StreamContextAidl {
     DataMQ* getDataMQ() const { return mDataMQ.get(); }
     size_t getFrameSizeBytes() const { return mFrameSizeBytes; }
     ReplyMQ* getReplyMQ() const { return mReplyMQ.get(); }
+    bool isAsynchronous() const { return mIsAsynchronous; }
 
   private:
     static std::unique_ptr<DataMQ> maybeCreateDataMQ(
@@ -94,6 +103,7 @@ class StreamContextAidl {
     std::unique_ptr<ReplyMQ> mReplyMQ;
     size_t mBufferSizeFrames;
     std::unique_ptr<DataMQ> mDataMQ;
+    bool mIsAsynchronous;
 };
 
 class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelperAidl {
@@ -224,6 +234,9 @@ class CallbackBroker;
 
 class StreamOutHalAidl : public StreamOutHalInterface, public StreamHalAidl {
   public:
+    // Extract the output stream parameters and set by AIDL APIs.
+    status_t setParameters(const String8& kvPairs) override;
+
     // Return the audio hardware driver estimated latency in milliseconds.
     status_t getLatency(uint32_t *latency) override;
 
@@ -303,6 +316,8 @@ class StreamOutHalAidl : public StreamOutHalInterface, public StreamHalAidl {
     const std::shared_ptr<::aidl::android::hardware::audio::core::IStreamOut> mStream;
     const wp<CallbackBroker> mCallbackBroker;
 
+    AudioOffloadMetadata mOffloadMetadata;
+
     // Can not be constructed directly by clients.
     StreamOutHalAidl(
             const audio_config& config, StreamContextAidl&& context, int32_t nominalLatency,
@@ -310,6 +325,10 @@ class StreamOutHalAidl : public StreamOutHalInterface, public StreamHalAidl {
             const sp<CallbackBroker>& callbackBroker);
 
     ~StreamOutHalAidl() override;
+
+    // Filter and update the offload metadata. The parameters which are related to the offload
+    // metadata will be removed after filtering.
+    status_t filterAndUpdateOffloadMetadata(AudioParameter &parameters);
 };
 
 class StreamInHalAidl : public StreamInHalInterface, public StreamHalAidl {
@@ -328,7 +347,7 @@ class StreamInHalAidl : public StreamInHalInterface, public StreamHalAidl {
     status_t getCapturePosition(int64_t *frames, int64_t *time) override;
 
     // Get active microphones
-    status_t getActiveMicrophones(std::vector<media::MicrophoneInfo> *microphones) override;
+    status_t getActiveMicrophones(std::vector<media::MicrophoneInfoFw> *microphones) override;
 
     // Set microphone direction (for processing)
     status_t setPreferredMicrophoneDirection(

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "BundleTypes.h"
 #define LOG_TAG "EffectBundleAidl"
 #include <Utils.h>
 #include <algorithm>
@@ -173,6 +174,7 @@ ndk::ScopedAStatus EffectBundleAidl::setParameterSpecific(const Parameter::Speci
 
 ndk::ScopedAStatus EffectBundleAidl::setParameterEqualizer(const Parameter::Specific& specific) {
     auto& eq = specific.get<Parameter::Specific::equalizer>();
+    RETURN_IF(!inRange(eq, lvm::kEqRanges), EX_ILLEGAL_ARGUMENT, "outOfRange");
     auto eqTag = eq.getTag();
     switch (eqTag) {
         case Equalizer::preset:
@@ -193,6 +195,7 @@ ndk::ScopedAStatus EffectBundleAidl::setParameterEqualizer(const Parameter::Spec
 
 ndk::ScopedAStatus EffectBundleAidl::setParameterBassBoost(const Parameter::Specific& specific) {
     auto& bb = specific.get<Parameter::Specific::bassBoost>();
+    RETURN_IF(!inRange(bb, lvm::kBassBoostRanges), EX_ILLEGAL_ARGUMENT, "outOfRange");
     auto bbTag = bb.getTag();
     switch (bbTag) {
         case BassBoost::strengthPm: {
@@ -210,6 +213,7 @@ ndk::ScopedAStatus EffectBundleAidl::setParameterBassBoost(const Parameter::Spec
 
 ndk::ScopedAStatus EffectBundleAidl::setParameterVirtualizer(const Parameter::Specific& specific) {
     auto& vr = specific.get<Parameter::Specific::virtualizer>();
+    RETURN_IF(!inRange(vr, lvm::kVirtualizerRanges), EX_ILLEGAL_ARGUMENT, "outOfRange");
     auto vrTag = vr.getTag();
     switch (vrTag) {
         case Virtualizer::strengthPm: {
@@ -235,6 +239,7 @@ ndk::ScopedAStatus EffectBundleAidl::setParameterVirtualizer(const Parameter::Sp
 
 ndk::ScopedAStatus EffectBundleAidl::setParameterVolume(const Parameter::Specific& specific) {
     auto& vol = specific.get<Parameter::Specific::volume>();
+    RETURN_IF(!inRange(vol, lvm::kVolumeRanges), EX_ILLEGAL_ARGUMENT, "outOfRange");
     auto volTag = vol.getTag();
     switch (volTag) {
         case Volume::levelDb: {
@@ -291,11 +296,19 @@ ndk::ScopedAStatus EffectBundleAidl::getParameterEqualizer(const Equalizer::Id& 
             eqParam.set<Equalizer::preset>(mContext->getEqualizerPreset());
             break;
         }
+        case Equalizer::bandFrequencies: {
+            eqParam.set<Equalizer::bandFrequencies>(lvm::kEqBandFrequency);
+            break;
+        }
+        case Equalizer::presets: {
+            eqParam.set<Equalizer::presets>(lvm::kEqPresets);
+            break;
+        }
         case Equalizer::centerFreqMh: {
             eqParam.set<Equalizer::centerFreqMh>(mContext->getEqualizerCenterFreqs());
             break;
         }
-        default: {
+        case Equalizer::vendor: {
             LOG(ERROR) << __func__ << " not handled tag: " << toString(tag);
             return ndk::ScopedAStatus::fromExceptionCodeWithMessage(
                     EX_ILLEGAL_ARGUMENT, "unsupportedTag");
