@@ -101,8 +101,23 @@ typedef struct ACameraCaptureSession_stateCallbacks {
 
 /**
  * The definition of camera capture session onWindowPrepared callback.
+ *
+ * <p>This callback is called when the buffer pre-allocation for an output window Surface is
+ * complete. </p>
+ *
+ * <p>Buffer pre-allocation for an output window is started by
+ * {@link ACameraCaptureSession_prepare}
+ * call. While allocation is underway, the output must not be used in a capture request.
+ * Once this callback is called, the output provided can be used as a target for a
+ * capture request. In case of an error during pre-allocation (such as running out of
+ * suitable-memory), this callback is still invoked after the error is encountered, though some
+ * buffers may not have been successfully pre-allocated.</p>
+ *
+ * Introduced in API 34.
+ *
  * @param context The optional app-provided context pointer that was included in
- *        the {@link ACameraCaptureSession_prepareCallbacks} struct.
+ *        the {@link ACameraCaptureSession_setWindowPreparedCallback} method
+ *        call.
  * @param window The window that {@link ACameraCaptureSession_prepare} was called on.
  * @param session The camera capture session on which {@link ACameraCaptureSession_prepare} was
  *                called on.
@@ -111,32 +126,6 @@ typedef void (*ACameraCaptureSession_prepareCallback)(
         void *context,
         ACameraWindowType *window,
         ACameraCaptureSession *session);
-
-/**
- * Capture session state callbacks used in {@link ACameraDevice_setPrepareCallbacks}
- */
-typedef struct ACameraCaptureSession_prepareCallbacks {
-    /// optional application context. This will be passed in the context
-    /// parameter of the {@link onWindowPrepared} callback.
-    void*                               context;
-
-    /**
-     * This callback is called when the buffer pre-allocation for an output window Surface is
-     * complete.
-     * <p>Buffer pre-allocation for an output window is started by
-     * {@link ACameraCaptureSession_prepare}
-     * call. While allocation is underway, the output must not be used in a capture request.
-     * Once this callback is called, the output provided can be used as a target for a
-     * capture request. In case of an error during pre-allocation (such as running out of
-     * suitable-memory), this callback is still invoked after the error is encountered, though some
-     * buffers may not have been successfully pre-allocated </p>
-     */
-    ACameraCaptureSession_prepareCallback onWindowPrepared;
-
-    // Reserved for future callback additions, these must be set to nullptr by the client.
-    ACameraCaptureSession_prepareCallback reserved0;
-    ACameraCaptureSession_prepareCallback reserved1;
-} ACameraCaptureSession_prepareCallbacks;
 
 /// Enum for describing error reason in {@link ACameraCaptureFailure}
 enum {
@@ -204,7 +193,7 @@ typedef struct ACameraCaptureFailure {
  *                capture request sent by application, so the address is different to what
  *                application sent but the content will match. This request will be freed by
  *                framework immediately after this callback returns.
- * @param timestamp The timestamp when the capture is started. This timestmap will match
+ * @param timestamp The timestamp when the capture is started. This timestamp will match
  *                  {@link ACAMERA_SENSOR_TIMESTAMP} of the {@link ACameraMetadata} in
  *                  {@link ACameraCaptureSession_captureCallbacks#onCaptureCompleted} callback.
  */
@@ -239,7 +228,7 @@ typedef void (*ACameraCaptureSession_captureCallback_result)(
  *                capture request sent by application, so the address is different to what
  *                application sent but the content will match. This request will be freed by
  *                framework immediately after this callback returns.
- * @param failure The {@link ACameraCaptureFailure} desribes the capture failure. The memory is
+ * @param failure The {@link ACameraCaptureFailure} describes the capture failure. The memory is
  *                managed by camera framework. Do not access this pointer after this callback
  *                returns.
  */
@@ -451,7 +440,7 @@ enum {
  * and any repeating requests are stopped (as if {@link ACameraCaptureSession_stopRepeating} was
  * called). However, any in-progress capture requests submitted to the session will be completed as
  * normal; once all captures have completed and the session has been torn down,
- * {@link ACameraCaptureSession_stateCallbacks#onClosed} callback will be called and the seesion
+ * {@link ACameraCaptureSession_stateCallbacks#onClosed} callback will be called and the session
  * will be removed from memory.</p>
  *
  * <p>Closing a session is idempotent; closing more than once has no effect.</p>
@@ -538,7 +527,7 @@ camera_status_t ACameraCaptureSession_capture(
  *
  * <p>Repeating burst requests are a simple way for an application to
  * maintain a preview or other continuous stream of frames where each
- * request is different in a predicatable way, without having to continually
+ * request is different in a predictable way, without having to continually
  * submit requests through {@link ACameraCaptureSession_capture}.</p>
  *
  * <p>To stop the repeating capture, call {@link ACameraCaptureSession_stopRepeating}. Any
@@ -749,7 +738,7 @@ typedef struct ALogicalCameraCaptureFailure {
  *                capture request sent by application, so the address is different to what
  *                application sent but the content will match. This request will be freed by
  *                framework immediately after this callback returns.
- * @param failure The {@link ALogicalCameraCaptureFailure} desribes the capture failure. The memory
+ * @param failure The {@link ALogicalCameraCaptureFailure} describes the capture failure. The memory
  *                is managed by camera framework. Do not access this pointer after this callback
  *                returns.
  */
@@ -1033,8 +1022,10 @@ camera_status_t ACameraCaptureSession_logicalCamera_setRepeatingRequestV2(
  * pre-allocation of buffers through the {@link ACameraCaptureSession_prepareWindow} call has
  * completed the pre-allocation of buffers.
  * @param session the ACameraCaptureSession on which ACameraCaptureSession_prepareWindow was called.
- * @param callbacks the callback to be called when the output window's buffer pre-allocation is
- *                  complete.
+ * @param context optional application provided context. This will be passed into the context
+ *        parameter of the {@link onWindowPrepared} callback.
+ * @param callback the callback to be called when the output window's buffer pre-allocation is
+ *        complete.
  * @return <ul><li> {@link ACAMERA_OK} if the method succeeds</li>
  *         <li>{@link ACAMERA_ERROR_INVALID_PARAMETER} if session or callbacks is
  *              NULL. Or if the session has not been configured with the window</li>
@@ -1046,7 +1037,8 @@ camera_status_t ACameraCaptureSession_logicalCamera_setRepeatingRequestV2(
  */
 camera_status_t ACameraCaptureSession_setWindowPreparedCallback(
     ACameraCaptureSession* session,
-    ACameraCaptureSession_prepareCallbacks* callbacks) __INTRODUCED_IN(34);
+    void *context,
+    ACameraCaptureSession_prepareCallback callback) __INTRODUCED_IN(34);
 
 /**
  *
@@ -1087,7 +1079,7 @@ camera_status_t ACameraCaptureSession_setWindowPreparedCallback(
  * <p>Once allocation is complete, {@link ACameraCaptureSession_prepareCallback#onWindowPrepared}
  * will be invoked with the output provided to this method. Between the prepare call and the
  * {@link ACameraCaptureSession_prepareCallback#onWindowPrepared} call,
- * the output provided to prepare must not be used as a target of a capture qequest submitted
+ * the output provided to prepare must not be used as a target of a capture request submitted
  * to this session.</p>
  *
  * <p>{@link android.hardware.camera2.CameraCharacteristics#INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY LEGACY}
@@ -1100,7 +1092,7 @@ camera_status_t ACameraCaptureSession_setWindowPreparedCallback(
  *
  * @return <ul><li>
  *             {@link ACAMERA_OK} if the method succeeds</li>
- *         <li>{@link ACAMERA_ERROR_INVALID_PARAMETER} if session/ window or prepareCallbacks is
+ *         <li>{@link ACAMERA_ERROR_INVALID_PARAMETER} if session/ window is
  *              NULL. Or if the session has not been configured with the window</li>
  *         <li>{@link ACAMERA_ERROR_SESSION_CLOSED} if the capture session has been closed</li>
  *         <li>{@link ACAMERA_ERROR_CAMERA_DISCONNECTED} if the camera device is closed</li>
