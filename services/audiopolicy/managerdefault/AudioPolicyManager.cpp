@@ -729,7 +729,10 @@ status_t AudioPolicyManager::updateCallRoutingInternal(
 
     audio_attributes_t attr = { .source = AUDIO_SOURCE_VOICE_COMMUNICATION };
     auto txSourceDevice = mEngine->getInputDeviceForAttributes(attr);
-    ALOG_ASSERT(txSourceDevice != 0, "%s() input selected device not available", __func__);
+    if (txSourceDevice == nullptr) {
+        ALOGE("%s() selected input device not available", __func__);
+        return INVALID_OPERATION;
+    }
 
     ALOGV("%s device rxDevice %s txDevice %s", __func__,
           rxDevices.itemAt(0)->toString().c_str(), txSourceDevice->toString().c_str());
@@ -1778,6 +1781,10 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     // A request for HW A/V sync cannot fallback to a mixed output because time
     // stamps are embedded in audio data
     if ((*flags & (AUDIO_OUTPUT_FLAG_HW_AV_SYNC | AUDIO_OUTPUT_FLAG_MMAP_NOIRQ)) != 0) {
+        return AUDIO_IO_HANDLE_NONE;
+    }
+    // A request for Tuner cannot fallback to a mixed output
+    if ((directConfig.offload_info.content_id || directConfig.offload_info.sync_id)) {
         return AUDIO_IO_HANDLE_NONE;
     }
 
@@ -5607,7 +5614,11 @@ status_t AudioPolicyManager::acquireSoundTriggerSession(audio_session_t *session
     *session = (audio_session_t)mpClientInterface->newAudioUniqueId(AUDIO_UNIQUE_ID_USE_SESSION);
     *ioHandle = (audio_io_handle_t)mpClientInterface->newAudioUniqueId(AUDIO_UNIQUE_ID_USE_INPUT);
     audio_attributes_t attr = { .source = AUDIO_SOURCE_HOTWORD };
-    *device = mEngine->getInputDeviceForAttributes(attr)->type();
+    sp<DeviceDescriptor> deviceDesc = mEngine->getInputDeviceForAttributes(attr);
+    if (deviceDesc == nullptr) {
+        return INVALID_OPERATION;
+    }
+    *device = deviceDesc->type();
 
     return mSoundTriggerSessions.acquireSession(*session, *ioHandle);
 }
@@ -8059,7 +8070,8 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
     // if sco and call follow same curves, bypass forceUseForComm
     if ((callVolSrc != btScoVolSrc) &&
             ((isVoiceVolSrc && isScoRequested) ||
-             (isBtScoVolSrc && !(isScoRequested || isHAUsed)))) {
+             (isBtScoVolSrc && !(isScoRequested || isHAUsed))) &&
+            !isSingleDeviceType(deviceTypes, AUDIO_DEVICE_OUT_TELEPHONY_TX)) {
         ALOGV("%s cannot set volume group %d volume when is%srequested for comm", __func__,
              volumeSource, isScoRequested ? " " : " not ");
         // Do not return an error here as AudioService will always set both voice call

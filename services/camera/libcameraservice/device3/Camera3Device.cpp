@@ -252,7 +252,7 @@ status_t Camera3Device::initializeCommonLocked() {
     mZoomRatioMappers[mId.c_str()] = ZoomRatioMapper(&mDeviceInfo,
             mSupportNativeZoomRatio, usePrecorrectArray);
 
-    if (SessionConfigurationUtils::isUltraHighResolutionSensor(mDeviceInfo)) {
+    if (SessionConfigurationUtils::supportsUltraHighResolutionCapture(mDeviceInfo)) {
         mUHRCropAndMeteringRegionMappers[mId.c_str()] =
                 UHRCropAndMeteringRegionMapper(mDeviceInfo, usePrecorrectArray);
     }
@@ -440,7 +440,7 @@ ssize_t Camera3Device::getJpegBufferSize(const CameraMetadata &info, uint32_t wi
     // Get max jpeg size (area-wise) for default sensor pixel mode
     camera3::Size maxDefaultJpegResolution =
             SessionConfigurationUtils::getMaxJpegResolution(info,
-                    /*isUltraHighResolutionSensor*/false);
+                    /*supportsUltraHighResolutionCapture*/false);
     // Get max jpeg size (area-wise) for max resolution sensor pixel mode / 0 if
     // not ultra high res sensor
     camera3::Size uhrMaxJpegResolution =
@@ -552,9 +552,8 @@ ssize_t Camera3Device::getRawOpaqueBufferSize(const CameraMetadata &info, int32_
     return BAD_VALUE;
 }
 
-status_t Camera3Device::dump(int fd, const Vector<String16> &args) {
+status_t Camera3Device::dump(int fd, [[maybe_unused]] const Vector<String16> &args) {
     ATRACE_CALL();
-    (void)args;
 
     // Try to lock, but continue in case of failure (to avoid blocking in
     // deadlocks)
@@ -2513,8 +2512,9 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
     // max_buffers, usage, and priv fields, as well as data_space and format
     // fields for IMPLEMENTATION_DEFINED formats.
 
+    int64_t logId = mCameraServiceProxyWrapper->getCurrentLogIdForCamera(mId);
     const camera_metadata_t *sessionBuffer = sessionParams.getAndLock();
-    res = mInterface->configureStreams(sessionBuffer, &config, bufferSizes);
+    res = mInterface->configureStreams(sessionBuffer, &config, bufferSizes, logId);
     sessionParams.unlock(sessionBuffer);
 
     if (res == BAD_VALUE) {
