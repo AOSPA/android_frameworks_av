@@ -411,6 +411,23 @@ bool isPublicFormat(int32_t format)
     }
 }
 
+bool dataSpaceFromColorSpace(android_dataspace *dataSpace, int32_t colorSpace) {
+    switch (colorSpace) {
+        case ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_SRGB:
+            *dataSpace = HAL_DATASPACE_V0_SRGB;
+            return true;
+        case ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_DISPLAY_P3:
+            *dataSpace = HAL_DATASPACE_DISPLAY_P3;
+            return true;
+        case ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_BT2020_HLG:
+            *(reinterpret_cast<int32_t*>(dataSpace)) = HAL_DATASPACE_BT2020_HLG;
+            return true;
+        default:
+            ALOGE("%s: Unsupported color space %d", __FUNCTION__, colorSpace);
+            return false;
+    }
+}
+
 bool isStreamUseCaseSupported(int64_t streamUseCase,
         const CameraMetadata &deviceInfo) {
     camera_metadata_ro_entry_t availableStreamUseCases =
@@ -506,6 +523,16 @@ binder::Status createSurfaceFromGbp(
         return STATUS_ERROR(CameraService::ERROR_INVALID_OPERATION, msg.string());
     }
 
+    if (colorSpace != ANDROID_REQUEST_AVAILABLE_COLOR_SPACE_PROFILES_MAP_UNSPECIFIED &&
+            format != HAL_PIXEL_FORMAT_BLOB) {
+        if (!dataSpaceFromColorSpace(&dataSpace, colorSpace)) {
+            String8 msg = String8::format("Camera %s: color space %d not supported, failed to "
+                    "convert to data space", logicalCameraId.string(), colorSpace);
+            ALOGE("%s: %s", __FUNCTION__, msg.string());
+            return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.string());
+        }
+    }
+
     // FIXME: remove this override since the default format should be
     //       IMPLEMENTATION_DEFINED. b/9487482 & b/35317944
     if ((format >= HAL_PIXEL_FORMAT_RGBA_8888 && format <= HAL_PIXEL_FORMAT_BGRA_8888) &&
@@ -517,7 +544,7 @@ binder::Status createSurfaceFromGbp(
     }
     std::unordered_set<int32_t> overriddenSensorPixelModes;
     if (checkAndOverrideSensorPixelModesUsed(sensorPixelModesUsed, format, width, height,
-            physicalCameraMetadata, flexibleConsumer, &overriddenSensorPixelModes) != OK) {
+            physicalCameraMetadata, &overriddenSensorPixelModes) != OK) {
         String8 msg = String8::format("Camera %s: sensor pixel modes for stream with "
                 "format %#x are not valid",logicalCameraId.string(), format);
         ALOGE("%s: %s", __FUNCTION__, msg.string());
@@ -680,7 +707,7 @@ void mapStreamInfo(const OutputStreamInfo &streamInfo,
 binder::Status
 convertToHALStreamCombination(
         const SessionConfiguration& sessionConfiguration,
-        const String8 &logicalCameraId, const CameraMetadata &deviceInfo,
+        const String8 &logicalCameraId, const CameraMetadata &deviceInfo, bool supportNativeJpegR,
         metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
         aidl::android::hardware::camera::device::StreamConfiguration &streamConfiguration,
         bool overrideForPerfClass, bool *earlyExit, bool isPriviledgedClient) {
@@ -792,7 +819,7 @@ convertToHALStreamCombination(
             streamInfo.dynamicRangeProfile = it.getDynamicRangeProfile();
             if (checkAndOverrideSensorPixelModesUsed(sensorPixelModesUsed,
                     streamInfo.format, streamInfo.width,
-                    streamInfo.height, metadataChosen, false /*flexibleConsumer*/,
+                    streamInfo.height, metadataChosen,
                     &streamInfo.sensorPixelModesUsed) != OK) {
                         ALOGE("%s: Deferred surface sensor pixel modes not valid",
                                 __FUNCTION__);
@@ -828,7 +855,8 @@ convertToHALStreamCombination(
                 bool isHeicCompositeStream =
                         camera3::HeicCompositeStream::isHeicCompositeStream(surface);
                 bool isJpegRCompositeStream =
-                        camera3::JpegRCompositeStream::isJpegRCompositeStream(surface);
+                        camera3::JpegRCompositeStream::isJpegRCompositeStream(surface) &&
+                        !supportNativeJpegR;
                 if (isDepthCompositeStream || isHeicCompositeStream || isJpegRCompositeStream) {
                     // We need to take in to account that composite streams can have
                     // additional internal camera streams.
@@ -973,7 +1001,7 @@ static std::unordered_set<int32_t> convertToSet(const std::vector<int32_t> &sens
 
 status_t checkAndOverrideSensorPixelModesUsed(
         const std::vector<int32_t> &sensorPixelModesUsed, int format, int width, int height,
-        const CameraMetadata &staticInfo, bool flexibleConsumer,
+        const CameraMetadata &staticInfo,
         std::unordered_set<int32_t> *overriddenSensorPixelModesUsed) {
 
     const std::unordered_set<int32_t> &sensorPixelModesUsedSet =
@@ -982,6 +1010,8 @@ status_t checkAndOverrideSensorPixelModesUsed(
         if (sensorPixelModesUsedSet.find(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION) !=
                 sensorPixelModesUsedSet.end()) {
             // invalid value for non ultra high res sensors
+            ALOGE("%s ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION used on a device which doesn't "
+                    "support ultra high resolution capture", __FUNCTION__);
             return BAD_VALUE;
         }
         overriddenSensorPixelModesUsed->clear();
@@ -1012,27 +1042,30 @@ status_t checkAndOverrideSensorPixelModesUsed(
             overriddenSensorPixelModesUsed->insert(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
             return OK;
         }
-        // We don't allow flexible consumer for max resolution mode.
         if (isInMaximumResolutionStreamConfigurationMap) {
-            overriddenSensorPixelModesUsed->insert(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
-            return OK;
-        }
-        if (isInDefaultStreamConfigurationMap || (flexibleConsumer && width < ROUNDING_WIDTH_CAP)) {
+            overriddenSensorPixelModesUsed->insert(
+                    ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+        } else {
             overriddenSensorPixelModesUsed->insert(ANDROID_SENSOR_PIXEL_MODE_DEFAULT);
-            return OK;
         }
-        return BAD_VALUE;
+        return OK;
     }
 
     // Case2: The app has set sensorPixelModesUsed, we need to verify that they
     // are valid / err out.
     if (sensorPixelModesUsedSet.find(ANDROID_SENSOR_PIXEL_MODE_DEFAULT) !=
             sensorPixelModesUsedSet.end() && !isInDefaultStreamConfigurationMap) {
+        ALOGE("%s: ANDROID_SENSOR_PIXEL_MODE_DEFAULT set by client, but stream f: %d size %d x %d"
+                " isn't present in default stream configuration map", __FUNCTION__, format, width,
+                height);
         return BAD_VALUE;
     }
 
    if (sensorPixelModesUsedSet.find(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION) !=
             sensorPixelModesUsedSet.end() && !isInMaximumResolutionStreamConfigurationMap) {
+        ALOGE("%s: ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION set by client, but stream f: "
+                "%d size %d x %d isn't present in default stream configuration map", __FUNCTION__,
+                format, width, height);
         return BAD_VALUE;
     }
     *overriddenSensorPixelModesUsed = sensorPixelModesUsedSet;
