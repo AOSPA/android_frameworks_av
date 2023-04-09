@@ -968,7 +968,8 @@ binder::Status CameraDeviceClient::createStream(
             camera3::DepthCompositeStream::isDepthCompositeStream(surfaces[0]);
     bool isHeicCompositeStream = camera3::HeicCompositeStream::isHeicCompositeStream(surfaces[0]);
     bool isJpegRCompositeStream =
-        camera3::JpegRCompositeStream::isJpegRCompositeStream(surfaces[0]);
+        camera3::JpegRCompositeStream::isJpegRCompositeStream(surfaces[0]) &&
+        !mDevice->supportNativeJpegR();
     if (isDepthCompositeStream || isHeicCompositeStream || isJpegRCompositeStream) {
         sp<CompositeStream> compositeStream;
         if (isDepthCompositeStream) {
@@ -1083,7 +1084,7 @@ binder::Status CameraDeviceClient::createDeferredSurfaceStreamLocked(
             outputConfiguration.getSensorPixelModesUsed();
     if (SessionConfigurationUtils::checkAndOverrideSensorPixelModesUsed(
             sensorPixelModesUsed, format, width, height, getStaticInfo(cameraIdUsed),
-            /*allowRounding*/ false, &overriddenSensorPixelModesUsed) != OK) {
+            &overriddenSensorPixelModesUsed) != OK) {
         return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
                 "sensor pixel modes used not valid for deferred stream");
     }
@@ -1861,7 +1862,8 @@ binder::Status CameraDeviceClient::switchToOffline(
             sp<Surface> s = new Surface(gbp, false /*controlledByApp*/);
             isCompositeStream = camera3::DepthCompositeStream::isDepthCompositeStream(s) ||
                 camera3::HeicCompositeStream::isHeicCompositeStream(s) ||
-                camera3::JpegRCompositeStream::isJpegRCompositeStream(s);
+                (camera3::JpegRCompositeStream::isJpegRCompositeStream(s) &&
+                 !mDevice->supportNativeJpegR());
             if (isCompositeStream) {
                 auto compositeIdx = mCompositeStreamMap.indexOfKey(IInterface::asBinder(gbp));
                 if (compositeIdx == NAME_NOT_FOUND) {

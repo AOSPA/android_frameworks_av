@@ -302,7 +302,8 @@ Status AudioPolicyService::getOutput(AudioStreamType streamAidl, int32_t* _aidl_
     audio_stream_type_t stream = VALUE_OR_RETURN_BINDER_STATUS(
             aidl2legacy_AudioStreamType_audio_stream_type_t(streamAidl));
 
-    if (uint32_t(stream) >= AUDIO_STREAM_PUBLIC_CNT) {
+    if (uint32_t(stream) >= AUDIO_STREAM_PUBLIC_CNT
+          && stream != AUDIO_STREAM_ASSISTANT && stream != AUDIO_STREAM_CALL_ASSISTANT) {
         *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(
             legacy2aidl_audio_io_handle_t_int32_t(AUDIO_IO_HANDLE_NONE));
         return Status::ok();
@@ -1558,6 +1559,17 @@ Status AudioPolicyService::listAudioPorts(media::AudioPortRole roleAidl,
     count->value = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<int32_t>(num_ports));
     *_aidl_return = VALUE_OR_RETURN_BINDER_STATUS(convertIntegral<int32_t>(generation));
     return Status::ok();
+}
+
+Status AudioPolicyService::listDeclaredDevicePorts(media::AudioPortRole role,
+                                                    std::vector<media::AudioPortFw>* _aidl_return) {
+    Mutex::Autolock _l(mLock);
+    if (mAudioPolicyManager == NULL) {
+        return binderStatusFromStatusT(NO_INIT);
+    }
+    AutoCallerClear acc;
+    return binderStatusFromStatusT(mAudioPolicyManager->listDeclaredDevicePorts(
+                    role, _aidl_return));
 }
 
 Status AudioPolicyService::getAudioPort(int portId,

@@ -118,6 +118,8 @@ bool deviceReportsColorSpaces(const CameraMetadata& staticMeta);
 bool isColorSpaceSupported(int32_t colorSpace, int32_t format, android_dataspace dataSpace,
         int64_t dynamicRangeProfile, const CameraMetadata& staticMeta);
 
+bool dataSpaceFromColorSpace(android_dataspace *dataSpace, int32_t colorSpace);
+
 bool isStreamUseCaseSupported(int64_t streamUseCase, const CameraMetadata &deviceInfo);
 
 void mapStreamInfo(const OutputStreamInfo &streamInfo,
@@ -139,7 +141,7 @@ const CameraMetadata &staticInfo, const String8 &cameraId);
 binder::Status
 convertToHALStreamCombination(
     const SessionConfiguration& sessionConfiguration,
-    const String8 &logicalCameraId, const CameraMetadata &deviceInfo,
+    const String8 &logicalCameraId, const CameraMetadata &deviceInfo, bool supportNativeJpegR,
     metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
     aidl::android::hardware::camera::device::StreamConfiguration &streamConfiguration,
     bool overrideForPerfClass, bool *earlyExit, bool isPrivilegedClient = false);
@@ -148,7 +150,7 @@ StreamConfigurationPair getStreamConfigurationPair(const CameraMetadata &metadat
 
 status_t checkAndOverrideSensorPixelModesUsed(
         const std::vector<int32_t> &sensorPixelModesUsed, int format, int width, int height,
-        const CameraMetadata &staticInfo, bool flexibleConsumer,
+        const CameraMetadata &staticInfo,
         std::unordered_set<int32_t> *overriddenSensorPixelModesUsed);
 
 bool targetPerfClassPrimaryCamera(
