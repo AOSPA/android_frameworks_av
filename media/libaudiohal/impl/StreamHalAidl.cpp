@@ -599,10 +599,11 @@ status_t StreamOutHalAidl::setVolume(float left, float right) {
     return statusTFromBinderStatus(mStream->setHwVolume({left, right}));
 }
 
-status_t StreamOutHalAidl::selectPresentation(int presentationId, int programId) {
+status_t StreamOutHalAidl::selectPresentation(int presentationId __unused, int programId __unused) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    return statusTFromBinderStatus(mStream->selectPresentation(presentationId, programId));
+    ALOGE("%s not implemented yet", __func__);
+    return OK;
 }
 
 status_t StreamOutHalAidl::write(const void *buffer, size_t bytes, size_t *written) {
@@ -708,61 +709,48 @@ status_t StreamOutHalAidl::updateSourceMetadata(
     return statusTFromBinderStatus(mStream->updateMetadata(aidlMetadata));
 }
 
-status_t StreamOutHalAidl::getDualMonoMode(audio_dual_mono_mode_t* mode) {
+status_t StreamOutHalAidl::getDualMonoMode(audio_dual_mono_mode_t* mode __unused) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    if (mode == nullptr) {
-        return BAD_VALUE;
-    }
-    ::aidl::android::media::audio::common::AudioDualMonoMode aidlMode;
-    RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mStream->getDualMonoMode(&aidlMode)));
-    *mode = VALUE_OR_RETURN_STATUS(
-            ::aidl::android::aidl2legacy_AudioDualMonoMode_audio_dual_mono_mode_t(aidlMode));
+    ALOGE("%s not implemented yet", __func__);
     return OK;
 }
 
-status_t StreamOutHalAidl::setDualMonoMode(audio_dual_mono_mode_t mode) {
+status_t StreamOutHalAidl::setDualMonoMode(audio_dual_mono_mode_t mode __unused) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    ::aidl::android::media::audio::common::AudioDualMonoMode aidlMode = VALUE_OR_RETURN_STATUS(
-            ::aidl::android::legacy2aidl_audio_dual_mono_mode_t_AudioDualMonoMode(mode));
-    return statusTFromBinderStatus(mStream->setDualMonoMode(aidlMode));
-}
-
-status_t StreamOutHalAidl::getAudioDescriptionMixLevel(float* leveldB) {
-    TIME_CHECK();
-    if (!mStream) return NO_INIT;
-    if (leveldB == nullptr) {
-        return BAD_VALUE;
-    }
-    return statusTFromBinderStatus(mStream->getAudioDescriptionMixLevel(leveldB));
-}
-
-status_t StreamOutHalAidl::setAudioDescriptionMixLevel(float leveldB) {
-    TIME_CHECK();
-    if (!mStream) return NO_INIT;
-    return statusTFromBinderStatus(mStream->setAudioDescriptionMixLevel(leveldB));
-}
-
-status_t StreamOutHalAidl::getPlaybackRateParameters(audio_playback_rate_t* playbackRate) {
-    TIME_CHECK();
-    if (!mStream) return NO_INIT;
-    if (playbackRate == nullptr) {
-        return BAD_VALUE;
-    }
-    ::aidl::android::media::audio::common::AudioPlaybackRate aidlRate;
-    RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mStream->getPlaybackRateParameters(&aidlRate)));
-    *playbackRate = VALUE_OR_RETURN_STATUS(
-            ::aidl::android::aidl2legacy_AudioPlaybackRate_audio_playback_rate_t(aidlRate));
+    ALOGE("%s not implemented yet", __func__);
     return OK;
 }
 
-status_t StreamOutHalAidl::setPlaybackRateParameters(const audio_playback_rate_t& playbackRate) {
+status_t StreamOutHalAidl::getAudioDescriptionMixLevel(float* leveldB __unused) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    ::aidl::android::media::audio::common::AudioPlaybackRate aidlRate = VALUE_OR_RETURN_STATUS(
-            ::aidl::android::legacy2aidl_audio_playback_rate_t_AudioPlaybackRate(playbackRate));
-    return statusTFromBinderStatus(mStream->setPlaybackRateParameters(aidlRate));
+    ALOGE("%s not implemented yet", __func__);
+    return OK;
+}
+
+status_t StreamOutHalAidl::setAudioDescriptionMixLevel(float leveldB __unused) {
+    TIME_CHECK();
+    if (!mStream) return NO_INIT;
+    ALOGE("%s not implemented yet", __func__);
+    return OK;
+}
+
+status_t StreamOutHalAidl::getPlaybackRateParameters(
+        audio_playback_rate_t* playbackRate __unused) {
+    TIME_CHECK();
+    if (!mStream) return NO_INIT;
+    ALOGE("%s not implemented yet", __func__);
+    return BAD_VALUE;
+}
+
+status_t StreamOutHalAidl::setPlaybackRateParameters(
+        const audio_playback_rate_t& playbackRate __unused) {
+    TIME_CHECK();
+    if (!mStream) return NO_INIT;
+    ALOGE("%s not implemented yet", __func__);
+    return BAD_VALUE;
 }
 
 status_t StreamOutHalAidl::setEventCallback(
@@ -775,27 +763,18 @@ status_t StreamOutHalAidl::setEventCallback(
     return OK;
 }
 
-status_t StreamOutHalAidl::setLatencyMode(audio_latency_mode_t mode) {
+status_t StreamOutHalAidl::setLatencyMode(audio_latency_mode_t mode __unused) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    ::aidl::android::media::audio::common::AudioLatencyMode aidlMode = VALUE_OR_RETURN_STATUS(
-            ::aidl::android::legacy2aidl_audio_latency_mode_t_AudioLatencyMode(mode));
-    return statusTFromBinderStatus(mStream->setLatencyMode(aidlMode));
+    ALOGE("%s not implemented yet", __func__);
+    return OK;
 };
 
-status_t StreamOutHalAidl::getRecommendedLatencyModes(std::vector<audio_latency_mode_t> *modes) {
+status_t StreamOutHalAidl::getRecommendedLatencyModes(
+        std::vector<audio_latency_mode_t> *modes __unused) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    if (modes == nullptr) {
-        return BAD_VALUE;
-    }
-    std::vector<::aidl::android::media::audio::common::AudioLatencyMode> aidlModes;
-    RETURN_STATUS_IF_ERROR(
-            statusTFromBinderStatus(mStream->getRecommendedLatencyModes(&aidlModes)));
-    *modes = VALUE_OR_RETURN_STATUS(
-            ::aidl::android::convertContainer<std::vector<audio_latency_mode_t>>(
-                    aidlModes,
-                    ::aidl::android::aidl2legacy_AudioLatencyMode_audio_latency_mode_t));
+    ALOGE("%s not implemented yet", __func__);
     return OK;
 };
 

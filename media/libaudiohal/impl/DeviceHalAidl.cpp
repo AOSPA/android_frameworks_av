@@ -937,13 +937,10 @@ status_t DeviceHalAidl::dump(int fd, const Vector<String16>& args) {
     return mModule->dump(fd, Args(args).args(), args.size());
 }
 
-int32_t DeviceHalAidl::supportsBluetoothVariableLatency(bool* supports) {
+int32_t DeviceHalAidl::supportsBluetoothVariableLatency(bool* supports __unused) {
     TIME_CHECK();
-    if (!mModule) return NO_INIT;
-    if (supports == nullptr) {
-        return BAD_VALUE;
-    }
-    return statusTFromBinderStatus(mModule->supportsVariableLatency(supports));
+    ALOGE("%s not implemented yet", __func__);
+    return INVALID_OPERATION;
 }
 
 status_t DeviceHalAidl::getSoundDoseInterface(const std::string& module,
