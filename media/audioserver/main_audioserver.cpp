@@ -138,7 +138,7 @@ int main(int argc __unused, char **argv)
                     usage.ru_utime.tv_sec, usage.ru_utime.tv_usec / 1000,
                     usage.ru_stime.tv_sec, usage.ru_stime.tv_usec / 1000);
             sp<IServiceManager> sm = defaultServiceManager();
-            sp<IBinder> binder = sm->getService(String16("media.log"));
+            sp<IBinder> binder = sm->waitForService(String16("media.log"));
             if (binder != 0) {
                 Vector<String16> args;
                 binder->dump(-1, args);
