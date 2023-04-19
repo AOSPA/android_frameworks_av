@@ -1309,6 +1309,10 @@ status_t MediaImageDecoder::extractInternal() {
                     outThreadRunning = true;
                 }
             }
+
+            // If output thread has completed processing, stop processing inputs
+            if (mUseMultiThread && mOutInfo.lock()->mDone)
+                break;
         }
 
         // If output thread is still not running, signal it now.
