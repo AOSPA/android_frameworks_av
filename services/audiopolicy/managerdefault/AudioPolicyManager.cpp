@@ -6727,14 +6727,14 @@ void AudioPolicyManager::checkOutputForAttributes(const audio_attributes_t &attr
                     }
                 }
             }
+
             // mute strategy while moving tracks from one output to another
             if (invalidate) {
                 invalidatedOutputs.push_back(desc);
-                if (desc->isStrategyActive(psId) &&
-                    (invalidate || oldDevices != newDevices)) {
-                    setStrategyMute(psId, false, desc,
-                                (maxLatency * muteLatencyFactor) + routingLatency,
-                                newDevices.types());
+                if (desc->isStrategyActive(psId)) {
+                    setStrategyMute(psId, true, desc);
+                    setStrategyMute(psId, false, desc, maxLatency * LATENCY_MUTE_FACTOR,
+                                    newDevices.types());
                 }
             }
             sp<SourceClientDescriptor> source = getSourceForAttributesOnOutput(srcOut, attr);
