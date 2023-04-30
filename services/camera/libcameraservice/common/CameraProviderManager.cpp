@@ -316,6 +316,18 @@ bool CameraProviderManager::supportNativeZoomRatio(const std::string &id) const 
     return deviceInfo->supportNativeZoomRatio();
 }
 
+bool CameraProviderManager::supportNativeJpegR(const std::string &id) const {
+    std::lock_guard<std::mutex> lock(mInterfaceMutex);
+    return supportNativeJpegRLocked(id);
+}
+
+bool CameraProviderManager::supportNativeJpegRLocked(const std::string &id) const {
+    auto deviceInfo = findDeviceInfoLocked(id);
+    if (deviceInfo == nullptr) return false;
+
+    return deviceInfo->supportNativeJpegR();
+}
+
 status_t CameraProviderManager::getResourceCost(const std::string &id,
         CameraResourceCost* cost) const {
     std::lock_guard<std::mutex> lock(mInterfaceMutex);
@@ -1108,7 +1120,7 @@ bool CameraProviderManager::isConcurrentDynamicRangeCaptureSupported(
 }
 
 status_t CameraProviderManager::ProviderInfo::DeviceInfo3::deriveJpegRTags(bool maxResolution) {
-    if (kFrameworkJpegRDisabled) {
+    if (kFrameworkJpegRDisabled || mSupportsNativeJpegR) {
         return OK;
     }
 
@@ -2074,13 +2086,12 @@ sp<CameraProviderManager::StatusListener> CameraProviderManager::getStatusListen
 CameraProviderManager::ProviderInfo::ProviderInfo(
         const std::string &providerName,
         const std::string &providerInstance,
-        CameraProviderManager *manager) :
+        [[maybe_unused]] CameraProviderManager *manager) :
         mProviderName(providerName),
         mProviderInstance(providerInstance),
         mProviderTagid(generateVendorTagId(providerName)),
         mUniqueDeviceCount(0),
         mManager(manager) {
-    (void) mManager;
 }
 
 const std::string& CameraProviderManager::ProviderInfo::getType() const {

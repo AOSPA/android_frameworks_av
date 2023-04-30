@@ -483,6 +483,9 @@ AidlProviderInfo::AidlDeviceInfo3::AidlDeviceInfo3(
         }
     }
 
+    mSupportsNativeJpegR = mCameraCharacteristics.exists(
+            ANDROID_JPEGR_AVAILABLE_JPEG_R_STREAM_CONFIGURATIONS);
+
     mSystemCameraKind = getSystemCameraKind();
 
     status_t res = fixupMonochromeTags();
@@ -506,8 +509,8 @@ AidlProviderInfo::AidlDeviceInfo3::AidlDeviceInfo3(
         ALOGE("%s: Unable to derive Jpeg/R tags based on camera and media capabilities: %s (%d)",
                 __FUNCTION__, strerror(-res), res);
     }
-
-    if (camera3::SessionConfigurationUtils::isUltraHighResolutionSensor(mCameraCharacteristics)) {
+    using camera3::SessionConfigurationUtils::supportsUltraHighResolutionCapture;
+    if (supportsUltraHighResolutionCapture(mCameraCharacteristics)) {
         status_t status = addDynamicDepthTags(/*maxResolution*/true);
         if (OK != status) {
             ALOGE("%s: Failed appending dynamic depth tags for maximum resolution mode: %s (%d)",
@@ -732,8 +735,8 @@ status_t AidlProviderInfo::AidlDeviceInfo3::isSessionConfigurationSupported(
     camera::device::StreamConfiguration streamConfiguration;
     bool earlyExit = false;
     auto bRes = SessionConfigurationUtils::convertToHALStreamCombination(configuration,
-            String8(mId.c_str()), mCameraCharacteristics, getMetadata, mPhysicalIds,
-            streamConfiguration, overrideForPerfClass, &earlyExit);
+            String8(mId.c_str()), mCameraCharacteristics, mSupportsNativeJpegR, getMetadata,
+            mPhysicalIds, streamConfiguration, overrideForPerfClass, &earlyExit);
 
     if (!bRes.isOk()) {
         return UNKNOWN_ERROR;
@@ -781,7 +784,7 @@ status_t AidlProviderInfo::convertToAidlHALStreamCombinationAndCameraIdsLocked(
                 SessionConfigurationUtils::targetPerfClassPrimaryCamera(
                         perfClassPrimaryCameraIds, cameraId, targetSdkVersion);
         res = mManager->getCameraCharacteristicsLocked(cameraId, overrideForPerfClass, &deviceInfo,
-                /*overrideToPortrait*/true);
+                /*overrideToPortrait*/false);
         if (res != OK) {
             return res;
         }
@@ -789,7 +792,8 @@ status_t AidlProviderInfo::convertToAidlHALStreamCombinationAndCameraIdsLocked(
                 [this](const String8 &id, bool overrideForPerfClass) {
                     CameraMetadata physicalDeviceInfo;
                     mManager->getCameraCharacteristicsLocked(id.string(), overrideForPerfClass,
-                                                   &physicalDeviceInfo, /*overrideToPortrait*/true);
+                                                   &physicalDeviceInfo,
+                                                   /*overrideToPortrait*/false);
                     return physicalDeviceInfo;
                 };
         std::vector<std::string> physicalCameraIds;
@@ -797,7 +801,8 @@ status_t AidlProviderInfo::convertToAidlHALStreamCombinationAndCameraIdsLocked(
         bStatus =
             SessionConfigurationUtils::convertToHALStreamCombination(
                     cameraIdAndSessionConfig.mSessionConfiguration,
-                    String8(cameraId.c_str()), deviceInfo, getMetadata,
+                    String8(cameraId.c_str()), deviceInfo,
+                    mManager->supportNativeJpegRLocked(cameraId), getMetadata,
                     physicalCameraIds, streamConfiguration,
                     overrideForPerfClass, &shouldExit);
         if (!bStatus.isOk()) {

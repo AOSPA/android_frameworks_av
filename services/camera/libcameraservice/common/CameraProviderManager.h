@@ -248,6 +248,11 @@ public:
     bool supportNativeZoomRatio(const std::string &id) const;
 
     /**
+     * Return true if the camera device has native Jpeg/R support.
+     */
+    bool supportNativeJpegR(const std::string &id) const;
+
+    /**
      * Return the resource cost of this camera device
      */
     status_t getResourceCost(const std::string &id,
@@ -568,6 +573,7 @@ private:
 
             bool hasFlashUnit() const { return mHasFlashUnit; }
             bool supportNativeZoomRatio() const { return mSupportNativeZoomRatio; }
+            bool supportNativeJpegR() const { return mSupportsNativeJpegR; }
             virtual status_t setTorchMode(bool enabled) = 0;
             virtual status_t turnOnTorchWithStrengthLevel(int32_t torchStrength) = 0;
             virtual status_t getTorchStrengthLevel(int32_t *torchStrength) = 0;
@@ -576,17 +582,15 @@ private:
                     hardware::CameraInfo *info) const = 0;
             virtual bool isAPI1Compatible() const = 0;
             virtual status_t dumpState(int fd) = 0;
-            virtual status_t getCameraCharacteristics(bool overrideForPerfClass,
-                    CameraMetadata *characteristics, bool overrideToPortrait) {
-                (void) overrideForPerfClass;
-                (void) characteristics;
-                (void) overrideToPortrait;
+            virtual status_t getCameraCharacteristics(
+                    [[maybe_unused]] bool overrideForPerfClass,
+                    [[maybe_unused]] CameraMetadata *characteristics,
+                    [[maybe_unused]] bool overrideToPortrait) {
                 return INVALID_OPERATION;
             }
-            virtual status_t getPhysicalCameraCharacteristics(const std::string& physicalCameraId,
-                    CameraMetadata *characteristics) const {
-                (void) physicalCameraId;
-                (void) characteristics;
+            virtual status_t getPhysicalCameraCharacteristics(
+                    [[maybe_unused]] const std::string& physicalCameraId,
+                    [[maybe_unused]] CameraMetadata *characteristics) const {
                 return INVALID_OPERATION;
             }
 
@@ -611,13 +615,14 @@ private:
                     mParentProvider(parentProvider), mTorchStrengthLevel(0),
                     mTorchMaximumStrengthLevel(0), mTorchDefaultStrengthLevel(0),
                     mHasFlashUnit(false), mSupportNativeZoomRatio(false),
-                    mPublicCameraIds(publicCameraIds) {}
+                    mPublicCameraIds(publicCameraIds), mSupportsNativeJpegR(false) {}
             virtual ~DeviceInfo() {}
         protected:
 
             bool mHasFlashUnit; // const after constructor
             bool mSupportNativeZoomRatio; // const after constructor
             const std::vector<std::string>& mPublicCameraIds;
+            bool mSupportsNativeJpegR;
         };
         std::vector<std::unique_ptr<DeviceInfo>> mDevices;
         std::unordered_set<std::string> mUniqueCameraIds;
@@ -805,6 +810,8 @@ private:
     // and the calling code doesn't mutate the list of providers or their lists of devices.
     // No guarantees on the order of traversal
     ProviderInfo::DeviceInfo* findDeviceInfoLocked(const std::string& id) const;
+
+    bool supportNativeJpegRLocked(const std::string &id) const;
 
     // Map external providers to USB devices in order to handle USB hotplug
     // events for lazy HALs

@@ -163,7 +163,7 @@ status_t HidlCamera3Device::initialize(sp<CameraProviderManager> manager,
     }
 
     res = manager->getCameraCharacteristics(mId.string(), mOverrideForPerfClass, &mDeviceInfo,
-            mOverrideToPortrait);
+            /*overrideToPortrait*/false);
     if (res != OK) {
         SET_ERR_L("Could not retrieve camera characteristics: %s (%d)", strerror(-res), res);
         session->close();
@@ -178,7 +178,7 @@ status_t HidlCamera3Device::initialize(sp<CameraProviderManager> manager,
             // Do not override characteristics for physical cameras
             res = manager->getCameraCharacteristics(
                     physicalId, /*overrideForPerfClass*/false, &mPhysicalDeviceInfoMap[physicalId],
-                    /*overrideToPortrait*/true);
+                    /*overrideToPortrait*/false);
             if (res != OK) {
                 SET_ERR_L("Could not retrieve camera %s characteristics: %s (%d)",
                         physicalId.c_str(), strerror(-res), res);
@@ -203,7 +203,7 @@ status_t HidlCamera3Device::initialize(sp<CameraProviderManager> manager,
                     &mPhysicalDeviceInfoMap[physicalId],
                     mSupportNativeZoomRatio, usePrecorrectArray);
 
-            if (SessionConfigurationUtils::isUltraHighResolutionSensor(
+            if (SessionConfigurationUtils::supportsUltraHighResolutionCapture(
                     mPhysicalDeviceInfoMap[physicalId])) {
                 mUHRCropAndMeteringRegionMappers[physicalId] =
                         UHRCropAndMeteringRegionMapper(mPhysicalDeviceInfoMap[physicalId],
@@ -880,7 +880,8 @@ bool HidlCamera3Device::HidlHalInterface::isReconfigurationRequired(
 
 status_t HidlCamera3Device::HidlHalInterface::configureStreams(
         const camera_metadata_t *sessionParams,
-        camera_stream_configuration *config, const std::vector<uint32_t>& bufferSizes) {
+        camera_stream_configuration *config, const std::vector<uint32_t>& bufferSizes,
+        int64_t /*logId*/) {
     ATRACE_NAME("CameraHal::configureStreams");
     if (!valid()) return INVALID_OPERATION;
     status_t res = OK;

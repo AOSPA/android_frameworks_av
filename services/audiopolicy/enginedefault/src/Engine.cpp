@@ -167,8 +167,12 @@ void Engine::filterOutputDevicesForStrategy(legacy_strategy strategy,
         //   - cannot route from voice call RX OR
         //   - audio HAL version is < 3.0 and TX device is on the primary HW module
         if (getPhoneState() == AUDIO_MODE_IN_CALL) {
-            audio_devices_t txDevice = getDeviceForInputSource(
-                    AUDIO_SOURCE_VOICE_COMMUNICATION)->type();
+            audio_devices_t txDevice = AUDIO_DEVICE_NONE;
+            sp<DeviceDescriptor> txDeviceDesc =
+                    getDeviceForInputSource(AUDIO_SOURCE_VOICE_COMMUNICATION);
+            if (txDeviceDesc != nullptr) {
+                txDevice = txDeviceDesc->type();
+            }
             sp<AudioOutputDescriptor> primaryOutput = outputs.getPrimaryOutput();
             LOG_ALWAYS_FATAL_IF(primaryOutput == nullptr, "Primary output not found");
             DeviceVector availPrimaryInputDevices =
@@ -292,7 +296,8 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
                             }));
         if (!devices.isEmpty()) break;
         devices = availableOutputDevices.getFirstDevicesFromTypes({
-                AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET, AUDIO_DEVICE_OUT_EARPIECE});
+                AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET, AUDIO_DEVICE_OUT_EARPIECE,
+                AUDIO_DEVICE_OUT_SPEAKER});
     } break;
 
     case STRATEGY_SONIFICATION:
@@ -631,22 +636,26 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
             }
         }
         switch (commDeviceType) {
-        case AUDIO_DEVICE_OUT_BLE_HEADSET:
-            device = availableDevices.getDevice(
-                    AUDIO_DEVICE_IN_BLE_HEADSET, String8(""), AUDIO_FORMAT_DEFAULT);
-            break;
         case AUDIO_DEVICE_OUT_SPEAKER:
             device = availableDevices.getFirstExistingDevice({
                     AUDIO_DEVICE_IN_BACK_MIC, AUDIO_DEVICE_IN_BUILTIN_MIC,
                     AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_IN_USB_HEADSET});
             break;
+        case AUDIO_DEVICE_OUT_BLE_HEADSET:
+            device = availableDevices.getDevice(
+                    AUDIO_DEVICE_IN_BLE_HEADSET, String8(""), AUDIO_FORMAT_DEFAULT);
+            if (device != nullptr) {
+                break;
+            }
+            ALOGE("%s LE Audio selected for communication but input device not available",
+                    __func__);
+            FALLTHROUGH_INTENDED;
         default:    // FORCE_NONE
             device = availableDevices.getFirstExistingDevice({
                     AUDIO_DEVICE_IN_WIRED_HEADSET, AUDIO_DEVICE_IN_USB_HEADSET,
                     AUDIO_DEVICE_IN_USB_DEVICE, AUDIO_DEVICE_IN_BLUETOOTH_BLE,
                     AUDIO_DEVICE_IN_BUILTIN_MIC});
             break;
-
         }
         break;
 
@@ -744,15 +753,9 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
     return device;
 }
 
-void Engine::updateDeviceSelectionCache()
-{
-    for (const auto &iter : getProductStrategies()) {
-        const auto& strategy = iter.second;
-        auto devices = getDevicesForProductStrategy(strategy->getId());
-        mDevicesForStrategies[strategy->getId()] = devices;
-        strategy->setDeviceTypes(devices.types());
-        strategy->setDeviceAddress(devices.getFirstValidAddress().c_str());
-    }
+void Engine::setStrategyDevices(const sp<ProductStrategy>& strategy, const DeviceVector &devices) {
+    strategy->setDeviceTypes(devices.types());
+    strategy->setDeviceAddress(devices.getFirstValidAddress().c_str());
 }
 
 product_strategy_t Engine::getProductStrategyFromLegacy(legacy_strategy legacyStrategy) const {
