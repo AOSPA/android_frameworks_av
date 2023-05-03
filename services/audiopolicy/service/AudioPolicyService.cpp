@@ -46,6 +46,7 @@
 
 #include <system/audio.h>
 #include <system/audio_policy.h>
+#include <AudioPolicyConfig.h>
 #include <AudioPolicyManager.h>
 
 namespace android {
@@ -185,7 +186,8 @@ static auto& getIAudioPolicyServiceStatistics() {
 
 static AudioPolicyInterface* createAudioPolicyManager(AudioPolicyClientInterface *clientInterface)
 {
-    AudioPolicyManager *apm = new AudioPolicyManager(clientInterface);
+    AudioPolicyManager *apm = new AudioPolicyManager(
+            AudioPolicyConfig::loadFromApmXmlConfigWithFallback(), clientInterface);
     status_t status = apm->initialize();
     if (status != NO_ERROR) {
         delete apm;
@@ -1695,7 +1697,7 @@ void AudioPolicyService::UidPolicy::onUidStateChanged(uid_t uid,
     }
 }
 
-void AudioPolicyService::UidPolicy::onUidProcAdjChanged(uid_t uid __unused) {
+void AudioPolicyService::UidPolicy::onUidProcAdjChanged(uid_t uid __unused, int32_t adj __unused) {
 }
 
 void AudioPolicyService::UidPolicy::updateOverrideUid(uid_t uid, bool active, bool insert) {
