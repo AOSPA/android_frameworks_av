@@ -485,14 +485,17 @@ int32_t AudioFlinger::getAAudioHardwareBurstMinUsec() {
     return mAAudioHwBurstMinMicros;
 }
 
-status_t AudioFlinger::setDeviceConnectedState(const struct audio_port_v7 *port, bool connected) {
+status_t AudioFlinger::setDeviceConnectedState(const struct audio_port_v7 *port,
+                                               media::DeviceConnectedState state) {
     status_t final_result = NO_INIT;
     Mutex::Autolock _l(mLock);
     AutoMutex lock(mHardwareLock);
     mHardwareStatus = AUDIO_HW_SET_CONNECTED_STATE;
     for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
         sp<DeviceHalInterface> dev = mAudioHwDevs.valueAt(i)->hwDevice();
-        status_t result = dev->setConnectedState(port, connected);
+        status_t result = state == media::DeviceConnectedState::PREPARE_TO_DISCONNECT
+                ? dev->prepareToDisconnectExternalDevice(port)
+                : dev->setConnectedState(port, state == media::DeviceConnectedState::CONNECTED);
         // Same logic as with setParameter: it's a success if at least one
         // HAL module accepts the update.
         if (final_result != NO_ERROR) {
@@ -1236,21 +1239,20 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         output.portId = portId;
 
         if (lStatus == NO_ERROR) {
+            // no risk of deadlock because AudioFlinger::mLock is held
+            Mutex::Autolock _dl(thread->mLock);
             // Connect secondary outputs. Failure on a secondary output must not imped the primary
             // Any secondary output setup failure will lead to a desync between the AP and AF until
             // the track is destroyed.
             updateSecondaryOutputsForTrack_l(track.get(), thread, secondaryOutputs);
-        }
-
-        // move effect chain to this output thread if an effect on same session was waiting
-        // for a track to be created
-        if (lStatus == NO_ERROR && effectThread != NULL) {
-            // no risk of deadlock because AudioFlinger::mLock is held
-            Mutex::Autolock _dl(thread->mLock);
-            Mutex::Autolock _sl(effectThread->mLock);
-            if (moveEffectChain_l(sessionId, effectThread, thread) == NO_ERROR) {
-                effectThreadId = thread->id();
-                effectIds = thread->getEffectIds_l(sessionId);
+            // move effect chain to this output thread if an effect on same session was waiting
+            // for a track to be created
+            if (effectThread != nullptr) {
+                Mutex::Autolock _sl(effectThread->mLock);
+                if (moveEffectChain_l(sessionId, effectThread, thread) == NO_ERROR) {
+                    effectThreadId = thread->id();
+                    effectIds = thread->getEffectIds_l(sessionId);
+                }
             }
         }
 
@@ -1861,6 +1863,8 @@ void AudioFlinger::filterReservedParameters(String8& keyValuePairs, uid_t callin
         String8(AudioParameter::keyStreamSupportedFormats),
         String8(AudioParameter::keyStreamSupportedChannels),
         String8(AudioParameter::keyStreamSupportedSamplingRates),
+        String8(AudioParameter::keyClosing),
+        String8(AudioParameter::keyExiting),
     };
 
     if (isAudioServerUid(callingUid)) {
@@ -3953,7 +3957,7 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
         patchTrack->setPeerProxy(patchRecord, true /* holdReference */);
         patchRecord->setPeerProxy(patchTrack, false /* holdReference */);
     }
-    track->setTeePatches(std::move(teePatches));
+    track->setTeePatchesToUpdate(std::move(teePatches));
 }
 
 sp<AudioFlinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_event_t type,

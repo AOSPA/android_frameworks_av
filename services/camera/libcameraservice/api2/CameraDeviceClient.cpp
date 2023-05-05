@@ -1809,6 +1809,14 @@ void CameraDeviceClient::clearStreamUseCaseOverrides() {
     mDevice->clearStreamUseCaseOverrides();
 }
 
+bool CameraDeviceClient::supportsZoomOverride() {
+    return mDevice->supportsZoomOverride();
+}
+
+status_t CameraDeviceClient::setZoomOverride(int32_t zoomOverride) {
+    return mDevice->setZoomOverride(zoomOverride);
+}
+
 binder::Status CameraDeviceClient::switchToOffline(
         const sp<hardware::camera2::ICameraDeviceCallbacks>& cameraCb,
         const std::vector<int>& offlineOutputIds,
