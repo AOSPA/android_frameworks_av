@@ -81,7 +81,7 @@ void AudioFlinger::MelReporter::onFirstRef() {
 }
 
 bool AudioFlinger::MelReporter::shouldComputeMelForDeviceType(audio_devices_t device) {
-    if (mSoundDoseManager->isCsdDisabled()) {
+    if (!mSoundDoseManager->isCsdEnabled()) {
         ALOGV("%s csd is disabled", __func__);
         return false;
     }
@@ -107,7 +107,7 @@ bool AudioFlinger::MelReporter::shouldComputeMelForDeviceType(audio_devices_t de
 
 void AudioFlinger::MelReporter::updateMetadataForCsd(audio_io_handle_t streamHandle,
         const std::vector<playback_track_metadata_v7_t>& metadataVec) {
-    if (mSoundDoseManager->isCsdDisabled()) {
+    if (!mSoundDoseManager->isCsdEnabled()) {
         ALOGV("%s csd is disabled", __func__);
         return;
     }
@@ -143,12 +143,8 @@ void AudioFlinger::MelReporter::updateMetadataForCsd(audio_io_handle_t streamHan
 
 void AudioFlinger::MelReporter::onCreateAudioPatch(audio_patch_handle_t handle,
         const PatchPanel::Patch& patch) {
-    if (mSoundDoseManager->isCsdDisabled()) {
+    if (!mSoundDoseManager->isCsdEnabled()) {
         ALOGV("%s csd is disabled", __func__);
-        return;
-    }
-    if (useHalSoundDoseInterface()) {
-        ALOGV("%s using HAL sound dose, ignore new patch", __func__);
         return;
     }
 
@@ -199,7 +195,7 @@ NO_THREAD_SAFETY_ANALYSIS  // access of AudioFlinger::checkOutputThread_l
         ALOGI("%s add stream %d that uses device %d for CSD, nr of streams: %d", __func__,
               patch.streamHandle, deviceHandle, mActiveDevices[deviceHandle]);
 
-        if (outputThread != nullptr) {
+        if (outputThread != nullptr && !useHalSoundDoseInterface_l()) {
             outputThread->startMelComputation_l(mSoundDoseManager->getOrCreateProcessorForDevice(
                 deviceHandle,
                 patch.streamHandle,
@@ -211,7 +207,7 @@ NO_THREAD_SAFETY_ANALYSIS  // access of AudioFlinger::checkOutputThread_l
 }
 
 void AudioFlinger::MelReporter::onReleaseAudioPatch(audio_patch_handle_t handle) {
-    if (mSoundDoseManager->isCsdDisabled()) {
+    if (!mSoundDoseManager->isCsdEnabled()) {
         ALOGV("%s csd is disabled", __func__);
         return;
     }
@@ -271,7 +267,7 @@ NO_THREAD_SAFETY_ANALYSIS  // access of AudioFlinger::checkOutputThread_l
         }
     }
 
-    if (outputThread != nullptr) {
+    if (outputThread != nullptr && !useHalSoundDoseInterface_l()) {
         outputThread->stopMelComputation_l();
     }
 }
@@ -287,13 +283,8 @@ std::optional<audio_patch_handle_t> AudioFlinger::MelReporter::activePatchStream
     return std::nullopt;
 }
 
-bool AudioFlinger::MelReporter::useHalSoundDoseInterface() {
-    bool useHalSoundDoseInterface = !mSoundDoseManager->forceUseFrameworkMel();
-    {
-        std::lock_guard _l(mLock);
-        useHalSoundDoseInterface &= mUseHalSoundDoseInterface;
-    }
-    return useHalSoundDoseInterface;
+bool AudioFlinger::MelReporter::useHalSoundDoseInterface_l() {
+    return !mSoundDoseManager->forceUseFrameworkMel() & mUseHalSoundDoseInterface;
 }
 
 std::string AudioFlinger::MelReporter::dump() {
