@@ -141,7 +141,7 @@ const CameraMetadata &staticInfo, const String8 &cameraId);
 binder::Status
 convertToHALStreamCombination(
     const SessionConfiguration& sessionConfiguration,
-    const String8 &logicalCameraId, const CameraMetadata &deviceInfo, bool supportNativeJpegR,
+    const String8 &logicalCameraId, const CameraMetadata &deviceInfo, bool isCompositeJpegRDisabled,
     metadataGetter getMetadata, const std::vector<std::string> &physicalCameraIds,
     aidl::android::hardware::camera::device::StreamConfiguration &streamConfiguration,
     bool overrideForPerfClass, bool *earlyExit, bool isPrivilegedClient = false);
