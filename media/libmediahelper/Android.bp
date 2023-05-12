@@ -44,8 +44,9 @@ cc_defaults {
         "liblog",
     ],
     header_libs: [
-        "libmedia_helper_headers",
         "libaudio_system_headers",
+        "libhardware_headers",
+        "libmedia_helper_headers",
     ],
     export_header_lib_headers: [
         "libmedia_helper_headers",
