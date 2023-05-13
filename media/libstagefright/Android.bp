@@ -79,6 +79,7 @@ cc_library_shared {
     },
 }
 
+// this library gets wrapped into libstagefright as well as modules
 cc_library_static {
     name: "libstagefright_mpeg2extractor",
     apex_available: [
@@ -242,7 +243,6 @@ cc_library {
         "CodecErrorLog.cpp",
         "CryptoAsync.cpp",
         "FrameDecoder.cpp",
-        "HevcUtils.cpp",
         "InterfaceUtils.cpp",
         "JPEGSource.cpp",
         "MPEG2TSWriter.cpp",
@@ -256,7 +256,6 @@ cc_library {
         "MediaCodecSource.cpp",
         "MediaExtractor.cpp",
         "MediaExtractorFactory.cpp",
-        "MediaSource.cpp",
         "MediaSync.cpp",
         "MediaTrack.cpp",
         "MediaMuxer.cpp",
@@ -270,7 +269,6 @@ cc_library {
         "StagefrightMediaScanner.cpp",
         "SurfaceUtils.cpp",
         "ThrottledSource.cpp",
-        "Utils.cpp",
         "VideoFrameSchedulerBase.cpp",
         "VideoFrameScheduler.cpp",
     ],
@@ -333,7 +331,8 @@ cc_library {
     ],
 
     whole_static_libs: [
-        "libavextensions"
+        "libavextensions",
+        "libstagefright_mpeg2extractor",
     ],
 
     header_libs:[
