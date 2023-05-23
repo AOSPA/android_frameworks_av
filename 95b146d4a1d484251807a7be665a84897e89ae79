@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "a27a05d6_c5c3f9ba",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000012
+      },
+      "writtenOn": "2023-05-23T18:35:30Z",
+      "side": 1,
+      "message": "thinking this should be conditioned, any reason not to?",
+      "revId": "95b146d4a1d484251807a7be665a84897e89ae79",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
