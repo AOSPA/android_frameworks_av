@@ -388,7 +388,7 @@ public:
     sp<audioflinger::SyncEvent> createSyncEvent(AudioSystem::sync_event_t type,
                                         audio_session_t triggerSession,
                                         audio_session_t listenerSession,
-                                        audioflinger::SyncEventCallback callBack,
+                                        const audioflinger::SyncEventCallback& callBack,
                                         const wp<RefBase>& cookie);
 
     bool        btNrecIsOff() const { return mBtNrecIsOff.load(); }
@@ -608,13 +608,6 @@ private:
     };
 
     // --- PlaybackThread ---
-#ifdef FLOAT_EFFECT_CHAIN
-#define EFFECT_BUFFER_FORMAT AUDIO_FORMAT_PCM_FLOAT
-using effect_buffer_t = float;
-#else
-#define EFFECT_BUFFER_FORMAT AUDIO_FORMAT_PCM_16_BIT
-using effect_buffer_t = int16_t;
-#endif
 
 #include "Threads.h"
 

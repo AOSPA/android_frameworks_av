@@ -3002,14 +3002,6 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
         return nullptr;
     }
 
-#ifndef MULTICHANNEL_EFFECT_CHAIN
-    if (flags & AUDIO_OUTPUT_FLAG_SPATIALIZER) {
-        ALOGE("openOutput_l() cannot create spatializer thread "
-                "without #define MULTICHANNEL_EFFECT_CHAIN");
-        return nullptr;
-    }
-#endif
-
     mHardwareStatus = AUDIO_HW_OUTPUT_OPEN;
 
     // FOR TESTING ONLY:
@@ -4007,7 +3999,7 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
 sp<audioflinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_event_t type,
                                     audio_session_t triggerSession,
                                     audio_session_t listenerSession,
-                                    audioflinger::SyncEventCallback callBack,
+                                    const audioflinger::SyncEventCallback& callBack,
                                     const wp<RefBase>& cookie)
 {
     Mutex::Autolock _l(mLock);
