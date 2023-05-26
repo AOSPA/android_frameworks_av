@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,17 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <fuzzbinder/libbinder_driver.h>
 
-#include "Configuration.h"
-#include "FastMixerState.h"
-#include "FastCaptureState.h"
-#include "StateQueue.h"
+#include <mediametricsservice/MediaMetricsService.h>
 
-// FIXME hack for gcc
+using ::android::fuzzService;
+using ::android::sp;
+using ::android::MediaMetricsService;
 
-namespace android {
-
-template class StateQueue<FastMixerState>;      // typedef FastMixerStateQueue
-template class StateQueue<FastCaptureState>;    // typedef FastCaptureStateQueue
-
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+    auto service = sp<MediaMetricsService>::make();
+    fuzzService(service, FuzzedDataProvider(data, size));
+    return 0;
 }
