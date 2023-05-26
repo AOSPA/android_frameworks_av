@@ -1275,6 +1275,7 @@ status_t HeicCompositeStream::initializeCodec(uint32_t width, uint32_t height,
 
     bool useGrid = false;
     AString hevcName;
+    bool isHWEnc = false;
     bool isSizeSupported = isSizeSupportedByHeifEncoder(width, height,
             &mUseHeic, &useGrid, nullptr, &hevcName);
     if (!isSizeSupported) {
@@ -1373,8 +1374,13 @@ status_t HeicCompositeStream::initializeCodec(uint32_t width, uint32_t height,
     // This only serves as a hint to encoder when encoding is not real-time.
     outputFormat->setInt32(KEY_OPERATING_RATE, useGrid ? kGridOpRate : kNoGridOpRate);
 
+    mCodec->getName(&hevcName);
+    isHWEnc = hevcName.startsWith("c2.qti");
+
     res = mCodec->configure(outputFormat, nullptr /*nativeWindow*/,
-            nullptr /*crypto*/, CONFIGURE_FLAG_ENCODE);
+            nullptr /*crypto*/,
+            CONFIGURE_FLAG_ENCODE |
+            (isHWEnc ? CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
     if (res != OK) {
         ALOGE("%s: Failed to configure codec: %s (%d)", __FUNCTION__,
                 strerror(-res), res);
