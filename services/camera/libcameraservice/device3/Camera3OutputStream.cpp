@@ -81,7 +81,8 @@ Camera3OutputStream::Camera3OutputStream(int id,
     }
 
     bool needsReleaseNotify = setId > CAMERA3_STREAM_SET_ID_INVALID;
-    mBufferProducerListener = new BufferProducerListener(this, needsReleaseNotify);
+    // MIUI MOD
+    mBufferProducerListener = new BufferProducerDetachListener(this, needsReleaseNotify);
 }
 
 Camera3OutputStream::Camera3OutputStream(int id,
@@ -1156,6 +1157,26 @@ void Camera3OutputStream::BufferProducerListener::onBufferReleased() {
         }
     }
 }
+
+// MIUI ADD: START
+void Camera3OutputStream::BufferProducerDetachListener::onBufferDetached(int slot) {
+    sp<Camera3OutputStream> stream = mParent.promote();
+    if (mNeedsReleaseNotify) {
+        ALOGE("%s: could not call detach callback for release notify", __FUNCTION__);
+        return;
+    }
+    if (stream == nullptr) {
+        ALOGV("%s: Parent camera3 output stream was destroyed", __FUNCTION__);
+        return;
+    }
+
+    if (stream->mConsumer != nullptr) {
+        ALOGE("OutputStream onBufferDetached %d",slot);
+        stream->mConsumer->releaseSlot(slot);
+        stream->checkRemovedBuffersLocked(/*notifyBufferManager*/true);
+    }
+}
+// MIUI ADD: END
 
 void Camera3OutputStream::BufferProducerListener::onBuffersDiscarded(
         const std::vector<sp<GraphicBuffer>>& buffers) {
