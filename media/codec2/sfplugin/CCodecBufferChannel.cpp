@@ -175,6 +175,7 @@ CCodecBufferChannel::CCodecBufferChannel(
         Mutexed<Output>::Locked output(mOutput);
         output->outputDelay = 0u;
         output->numSlots = kSmoothnessFactor;
+        output->bounded = false;
     }
     {
         Mutexed<BlockPools>::Locked pools(mBlockPools);
@@ -760,7 +761,7 @@ void CCodecBufferChannel::feedInputBufferIfAvailableInternal() {
         Mutexed<Output>::Locked output(mOutput);
         if (!output->buffers ||
                 output->buffers->hasPending() ||
-                output->buffers->numActiveSlots() >= output->numSlots) {
+                (!output->bounded && output->buffers->numActiveSlots() >= output->numSlots)) {
             return;
         }
     }
@@ -1571,6 +1572,7 @@ status_t CCodecBufferChannel::start(
         Mutexed<Output>::Locked output(mOutput);
         output->outputDelay = outputDelayValue;
         output->numSlots = numOutputSlots;
+        output->bounded = bool(outputSurface);
         if (graphic) {
             if (outputSurface || !buffersBoundToCodec) {
                 output->buffers.reset(new GraphicOutputBuffers(mName));
