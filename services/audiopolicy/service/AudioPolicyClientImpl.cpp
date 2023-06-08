@@ -27,6 +27,18 @@ namespace android {
 
 /* implementation of the client interface from the policy manager */
 
+status_t AudioPolicyService::AudioPolicyClient::getAudioPolicyConfig(
+        media::AudioPolicyConfig *config)
+{
+    sp<IAudioFlinger> af = AudioSystem::get_audio_flinger();
+    if (af == 0) {
+        ALOGW("%s: could not get AudioFlinger", __func__);
+        return AUDIO_MODULE_HANDLE_NONE;
+    }
+
+    return af->getAudioPolicyConfig(config);
+}
+
 audio_module_handle_t AudioPolicyService::AudioPolicyClient::loadHwModule(const char *name)
 {
     sp<IAudioFlinger> af = AudioSystem::get_audio_flinger();
@@ -309,13 +321,13 @@ status_t AudioPolicyService::AudioPolicyClient::updateSecondaryOutputs(
 }
 
 status_t AudioPolicyService::AudioPolicyClient::setDeviceConnectedState(
-        const struct audio_port_v7 *port, bool connected) {
+        const struct audio_port_v7 *port, media::DeviceConnectedState state) {
     sp<IAudioFlinger> af = AudioSystem::get_audio_flinger();
     if (af == nullptr) {
         ALOGW("%s: could not get AudioFlinger", __func__);
         return PERMISSION_DENIED;
     }
-    return af->setDeviceConnectedState(port, connected);
+    return af->setDeviceConnectedState(port, state);
 }
 
 status_t AudioPolicyService::AudioPolicyClient::invalidateTracks(
@@ -327,6 +339,5 @@ status_t AudioPolicyService::AudioPolicyClient::invalidateTracks(
 
     return af->invalidateTracks(portIds);
 }
-
 
 } // namespace android

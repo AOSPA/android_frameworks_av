@@ -17,6 +17,7 @@
 package android.media;
 
 import android.media.AudioPatchFw;
+import android.media.AudioPolicyConfig;
 import android.media.AudioPortFw;
 import android.media.AudioPortConfigFw;
 import android.media.AudioUniqueIdUse;
@@ -27,6 +28,7 @@ import android.media.CreateRecordRequest;
 import android.media.CreateRecordResponse;
 import android.media.CreateTrackRequest;
 import android.media.CreateTrackResponse;
+import android.media.DeviceConnectedState;
 import android.media.OpenInputRequest;
 import android.media.OpenInputResponse;
 import android.media.OpenOutputRequest;
@@ -227,7 +229,7 @@ interface IAudioFlingerService {
 
     int getAAudioHardwareBurstMinUsec();
 
-    void setDeviceConnectedState(in AudioPortFw devicePort, boolean connected);
+    void setDeviceConnectedState(in AudioPortFw devicePort, DeviceConnectedState state);
 
     // Used for tests only. Requires AIDL HAL to work.
     void setSimulateDeviceConnections(boolean enabled);
@@ -279,6 +281,12 @@ interface IAudioFlingerService {
      * Invalidate all tracks with given port ids.
      */
     void invalidateTracks(in int[] /* audio_port_handle_t[] */ portIds);
+
+    /**
+     * Only implemented for AIDL. Provides the APM configuration which
+     * used to be in the XML file.
+     */
+    AudioPolicyConfig getAudioPolicyConfig();
 
     // When adding a new method, please review and update
     // IAudioFlinger.h AudioFlingerServerAdapter::Delegate::TransactionCode

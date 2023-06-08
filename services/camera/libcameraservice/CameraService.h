@@ -218,6 +218,9 @@ public:
             /*out*/
             sp<hardware::camera2::ICameraInjectionSession>* cameraInjectionSession);
 
+    virtual binder::Status reportExtensionSessionStats(
+            const hardware::CameraExtensionSessionStats& stats, String16* sessionKey /*out*/);
+
     // Extra permissions checks
     virtual status_t    onTransact(uint32_t code, const Parcel& data,
                                    Parcel* reply, uint32_t flags);
@@ -233,6 +236,7 @@ public:
 
     // Monitored UIDs availability notification
     void                notifyMonitoredUids();
+    void                notifyMonitoredUids(const std::unordered_set<uid_t> &notifyUidSet);
 
     // Stores current open session device info in temp file.
     void cacheDump();
@@ -370,6 +374,12 @@ public:
 
         // Clear stream use case overrides
         virtual void clearStreamUseCaseOverrides() = 0;
+
+        // Whether the client supports camera zoom override
+        virtual bool supportsZoomOverride() = 0;
+
+        // Set/reset zoom override
+        virtual status_t setZoomOverride(int32_t zoomOverride) = 0;
 
         // The injection camera session to replace the internal camera
         // session.
@@ -757,13 +767,13 @@ private:
         void onUidIdle(uid_t uid, bool disabled) override;
         void onUidStateChanged(uid_t uid, int32_t procState, int64_t procStateSeq,
                 int32_t capability) override;
-        void onUidProcAdjChanged(uid_t uid) override;
+        void onUidProcAdjChanged(uid_t uid, int adj) override;
 
         void addOverrideUid(uid_t uid, String16 callingPackage, bool active);
         void removeOverrideUid(uid_t uid, String16 callingPackage);
 
-        void registerMonitorUid(uid_t uid);
-        void unregisterMonitorUid(uid_t uid);
+        void registerMonitorUid(uid_t uid, bool openCamera);
+        void unregisterMonitorUid(uid_t uid, bool closeCamera);
 
         // Implementation of IServiceManager::LocalRegistrationCallback
         virtual void onServiceRegistration(const String16& name,
@@ -778,6 +788,8 @@ private:
 
         struct MonitoredUid {
             int32_t procState;
+            int32_t procAdj;
+            bool hasCamera;
             size_t refCount;
         };
 
@@ -789,6 +801,7 @@ private:
         // Monitored uid map
         std::unordered_map<uid_t, MonitoredUid> mMonitoredUids;
         std::unordered_map<uid_t, bool> mOverrideUids;
+        sp<IBinder> mObserverToken;
     }; // class UidPolicy
 
     // If sensor privacy is enabled then all apps, including those that are active, should be
@@ -1306,6 +1319,9 @@ private:
     // Clear the stream use case overrides
     void handleClearStreamUseCaseOverrides();
 
+    // Set or clear the zoom override flag
+    status_t handleSetZoomOverride(const Vector<String16>& args);
+
     // Handle 'watch' command as passed through 'cmd'
     status_t handleWatchCommand(const Vector<String16> &args, int inFd, int outFd);
 
@@ -1407,6 +1423,9 @@ private:
 
     // Current stream use case overrides
     std::vector<int64_t> mStreamUseCaseOverrides;
+
+    // Current zoom override value
+    int32_t mZoomOverrideValue = -1;
 
     /**
      * A listener class that implements the IBinder::DeathRecipient interface

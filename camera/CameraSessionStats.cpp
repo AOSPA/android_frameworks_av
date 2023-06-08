@@ -278,7 +278,9 @@ CameraSessionStats::CameraSessionStats() :
         mRequestCount(0),
         mResultErrorCount(0),
         mDeviceError(false),
-        mVideoStabilizationMode(-1) {}
+        mVideoStabilizationMode(-1),
+        mSessionIndex(0),
+        mCameraExtensionSessionStats() {}
 
 CameraSessionStats::CameraSessionStats(const String16& cameraId,
         int facing, int newCameraState, const String16& clientName,
@@ -297,7 +299,9 @@ CameraSessionStats::CameraSessionStats(const String16& cameraId,
                 mRequestCount(0),
                 mResultErrorCount(0),
                 mDeviceError(0),
-                mVideoStabilizationMode(-1) {}
+                mVideoStabilizationMode(-1),
+                mSessionIndex(0),
+                mCameraExtensionSessionStats() {}
 
 status_t CameraSessionStats::readFromParcel(const android::Parcel* parcel) {
     if (parcel == NULL) {
@@ -409,6 +413,18 @@ status_t CameraSessionStats::readFromParcel(const android::Parcel* parcel) {
         return err;
     }
 
+    int32_t sessionIdx;
+    if ((err = parcel->readInt32(&sessionIdx)) != OK) {
+        ALOGE("%s: Failed to read session index from parcel", __FUNCTION__);
+        return err;
+    }
+
+    CameraExtensionSessionStats extStats{};
+    if ((err = extStats.readFromParcel(parcel)) != OK) {
+        ALOGE("%s: Failed to read extension session stats from parcel", __FUNCTION__);
+        return err;
+    }
+
     mCameraId = id;
     mFacing = facing;
     mNewCameraState = newCameraState;
@@ -426,6 +442,8 @@ status_t CameraSessionStats::readFromParcel(const android::Parcel* parcel) {
     mStreamStats = std::move(streamStats);
     mUserTag = userTag;
     mVideoStabilizationMode = videoStabilizationMode;
+    mSessionIndex = sessionIdx;
+    mCameraExtensionSessionStats = extStats;
 
     return OK;
 }
@@ -520,6 +538,16 @@ status_t CameraSessionStats::writeToParcel(android::Parcel* parcel) const {
 
     if ((err = parcel->writeInt32(mVideoStabilizationMode)) != OK) {
         ALOGE("%s: Failed to write video stabilization mode!", __FUNCTION__);
+        return err;
+    }
+
+    if ((err = parcel->writeInt32(mSessionIndex)) != OK) {
+        ALOGE("%s: Failed to write session index!", __FUNCTION__);
+        return err;
+    }
+
+    if ((err = mCameraExtensionSessionStats.writeToParcel(parcel)) != OK) {
+        ALOGE("%s: Failed to write extension sessions stats!", __FUNCTION__);
         return err;
     }
 

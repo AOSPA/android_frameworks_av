@@ -69,6 +69,12 @@ class MicrophoneInfoProvider : public virtual RefBase {
 class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
                       public CallbackBroker, public MicrophoneInfoProvider {
   public:
+    status_t getAudioPorts(std::vector<media::audio::common::AudioPort> *ports) override;
+
+    status_t getAudioRoutes(std::vector<media::AudioRoute> *routes) override;
+
+    status_t getSupportedModes(std::vector<media::audio::common::AudioMode> *modes) override;
+
     // Sets the value of 'devices' to a bitmask of 1 or more values of audio_devices_t.
     status_t getSupportedDevices(uint32_t *devices) override;
 
@@ -161,6 +167,8 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
     status_t getSoundDoseInterface(const std::string& module,
                                    ::ndk::SpAIBinder* soundDoseBinder) override;
 
+    status_t prepareToDisconnectExternalDevice(const struct audio_port_v7 *port) override;
+
     status_t setConnectedState(const struct audio_port_v7 *port, bool connected) override;
 
     status_t setSimulateDeviceConnections(bool enabled) override;
@@ -185,6 +193,7 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
     using PortConfigs = std::map<int32_t /*port config ID*/,
             ::aidl::android::media::audio::common::AudioPortConfig>;
     using Ports = std::map<int32_t /*port ID*/, ::aidl::android::media::audio::common::AudioPort>;
+    using Routes = std::vector<::aidl::android::hardware::audio::core::AudioRoute>;
     // Answers the question "whether portID 'first' is reachable from portID 'second'?"
     // It's not a map because both portIDs are known. The matrix is symmetric.
     using RoutingMatrix = std::set<std::pair<int32_t, int32_t>>;
@@ -194,8 +203,7 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
     // Must not be constructed directly by clients.
     DeviceHalAidl(
             const std::string& instance,
-            const std::shared_ptr<::aidl::android::hardware::audio::core::IModule>& module)
-            : ConversionHelperAidl("DeviceHalAidl"), mInstance(instance), mModule(module) {}
+            const std::shared_ptr<::aidl::android::hardware::audio::core::IModule>& module);
 
     ~DeviceHalAidl() override = default;
 
@@ -206,6 +214,10 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
     status_t createOrUpdatePortConfig(
             const ::aidl::android::media::audio::common::AudioPortConfig& requestedPortConfig,
             PortConfigs::iterator* result, bool *created);
+    status_t filterAndUpdateBtA2dpParameters(AudioParameter &parameters);
+    status_t filterAndUpdateBtHfpParameters(AudioParameter &parameters);
+    status_t filterAndUpdateBtLeParameters(AudioParameter &parameters);
+    status_t filterAndUpdateBtScoParameters(AudioParameter &parameters);
     status_t findOrCreatePatch(
         const std::set<int32_t>& sourcePortConfigIds,
         const std::set<int32_t>& sinkPortConfigIds,
@@ -215,6 +227,7 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
         ::aidl::android::hardware::audio::core::AudioPatch* patch, bool* created);
     status_t findOrCreatePortConfig(
             const ::aidl::android::media::audio::common::AudioDevice& device,
+            const ::aidl::android::media::audio::common::AudioConfig* config,
             ::aidl::android::media::audio::common::AudioPortConfig* portConfig,
             bool* created);
     status_t findOrCreatePortConfig(
@@ -278,18 +291,25 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
 
     const std::string mInstance;
     const std::shared_ptr<::aidl::android::hardware::audio::core::IModule> mModule;
+    const std::shared_ptr<::aidl::android::hardware::audio::core::ITelephony> mTelephony;
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetooth> mBluetooth;
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetoothA2dp> mBluetoothA2dp;
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetoothLe> mBluetoothLe;
     std::shared_ptr<::aidl::android::hardware::audio::core::sounddose::ISoundDose>
         mSoundDose = nullptr;
     Ports mPorts;
     int32_t mDefaultInputPortId = -1;
     int32_t mDefaultOutputPortId = -1;
     PortConfigs mPortConfigs;
+    std::set<int32_t> mInitialPortConfigIds;
     Patches mPatches;
+    Routes mRoutes;
     RoutingMatrix mRoutingMatrix;
     Streams mStreams;
     Microphones mMicrophones;
     std::mutex mLock;
     std::map<void*, Callbacks> mCallbacks GUARDED_BY(mLock);
+    std::set<audio_port_handle_t> mDeviceDisconnectionNotified;
 };
 
 } // namespace android

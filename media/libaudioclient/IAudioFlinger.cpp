@@ -810,10 +810,10 @@ int32_t AudioFlingerClientAdapter::getAAudioHardwareBurstMinUsec() {
 }
 
 status_t AudioFlingerClientAdapter::setDeviceConnectedState(
-        const struct audio_port_v7 *port, bool connected) {
+        const struct audio_port_v7 *port, media::DeviceConnectedState state) {
     media::AudioPortFw aidlPort = VALUE_OR_RETURN_STATUS(
             legacy2aidl_audio_port_v7_AudioPortFw(*port));
-    return statusTFromBinderStatus(mDelegate->setDeviceConnectedState(aidlPort, connected));
+    return statusTFromBinderStatus(mDelegate->setDeviceConnectedState(aidlPort, state));
 }
 
 status_t AudioFlingerClientAdapter::setSimulateDeviceConnections(bool enabled) {
@@ -885,6 +885,16 @@ status_t AudioFlingerClientAdapter::invalidateTracks(
             convertContainer<std::vector<int32_t>>(
                     portIds, legacy2aidl_audio_port_handle_t_int32_t));
     return statusTFromBinderStatus(mDelegate->invalidateTracks(portIdsAidl));
+}
+
+status_t AudioFlingerClientAdapter::getAudioPolicyConfig(media::AudioPolicyConfig *config) {
+    if (config == nullptr) {
+        return BAD_VALUE;
+    }
+
+    RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mDelegate->getAudioPolicyConfig(config)));
+
+    return NO_ERROR;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1369,9 +1379,9 @@ Status AudioFlingerServerAdapter::getAAudioHardwareBurstMinUsec(int32_t* _aidl_r
 }
 
 Status AudioFlingerServerAdapter::setDeviceConnectedState(
-        const media::AudioPortFw& port, bool connected) {
+        const media::AudioPortFw& port, media::DeviceConnectedState state) {
     audio_port_v7 portLegacy = VALUE_OR_RETURN_BINDER(aidl2legacy_AudioPortFw_audio_port_v7(port));
-    return Status::fromStatusT(mDelegate->setDeviceConnectedState(&portLegacy, connected));
+    return Status::fromStatusT(mDelegate->setDeviceConnectedState(&portLegacy, state));
 }
 
 Status AudioFlingerServerAdapter::setSimulateDeviceConnections(bool enabled) {
@@ -1427,6 +1437,10 @@ Status AudioFlingerServerAdapter::invalidateTracks(const std::vector<int32_t>& p
                     portIds, aidl2legacy_int32_t_audio_port_handle_t));
     RETURN_BINDER_IF_ERROR(mDelegate->invalidateTracks(portIdsLegacy));
     return Status::ok();
+}
+
+Status AudioFlingerServerAdapter::getAudioPolicyConfig(media::AudioPolicyConfig* _aidl_return) {
+    return Status::fromStatusT(mDelegate->getAudioPolicyConfig(_aidl_return));
 }
 
 } // namespace android

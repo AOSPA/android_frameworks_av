@@ -60,9 +60,8 @@ static const std::vector<legacy_strategy_map>& getLegacyStrategy() {
     return legacyStrategy;
 }
 
-Engine::Engine()
-{
-    auto result = EngineBase::loadAudioPolicyEngineConfig();
+status_t Engine::loadFromXmlConfigWithFallback(const std::string& xmlFilePath) {
+    auto result = EngineBase::loadAudioPolicyEngineConfig(xmlFilePath);
     ALOGE_IF(result.nbSkippedElement != 0,
              "Policy Engine configuration is partially invalid, skipped %zu elements",
              result.nbSkippedElement);
@@ -71,6 +70,8 @@ Engine::Engine()
     for (const auto &strategy : legacyStrategy) {
         mLegacyStrategyMap[getProductStrategyByName(strategy.name)] = strategy.id;
     }
+
+    return OK;
 }
 
 status_t Engine::setForceUse(audio_policy_force_use_t usage, audio_policy_forced_cfg_t config)
@@ -893,5 +894,3 @@ sp<DeviceDescriptor> Engine::getInputDeviceForAttributes(const audio_attributes_
 
 } // namespace audio_policy
 } // namespace android
-
-

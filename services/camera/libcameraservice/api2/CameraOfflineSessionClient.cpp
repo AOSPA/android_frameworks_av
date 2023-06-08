@@ -106,6 +106,14 @@ void CameraOfflineSessionClient::setStreamUseCaseOverrides(
 void CameraOfflineSessionClient::clearStreamUseCaseOverrides() {
 }
 
+bool CameraOfflineSessionClient::supportsZoomOverride() {
+    return false;
+}
+
+status_t CameraOfflineSessionClient::setZoomOverride(int32_t /*zoomOverride*/) {
+    return INVALID_OPERATION;
+}
+
 status_t CameraOfflineSessionClient::dump(int fd, const Vector<String16>& args) {
     return BasicClient::dump(fd, args);
 }
@@ -256,7 +264,7 @@ status_t CameraOfflineSessionClient::startCameraOps() {
     mOpsActive = true;
 
     // Transition device state to OPEN
-    sCameraService->mUidPolicy->registerMonitorUid(mClientUid);
+    sCameraService->mUidPolicy->registerMonitorUid(mClientUid, /*openCamera*/true);
 
     return OK;
 }
@@ -280,7 +288,7 @@ status_t CameraOfflineSessionClient::finishCameraOps() {
     }
     mOpsCallback.clear();
 
-    sCameraService->mUidPolicy->unregisterMonitorUid(mClientUid);
+    sCameraService->mUidPolicy->unregisterMonitorUid(mClientUid, /*closeCamera*/true);
 
     return OK;
 }

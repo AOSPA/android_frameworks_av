@@ -1828,6 +1828,7 @@ void CCodec::start() {
         mCallback->onError(err2, ACTION_CODE_FATAL);
         return;
     }
+
     err2 = mChannel->start(inputFormat, outputFormat, buffersBoundToCodec);
     if (err2 != OK) {
         mCallback->onError(err2, ACTION_CODE_FATAL);
@@ -2131,6 +2132,25 @@ void CCodec::signalResume() {
         RevertOutputFormatIfNeeded(outputFormat, config->mOutputFormat);
     }
 
+    std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
+    status_t err = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
+    if (err != OK) {
+        if (err == NO_MEMORY) {
+            // NO_MEMORY happens here when all the buffers are still
+            // with the codec. That is not an error as it is momentarily
+            // and the buffers are send to the client as soon as the codec
+            // releases them
+            ALOGI("Resuming with all input buffers still with codec");
+        } else {
+            ALOGE("Resume request for Input Buffers failed");
+            mCallback->onError(err, ACTION_CODE_FATAL);
+            return;
+        }
+    }
+
+    // channel start should be called after prepareInitialBuffers
+    // Calling before can cause a failure during prepare when
+    // buffers are sent to the client before preparation from onWorkDone
     (void)mChannel->start(nullptr, nullptr, [&]{
         Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
         const std::unique_ptr<Config> &config = *configLocked;
@@ -2148,17 +2168,6 @@ void CCodec::signalResume() {
         state->set(RUNNING);
     }
 
-    std::map<size_t, sp<MediaCodecBuffer>> clientInputBuffers;
-    status_t err = mChannel->prepareInitialInputBuffers(&clientInputBuffers);
-    if (err == WOULD_BLOCK) {
-        return;
-    }
-    // FIXME(b/237656746)
-    if (err != OK && err != NO_MEMORY) {
-        ALOGE("Resume request for Input Buffers failed");
-        mCallback->onError(err, ACTION_CODE_FATAL);
-        return;
-    }
     mChannel->requestInitialInputBuffers(std::move(clientInputBuffers));
 }
 
@@ -2560,43 +2569,6 @@ status_t CCodec::configureTunneledVideoPlayback(
 }
 
 void CCodec::initiateReleaseIfStuck() {
-    bool tunneled = false;
-    bool isMediaTypeKnown = false;
-    {
-        static const std::set<std::string> kKnownMediaTypes{
-            MIMETYPE_VIDEO_VP8,
-            MIMETYPE_VIDEO_VP9,
-            MIMETYPE_VIDEO_AV1,
-            MIMETYPE_VIDEO_AVC,
-            MIMETYPE_VIDEO_HEVC,
-            MIMETYPE_VIDEO_MPEG4,
-            MIMETYPE_VIDEO_H263,
-            MIMETYPE_VIDEO_MPEG2,
-            MIMETYPE_VIDEO_RAW,
-            MIMETYPE_VIDEO_DOLBY_VISION,
-
-            MIMETYPE_AUDIO_AMR_NB,
-            MIMETYPE_AUDIO_AMR_WB,
-            MIMETYPE_AUDIO_MPEG,
-            MIMETYPE_AUDIO_AAC,
-            MIMETYPE_AUDIO_QCELP,
-            MIMETYPE_AUDIO_VORBIS,
-            MIMETYPE_AUDIO_OPUS,
-            MIMETYPE_AUDIO_G711_ALAW,
-            MIMETYPE_AUDIO_G711_MLAW,
-            MIMETYPE_AUDIO_RAW,
-            MIMETYPE_AUDIO_FLAC,
-            MIMETYPE_AUDIO_MSGSM,
-            MIMETYPE_AUDIO_AC3,
-            MIMETYPE_AUDIO_EAC3,
-
-            MIMETYPE_IMAGE_ANDROID_HEIC,
-        };
-        Mutexed<std::unique_ptr<Config>>::Locked configLocked(mConfig);
-        const std::unique_ptr<Config> &config = *configLocked;
-        tunneled = config->mTunneled;
-        isMediaTypeKnown = (kKnownMediaTypes.count(config->mCodingMediaType) != 0);
-    }
     std::string name;
     bool pendingDeadline = false;
     {
@@ -2605,16 +2577,6 @@ void CCodec::initiateReleaseIfStuck() {
             name = deadline->getName();
         }
         if (deadline->get() != TimePoint::max()) {
-            pendingDeadline = true;
-        }
-    }
-    if (!tunneled && isMediaTypeKnown && name.empty()) {
-        constexpr std::chrono::steady_clock::duration kWorkDurationThreshold = 3s;
-        std::chrono::steady_clock::duration elapsed = mChannel->elapsed();
-        if (elapsed >= kWorkDurationThreshold) {
-            name = "queue";
-        }
-        if (elapsed > 0s) {
             pendingDeadline = true;
         }
     }

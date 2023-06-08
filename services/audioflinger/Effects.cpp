@@ -44,6 +44,7 @@
 #include <mediautils/TimeCheck.h>
 
 #include "AudioFlinger.h"
+#include "EffectConfiguration.h"
 
 // ----------------------------------------------------------------------------
 
@@ -65,6 +66,7 @@
 namespace android {
 
 using aidl_utils::statusTFromBinderStatus;
+using audioflinger::EffectConfiguration;
 using binder::Status;
 
 namespace {
@@ -982,6 +984,7 @@ status_t AudioFlinger::EffectModule::configure()
 
 #ifdef MULTICHANNEL_EFFECT_CHAIN
     if (status != NO_ERROR &&
+            EffectConfiguration::isHidl() && // only HIDL effects support channel conversion
             mIsOutput &&
             (mConfig.inputCfg.channels != AUDIO_CHANNEL_OUT_STEREO
                     || mConfig.outputCfg.channels != AUDIO_CHANNEL_OUT_STEREO)) {
@@ -1012,7 +1015,8 @@ status_t AudioFlinger::EffectModule::configure()
         mSupportsFloat = true;
     }
 
-    if (status != NO_ERROR) {
+    // only HIDL effects support integer conversion.
+    if (status != NO_ERROR && EffectConfiguration::isHidl()) {
         ALOGV("EFFECT_CMD_SET_CONFIG failed with float format, retry with int16_t.");
         mConfig.inputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
         mConfig.outputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
@@ -3032,7 +3036,8 @@ status_t AudioFlinger::EffectChain::EffectCallback::createEffectHal(
         const effect_uuid_t *pEffectUuid, int32_t sessionId, int32_t deviceId,
         sp<EffectHalInterface> *effect) {
     status_t status = NO_INIT;
-    sp<EffectsFactoryHalInterface> effectsFactory = mAudioFlinger.getEffectsFactory();
+    const sp<EffectsFactoryHalInterface> effectsFactory =
+            EffectConfiguration::getEffectsFactoryHal();
     if (effectsFactory != 0) {
         status = effectsFactory->createEffect(pEffectUuid, sessionId, io(), deviceId, effect);
     }
@@ -3375,8 +3380,18 @@ status_t AudioFlinger::DeviceEffectProxy::checkPort(const PatchPanel::Patch& pat
     ALOGV("%s type %d device type %d address %s device ID %d patch.isSoftware() %d",
             __func__, port->type, port->ext.device.type,
             port->ext.device.address, port->id, patch.isSoftware());
-    if (port->type != AUDIO_PORT_TYPE_DEVICE || port->ext.device.type != mDevice.mType
-        || port->ext.device.address != mDevice.address()) {
+    if (port->type != AUDIO_PORT_TYPE_DEVICE || port->ext.device.type != mDevice.mType ||
+        port->ext.device.address != mDevice.address()) {
+        return NAME_NOT_FOUND;
+    }
+    if (((mDescriptor.flags & EFFECT_FLAG_TYPE_MASK) == EFFECT_FLAG_TYPE_POST_PROC) &&
+        (audio_port_config_has_input_direction(port))) {
+        ALOGI("%s don't create postprocessing effect on record port", __func__);
+        return NAME_NOT_FOUND;
+    }
+    if (((mDescriptor.flags & EFFECT_FLAG_TYPE_MASK) == EFFECT_FLAG_TYPE_PRE_PROC) &&
+        (!audio_port_config_has_input_direction(port))) {
+        ALOGI("%s don't create preprocessing effect on playback port", __func__);
         return NAME_NOT_FOUND;
     }
     status_t status = NAME_NOT_FOUND;
@@ -3428,6 +3443,7 @@ status_t AudioFlinger::DeviceEffectProxy::checkPort(const PatchPanel::Patch& pat
     } else {
         status = BAD_VALUE;
     }
+
     if (status == NO_ERROR || status == ALREADY_EXISTS) {
         Status bs;
         if (isEnabled()) {

@@ -22,7 +22,6 @@
 #include <set>
 #include <random>
 #include <stdlib.h>
-
 #include <inttypes.h>
 #include <stdlib.h>
 #include <dlfcn.h>
@@ -30,7 +29,6 @@
 #include <C2Buffer.h>
 
 #include "include/SoftwareRenderer.h"
-#include "PlaybackDurationAccumulator.h"
 
 #include <android/binder_manager.h>
 #include <android/content/pm/IPackageManagerNative.h>
@@ -110,7 +108,9 @@ static const char *kCodecModeAudio = "audio";
 static const char *kCodecModeImage = "image";
 static const char *kCodecModeUnknown = "unknown";
 static const char *kCodecEncoder = "android.media.mediacodec.encoder"; /* 0,1 */
+static const char *kCodecHardware = "android.media.mediacodec.hardware"; /* 0,1 */
 static const char *kCodecSecure = "android.media.mediacodec.secure";   /* 0, 1 */
+static const char *kCodecTunneled = "android.media.mediacodec.tunneled"; /* 0,1 */
 static const char *kCodecWidth = "android.media.mediacodec.width";     /* 0..n */
 static const char *kCodecHeight = "android.media.mediacodec.height";   /* 0..n */
 static const char *kCodecRotation = "android.media.mediacodec.rotation-degrees";  /* 0/90/180/270 */
@@ -119,15 +119,6 @@ static const char *kCodecFrameRate = "android.media.mediacodec.frame-rate";
 static const char *kCodecCaptureRate = "android.media.mediacodec.capture-rate";
 static const char *kCodecOperatingRate = "android.media.mediacodec.operating-rate";
 static const char *kCodecPriority = "android.media.mediacodec.priority";
-static const char *kCodecConfigColorStandard = "android.media.mediacodec.config-color-standard";
-static const char *kCodecConfigColorRange = "android.media.mediacodec.config-color-range";
-static const char *kCodecConfigColorTransfer = "android.media.mediacodec.config-color-transfer";
-static const char *kCodecParsedColorStandard = "android.media.mediacodec.parsed-color-standard";
-static const char *kCodecParsedColorRange = "android.media.mediacodec.parsed-color-range";
-static const char *kCodecParsedColorTransfer = "android.media.mediacodec.parsed-color-transfer";
-static const char *kCodecHDRStaticInfo = "android.media.mediacodec.hdr-static-info";
-static const char *kCodecHDR10PlusInfo = "android.media.mediacodec.hdr10-plus-info";
-static const char *kCodecHDRFormat = "android.media.mediacodec.hdr-format";
 
 // Min/Max QP before shaping
 static const char *kCodecOriginalVideoQPIMin = "android.media.mediacodec.original-video-qp-i-min";
@@ -165,6 +156,7 @@ static const char *kCodecLatencyHist = "android.media.mediacodec.latency.hist"; 
 static const char *kCodecLatencyUnknown = "android.media.mediacodec.latency.unknown";
 static const char *kCodecQueueSecureInputBufferError = "android.media.mediacodec.queueSecureInputBufferError";
 static const char *kCodecQueueInputBufferError = "android.media.mediacodec.queueInputBufferError";
+static const char *kCodecComponentColorFormat = "android.media.mediacodec.component-color-format";
 
 static const char *kCodecNumLowLatencyModeOn = "android.media.mediacodec.low-latency.on";  /* 0..n */
 static const char *kCodecNumLowLatencyModeOff = "android.media.mediacodec.low-latency.off";  /* 0..n */
@@ -176,6 +168,29 @@ static const char *kCodecVideoEncodedFrames = "android.media.mediacodec.vencode.
 static const char *kCodecVideoInputBytes = "android.media.mediacodec.video.input.bytes";
 static const char *kCodecVideoInputFrames = "android.media.mediacodec.video.input.frames";
 static const char *kCodecVideoEncodedDurationUs = "android.media.mediacodec.vencode.durationUs";
+// HDR metrics
+static const char *kCodecConfigColorStandard = "android.media.mediacodec.config-color-standard";
+static const char *kCodecConfigColorRange = "android.media.mediacodec.config-color-range";
+static const char *kCodecConfigColorTransfer = "android.media.mediacodec.config-color-transfer";
+static const char *kCodecParsedColorStandard = "android.media.mediacodec.parsed-color-standard";
+static const char *kCodecParsedColorRange = "android.media.mediacodec.parsed-color-range";
+static const char *kCodecParsedColorTransfer = "android.media.mediacodec.parsed-color-transfer";
+static const char *kCodecHdrStaticInfo = "android.media.mediacodec.hdr-static-info";
+static const char *kCodecHdr10PlusInfo = "android.media.mediacodec.hdr10-plus-info";
+static const char *kCodecHdrFormat = "android.media.mediacodec.hdr-format";
+// array/sync/async/block modes
+static const char *kCodecArrayMode = "android.media.mediacodec.array-mode";
+static const char *kCodecOperationMode = "android.media.mediacodec.operation-mode";
+static const char *kCodecOutputSurface = "android.media.mediacodec.output-surface";
+// max size configured by the app
+static const char *kCodecAppMaxInputSize = "android.media.mediacodec.app-max-input-size";
+// max size actually used
+static const char *kCodecUsedMaxInputSize = "android.media.mediacodec.used-max-input-size";
+// max size suggested by the codec
+static const char *kCodecCodecMaxInputSize = "android.media.mediacodec.codec-max-input-size";
+static const char *kCodecFlushCount = "android.media.mediacodec.flush-count";
+static const char *kCodecSetSurfaceCount = "android.media.mediacodec.set-surface-count";
+static const char *kCodecResolutionChangeCount = "android.media.mediacodec.resolution-change-count";
 
 // the kCodecRecent* fields appear only in getMetrics() results
 static const char *kCodecRecentLatencyMax = "android.media.mediacodec.recent.max";      /* in us */
@@ -183,12 +198,43 @@ static const char *kCodecRecentLatencyMin = "android.media.mediacodec.recent.min
 static const char *kCodecRecentLatencyAvg = "android.media.mediacodec.recent.avg";      /* in us */
 static const char *kCodecRecentLatencyCount = "android.media.mediacodec.recent.n";
 static const char *kCodecRecentLatencyHist = "android.media.mediacodec.recent.hist";    /* in us */
-static const char *kCodecPlaybackDurationSec =
-        "android.media.mediacodec.playback-duration-sec"; /* in sec */
 
 /* -1: shaper disabled
    >=0: number of fields changed */
 static const char *kCodecShapingEnhanced = "android.media.mediacodec.shaped";
+
+// Render metrics
+static const char *kCodecPlaybackDurationSec = "android.media.mediacodec.playback-duration-sec";
+static const char *kCodecFirstRenderTimeUs = "android.media.mediacodec.first-render-time-us";
+static const char *kCodecFramesReleased = "android.media.mediacodec.frames-released";
+static const char *kCodecFramesRendered = "android.media.mediacodec.frames-rendered";
+static const char *kCodecFramesDropped = "android.media.mediacodec.frames-dropped";
+static const char *kCodecFramesSkipped = "android.media.mediacodec.frames-skipped";
+static const char *kCodecFramerateContent = "android.media.mediacodec.framerate-content";
+static const char *kCodecFramerateDesired = "android.media.mediacodec.framerate-desired";
+static const char *kCodecFramerateActual = "android.media.mediacodec.framerate-actual";
+static const char *kCodecFreezeCount = "android.media.mediacodec.freeze-count";
+static const char *kCodecFreezeScore = "android.media.mediacodec.freeze-score";
+static const char *kCodecFreezeRate = "android.media.mediacodec.freeze-rate";
+static const char *kCodecFreezeDurationMsAvg = "android.media.mediacodec.freeze-duration-ms-avg";
+static const char *kCodecFreezeDurationMsMax = "android.media.mediacodec.freeze-duration-ms-max";
+static const char *kCodecFreezeDurationMsHistogram =
+        "android.media.mediacodec.freeze-duration-ms-histogram";
+static const char *kCodecFreezeDurationMsHistogramBuckets =
+        "android.media.mediacodec.freeze-duration-ms-histogram-buckets";
+static const char *kCodecFreezeDistanceMsAvg = "android.media.mediacodec.freeze-distance-ms-avg";
+static const char *kCodecFreezeDistanceMsHistogram =
+        "android.media.mediacodec.freeze-distance-ms-histogram";
+static const char *kCodecFreezeDistanceMsHistogramBuckets =
+        "android.media.mediacodec.freeze-distance-ms-histogram-buckets";
+static const char *kCodecJudderCount = "android.media.mediacodec.judder-count";
+static const char *kCodecJudderScore = "android.media.mediacodec.judder-score";
+static const char *kCodecJudderRate = "android.media.mediacodec.judder-rate";
+static const char *kCodecJudderScoreAvg = "android.media.mediacodec.judder-score-avg";
+static const char *kCodecJudderScoreMax = "android.media.mediacodec.judder-score-max";
+static const char *kCodecJudderScoreHistogram = "android.media.mediacodec.judder-score-histogram";
+static const char *kCodecJudderScoreHistogramBuckets =
+        "android.media.mediacodec.judder-score-histogram-buckets";
 
 // XXX suppress until we get our representation right
 static bool kEmitHistogram = false;
@@ -297,6 +343,7 @@ struct MediaCodec::ResourceManagerServiceProxy : public RefBase {
     void notifyClientCreated();
     void notifyClientStarted(ClientConfigParcel& clientConfig);
     void notifyClientStopped(ClientConfigParcel& clientConfig);
+    void notifyClientConfigChanged(ClientConfigParcel& clientConfig);
 
     inline void setCodecName(const char* name) {
         mCodecName = name;
@@ -484,7 +531,7 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientCreated() {
 }
 
 void MediaCodec::ResourceManagerServiceProxy::notifyClientStarted(
-    ClientConfigParcel& clientConfig) {
+        ClientConfigParcel& clientConfig) {
     clientConfig.clientInfo.pid = static_cast<int32_t>(mPid);
     clientConfig.clientInfo.uid = static_cast<int32_t>(mUid);
     clientConfig.clientInfo.id = getId(mClient);
@@ -493,12 +540,21 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientStarted(
 }
 
 void MediaCodec::ResourceManagerServiceProxy::notifyClientStopped(
-    ClientConfigParcel& clientConfig) {
+        ClientConfigParcel& clientConfig) {
     clientConfig.clientInfo.pid = static_cast<int32_t>(mPid);
     clientConfig.clientInfo.uid = static_cast<int32_t>(mUid);
     clientConfig.clientInfo.id = getId(mClient);
     clientConfig.clientInfo.name = mCodecName;
     mService->notifyClientStopped(clientConfig);
+}
+
+void MediaCodec::ResourceManagerServiceProxy::notifyClientConfigChanged(
+        ClientConfigParcel& clientConfig) {
+    clientConfig.clientInfo.pid = static_cast<int32_t>(mPid);
+    clientConfig.clientInfo.uid = static_cast<int32_t>(mUid);
+    clientConfig.clientInfo.id = getId(mClient);
+    clientConfig.clientInfo.name = mCodecName;
+    mService->notifyClientConfigChanged(clientConfig);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -926,7 +982,6 @@ MediaCodec::MediaCodec(
       mWidth(0),
       mHeight(0),
       mRotationDegrees(0),
-      mHdrInfoFlags(0),
       mDequeueInputTimeoutGeneration(0),
       mDequeueInputReplyID(0),
       mDequeueOutputTimeoutGeneration(0),
@@ -938,8 +993,7 @@ MediaCodec::MediaCodec(
       mHaveInputSurface(false),
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
-      mPlaybackDurationAccumulator(new PlaybackDurationAccumulator()),
-      mIsSurfaceToScreen(false),
+      mIsSurfaceToDisplay(false),
       mLatencyUnknown(0),
       mBytesEncoded(0),
       mEarliestEncodedPtsUs(INT64_MAX),
@@ -1034,6 +1088,14 @@ void MediaCodec::initMediametrics() {
     }
 
     mLifetimeStartNs = systemTime(SYSTEM_TIME_MONOTONIC);
+    resetMetricsFields();
+}
+
+void MediaCodec::resetMetricsFields() {
+    mHdrInfoFlags = 0;
+
+    mApiUsageMetrics = ApiUsageMetrics();
+    mReliabilityContextMetrics = ReliabilityContextMetrics();
 }
 
 void MediaCodec::updateMediametrics() {
@@ -1043,6 +1105,72 @@ void MediaCodec::updateMediametrics() {
     }
 
     Mutex::Autolock _lock(mMetricsLock);
+
+    mediametrics_setInt32(mMetricsHandle, kCodecArrayMode, mApiUsageMetrics.isArrayMode ? 1 : 0);
+    mApiUsageMetrics.operationMode = (mFlags & kFlagIsAsync) ?
+            ((mFlags & kFlagUseBlockModel) ? ApiUsageMetrics::kBlockMode
+                    : ApiUsageMetrics::kAsynchronousMode)
+            : ApiUsageMetrics::kSynchronousMode;
+    mediametrics_setInt32(mMetricsHandle, kCodecOperationMode, mApiUsageMetrics.operationMode);
+    mediametrics_setInt32(mMetricsHandle, kCodecOutputSurface,
+            mApiUsageMetrics.isUsingOutputSurface ? 1 : 0);
+
+    mediametrics_setInt32(mMetricsHandle, kCodecAppMaxInputSize,
+            mApiUsageMetrics.inputBufferSize.appMax);
+    mediametrics_setInt32(mMetricsHandle, kCodecUsedMaxInputSize,
+            mApiUsageMetrics.inputBufferSize.usedMax);
+    mediametrics_setInt32(mMetricsHandle, kCodecCodecMaxInputSize,
+            mApiUsageMetrics.inputBufferSize.codecMax);
+
+    mediametrics_setInt32(mMetricsHandle, kCodecFlushCount, mReliabilityContextMetrics.flushCount);
+    mediametrics_setInt32(mMetricsHandle, kCodecSetSurfaceCount,
+            mReliabilityContextMetrics.setOutputSurfaceCount);
+    mediametrics_setInt32(mMetricsHandle, kCodecResolutionChangeCount,
+            mReliabilityContextMetrics.resolutionChangeCount);
+
+    // Video rendering quality metrics
+    {
+        const VideoRenderQualityMetrics &m = mVideoRenderQualityTracker.getMetrics();
+        if (m.frameReleasedCount > 0) {
+            mediametrics_setInt64(mMetricsHandle, kCodecFirstRenderTimeUs, m.firstRenderTimeUs);
+            mediametrics_setInt64(mMetricsHandle, kCodecFramesReleased, m.frameReleasedCount);
+            mediametrics_setInt64(mMetricsHandle, kCodecFramesRendered, m.frameRenderedCount);
+            mediametrics_setInt64(mMetricsHandle, kCodecFramesSkipped, m.frameSkippedCount);
+            mediametrics_setInt64(mMetricsHandle, kCodecFramesDropped, m.frameDroppedCount);
+            mediametrics_setDouble(mMetricsHandle, kCodecFramerateContent, m.contentFrameRate);
+            mediametrics_setDouble(mMetricsHandle, kCodecFramerateDesired, m.desiredFrameRate);
+            mediametrics_setDouble(mMetricsHandle, kCodecFramerateActual, m.actualFrameRate);
+        }
+        if (m.freezeDurationMsHistogram.getCount() >= 1) {
+            const MediaHistogram<int32_t> &h = m.freezeDurationMsHistogram;
+            mediametrics_setInt64(mMetricsHandle, kCodecFreezeScore, m.freezeScore);
+            mediametrics_setDouble(mMetricsHandle, kCodecFreezeRate, m.freezeRate);
+            mediametrics_setInt64(mMetricsHandle, kCodecFreezeCount, h.getCount());
+            mediametrics_setInt32(mMetricsHandle, kCodecFreezeDurationMsAvg, h.getAvg());
+            mediametrics_setInt32(mMetricsHandle, kCodecFreezeDurationMsMax, h.getMax());
+            mediametrics_setString(mMetricsHandle, kCodecFreezeDurationMsHistogram, h.emit());
+            mediametrics_setString(mMetricsHandle, kCodecFreezeDurationMsHistogramBuckets,
+                                   h.emitBuckets());
+        }
+        if (m.freezeDistanceMsHistogram.getCount() >= 1) {
+            const MediaHistogram<int32_t> &h = m.freezeDistanceMsHistogram;
+            mediametrics_setInt32(mMetricsHandle, kCodecFreezeDistanceMsAvg, h.getAvg());
+            mediametrics_setString(mMetricsHandle, kCodecFreezeDistanceMsHistogram, h.emit());
+            mediametrics_setString(mMetricsHandle, kCodecFreezeDistanceMsHistogramBuckets,
+                                   h.emitBuckets());
+        }
+        if (m.judderScoreHistogram.getCount() >= 1) {
+            const MediaHistogram<int32_t> &h = m.judderScoreHistogram;
+            mediametrics_setInt64(mMetricsHandle, kCodecJudderScore, m.judderScore);
+            mediametrics_setDouble(mMetricsHandle, kCodecJudderRate, m.judderRate);
+            mediametrics_setInt64(mMetricsHandle, kCodecJudderCount, h.getCount());
+            mediametrics_setInt32(mMetricsHandle, kCodecJudderScoreAvg, h.getAvg());
+            mediametrics_setInt32(mMetricsHandle, kCodecJudderScoreMax, h.getMax());
+            mediametrics_setString(mMetricsHandle, kCodecJudderScoreHistogram, h.emit());
+            mediametrics_setString(mMetricsHandle, kCodecJudderScoreHistogramBuckets,
+                                   h.emitBuckets());
+        }
+    }
 
     if (mLatencyHist.getCount() != 0 ) {
         mediametrics_setInt64(mMetricsHandle, kCodecLatencyMax, mLatencyHist.getMax());
@@ -1059,7 +1187,7 @@ void MediaCodec::updateMediametrics() {
     if (mLatencyUnknown > 0) {
         mediametrics_setInt64(mMetricsHandle, kCodecLatencyUnknown, mLatencyUnknown);
     }
-    int64_t playbackDurationSec = mPlaybackDurationAccumulator->getDurationInSeconds();
+    int64_t playbackDurationSec = mPlaybackDurationAccumulator.getDurationInSeconds();
     if (playbackDurationSec > 0) {
         mediametrics_setInt64(mMetricsHandle, kCodecPlaybackDurationSec, playbackDurationSec);
     }
@@ -1122,14 +1250,14 @@ void MediaCodec::updateHdrMetrics(bool isConfig) {
             && ColorUtils::isHDRStaticInfoValid(&info)) {
         mHdrInfoFlags |= kFlagHasHdrStaticInfo;
     }
-    mediametrics_setInt32(mMetricsHandle, kCodecHDRStaticInfo,
+    mediametrics_setInt32(mMetricsHandle, kCodecHdrStaticInfo,
             (mHdrInfoFlags & kFlagHasHdrStaticInfo) ? 1 : 0);
     sp<ABuffer> hdr10PlusInfo;
     if (mOutputFormat->findBuffer("hdr10-plus-info", &hdr10PlusInfo)
             && hdr10PlusInfo != nullptr && hdr10PlusInfo->size() > 0) {
         mHdrInfoFlags |= kFlagHasHdr10PlusInfo;
     }
-    mediametrics_setInt32(mMetricsHandle, kCodecHDR10PlusInfo,
+    mediametrics_setInt32(mMetricsHandle, kCodecHdr10PlusInfo,
             (mHdrInfoFlags & kFlagHasHdr10PlusInfo) ? 1 : 0);
 
     // hdr format
@@ -1142,7 +1270,7 @@ void MediaCodec::updateHdrMetrics(bool isConfig) {
             && codedFormat->findInt32(KEY_PROFILE, &profile)
             && colorTransfer != -1) {
         hdr_format hdrFormat = getHdrFormat(mime, profile, colorTransfer);
-        mediametrics_setInt32(mMetricsHandle, kCodecHDRFormat, static_cast<int>(hdrFormat));
+        mediametrics_setInt32(mMetricsHandle, kCodecHdrFormat, static_cast<int>(hdrFormat));
     }
 }
 
@@ -1250,16 +1378,15 @@ void MediaCodec::updateEphemeralMediametrics(mediametrics_handle_t item) {
         return;
     }
 
-    Histogram recentHist;
-
     // build an empty histogram
+    MediaHistogram<int64_t> recentHist;
     recentHist.setup(kLatencyHistBuckets, kLatencyHistWidth, kLatencyHistFloor);
 
     // stuff it with the samples in the ring buffer
     {
         Mutex::Autolock al(mRecentLock);
 
-        for (int i=0; i<kRecentLatencyFrames; i++) {
+        for (int i = 0; i < kRecentLatencyFrames; i++) {
             if (mRecentSamples[i] != kRecentSampleInvalid) {
                 recentHist.insert(mRecentSamples[i]);
             }
@@ -1267,7 +1394,7 @@ void MediaCodec::updateEphemeralMediametrics(mediametrics_handle_t item) {
     }
 
     // spit the data (if any) into the supplied analytics record
-    if (recentHist.getCount()!= 0 ) {
+    if (recentHist.getCount() != 0 ) {
         mediametrics_setInt64(item, kCodecRecentLatencyMax, recentHist.getMax());
         mediametrics_setInt64(item, kCodecRecentLatencyMin, recentHist.getMin());
         mediametrics_setInt64(item, kCodecRecentLatencyAvg, recentHist.getAvg());
@@ -1286,7 +1413,7 @@ void MediaCodec::flushMediametrics() {
 
     // update does its own mutex locking
     updateMediametrics();
-    mHdrInfoFlags = 0;
+    resetMetricsFields();
 
     // ensure mutex while we do our own work
     Mutex::Autolock _lock(mMetricsLock);
@@ -1384,116 +1511,38 @@ void MediaCodec::updateTunnelPeek(const sp<AMessage> &msg) {
     ALOGV("TunnelPeekState: %s -> %s", asString(previousState), asString(mTunnelPeekState));
 }
 
-void MediaCodec::updatePlaybackDuration(const sp<AMessage> &msg) {
+void MediaCodec::processRenderedFrames(const sp<AMessage> &msg) {
     int what = 0;
     msg->findInt32("what", &what);
     if (msg->what() != kWhatCodecNotify && what != kWhatOutputFramesRendered) {
         static bool logged = false;
         if (!logged) {
             logged = true;
-            ALOGE("updatePlaybackDuration: expected kWhatOuputFramesRendered (%d)", msg->what());
+            ALOGE("processRenderedFrames: expected kWhatOutputFramesRendered (%d)", msg->what());
         }
         return;
     }
-    // Playback duration only counts if the buffers are going to the screen.
-    if (!mIsSurfaceToScreen) {
-        return;
-    }
-    int64_t renderTimeNs;
-    size_t index = 0;
-    while (msg->findInt64(AStringPrintf("%zu-system-nano", index++).c_str(), &renderTimeNs)) {
-        mPlaybackDurationAccumulator->processRenderTime(renderTimeNs);
-    }
-}
-
-bool MediaCodec::Histogram::setup(int nbuckets, int64_t width, int64_t floor)
-{
-    if (nbuckets <= 0 || width <= 0) {
-        return false;
-    }
-
-    // get histogram buckets
-    if (nbuckets == mBucketCount && mBuckets != NULL) {
-        // reuse our existing buffer
-        memset(mBuckets, 0, sizeof(*mBuckets) * mBucketCount);
-    } else {
-        // get a new pre-zeroed buffer
-        int64_t *newbuckets = (int64_t *)calloc(nbuckets, sizeof (*mBuckets));
-        if (newbuckets == NULL) {
-            goto bad;
+    // Rendered frames only matter if they're being sent to the display
+    if (mIsSurfaceToDisplay) {
+        int64_t renderTimeNs;
+        for (size_t index = 0;
+            msg->findInt64(AStringPrintf("%zu-system-nano", index).c_str(), &renderTimeNs);
+            index++) {
+            // Capture metrics for playback duration
+            mPlaybackDurationAccumulator.onFrameRendered(renderTimeNs);
+            // Capture metrics for quality
+            int64_t mediaTimeUs = 0;
+            if (!msg->findInt64(AStringPrintf("%zu-media-time-us", index).c_str(), &mediaTimeUs)) {
+                ALOGE("processRenderedFrames: no media time found");
+                continue;
+            }
+            // Tunneled frames use INT64_MAX to indicate end-of-stream, so don't report it as a
+            // rendered frame.
+            if (!mTunneled || mediaTimeUs != INT64_MAX) {
+                mVideoRenderQualityTracker.onFrameRendered(mediaTimeUs, renderTimeNs);
+            }
         }
-        if (mBuckets != NULL)
-            free(mBuckets);
-        mBuckets = newbuckets;
     }
-
-    mWidth = width;
-    mFloor = floor;
-    mCeiling = floor + nbuckets * width;
-    mBucketCount = nbuckets;
-
-    mMin = INT64_MAX;
-    mMax = INT64_MIN;
-    mSum = 0;
-    mCount = 0;
-    mBelow = mAbove = 0;
-
-    return true;
-
-  bad:
-    if (mBuckets != NULL) {
-        free(mBuckets);
-        mBuckets = NULL;
-    }
-
-    return false;
-}
-
-void MediaCodec::Histogram::insert(int64_t sample)
-{
-    // histogram is not set up
-    if (mBuckets == NULL) {
-        return;
-    }
-
-    mCount++;
-    mSum += sample;
-    if (mMin > sample) mMin = sample;
-    if (mMax < sample) mMax = sample;
-
-    if (sample < mFloor) {
-        mBelow++;
-    } else if (sample >= mCeiling) {
-        mAbove++;
-    } else {
-        int64_t slot = (sample - mFloor) / mWidth;
-        CHECK(slot < mBucketCount);
-        mBuckets[slot]++;
-    }
-    return;
-}
-
-std::string MediaCodec::Histogram::emit()
-{
-    std::string value;
-    char buffer[64];
-
-    // emits:  width,Below{bucket0,bucket1,...., bucketN}above
-    // unconfigured will emit: 0,0{}0
-    // XXX: is this best representation?
-    snprintf(buffer, sizeof(buffer), "%" PRId64 ",%" PRId64 ",%" PRId64 "{",
-             mFloor, mWidth, mBelow);
-    value = buffer;
-    for (int i = 0; i < mBucketCount; i++) {
-        if (i != 0) {
-            value = value + ",";
-        }
-        snprintf(buffer, sizeof(buffer), "%" PRId64, mBuckets[i]);
-        value = value + buffer;
-    }
-    snprintf(buffer, sizeof(buffer), "}%" PRId64 , mAbove);
-    value = value + buffer;
-    return value;
 }
 
 // when we send a buffer to the codec;
@@ -1965,6 +2014,10 @@ status_t MediaCodec::configure(
             int32_t colorFormat = -1;
             if (format->findInt32("color-format", &colorFormat)) {
                 mediametrics_setInt32(nextMetricsHandle, kCodecColorFormat, colorFormat);
+            }
+            int32_t appMaxInputSize = -1;
+            if (format->findInt32(KEY_MAX_INPUT_SIZE, &appMaxInputSize)) {
+                mApiUsageMetrics.inputBufferSize.appMax = appMaxInputSize;
             }
             if (mDomain == DOMAIN_VIDEO) {
                 float frameRate = -1.0;
@@ -3582,8 +3635,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
 
                                 setState(UNINITIALIZED);
                             } else {
-                                setState(
-                                        (mFlags & kFlagIsAsync) ? FLUSHED : STARTED);
+                                setState((mFlags & kFlagIsAsync) ? FLUSHED : STARTED);
                             }
                             break;
                         }
@@ -3708,6 +3760,9 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         mediametrics_setInt32(mMetricsHandle, kCodecSecure, 0);
                     }
 
+                    mediametrics_setInt32(mMetricsHandle, kCodecHardware,
+                                          MediaCodecList::isSoftwareCodec(mComponentName) ? 0 : 1);
+
                     mResourceManagerProxy->addResource(MediaResource::CodecResource(
                             mFlags & kFlagIsSecure, toMediaResourceSubType(mDomain)));
 
@@ -3774,7 +3829,19 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         if (interestingFormat->findInt32("level", &level)) {
                             mediametrics_setInt32(mMetricsHandle, kCodecLevel, level);
                         }
+                        sp<AMessage> uncompressedFormat =
+                                (mFlags & kFlagIsEncoder) ? mInputFormat : mOutputFormat;
+                        int32_t componentColorFormat  = -1;
+                        if (uncompressedFormat->findInt32("android._color-format",
+                                &componentColorFormat)) {
+                            mediametrics_setInt32(mMetricsHandle,
+                                    kCodecComponentColorFormat, componentColorFormat);
+                        }
                         updateHdrMetrics(true /* isConfig */);
+                        int32_t codecMaxInputSize = -1;
+                        if (mInputFormat->findInt32(KEY_MAX_INPUT_SIZE, &codecMaxInputSize)) {
+                            mApiUsageMetrics.inputBufferSize.codecMax = codecMaxInputSize;
+                        }
                         // bitrate and bitrate mode, encoder only
                         if (mFlags & kFlagIsEncoder) {
                             // encoder specific values
@@ -3920,7 +3987,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                 asString(previousState),
                                 asString(TunnelPeekState::kBufferRendered));
                     }
-                    updatePlaybackDuration(msg);
+                    processRenderedFrames(msg);
                     // check that we have a notification set
                     if (mOnFrameRenderedNotification != NULL) {
                         sp<AMessage> notify = mOnFrameRenderedNotification->dup();
@@ -4114,6 +4181,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                               mState, stateString(mState).c_str());
                         break;
                     }
+
+                    if (mIsSurfaceToDisplay) {
+                        mVideoRenderQualityTracker.resetForDiscontinuity();
+                    }
+
                     // Notify the RM that the codec has been stopped.
                     ClientConfigParcel clientConfig;
                     initClientConfigParcel(clientConfig);
@@ -4169,12 +4241,17 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                         break;
                     }
 
+                    if (mIsSurfaceToDisplay) {
+                        mVideoRenderQualityTracker.resetForDiscontinuity();
+                    }
+
                     if (mFlags & kFlagIsAsync) {
                         setState(FLUSHED);
                     } else {
                         setState(STARTED);
                         mCodec->signalResume();
                     }
+                    mReliabilityContextMetrics.flushCount++;
 
                     postPendingRepliesAndDeferredMessages("kWhatFlushCompleted");
                     break;
@@ -4336,6 +4413,8 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 handleSetSurface(NULL);
             }
 
+            mApiUsageMetrics.isUsingOutputSurface = true;
+
             uint32_t flags;
             CHECK(msg->findInt32("flags", (int32_t *)&flags));
             if (flags & CONFIGURE_FLAG_USE_BLOCK_MODEL ||
@@ -4418,6 +4497,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             } else {
                 mTunneled = false;
             }
+            mediametrics_setInt32(mMetricsHandle, kCodecTunneled, mTunneled ? 1 : 0);
 
             int32_t background = 0;
             if (format->findInt32("android._background-mode", &background) && background) {
@@ -4476,6 +4556,7 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                                 (void)disconnectFromSurface();
                                 mSurface = surface;
                             }
+                            mReliabilityContextMetrics.setOutputSurfaceCount++;
                         }
                     }
                     break;
@@ -5013,6 +5094,8 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
                 }
             }
 
+            mApiUsageMetrics.isArrayMode = true;
+
             (new AMessage)->postReply(replyID);
             break;
         }
@@ -5259,15 +5342,29 @@ void MediaCodec::handleOutputFormatChangeIfNeeded(const sp<MediaCodecBuffer> &bu
         postActivityNotificationIfPossible();
     }
 
-    // Notify mCrypto of video resolution changes
-    if (mCrypto != NULL) {
-        int32_t left, top, right, bottom, width, height;
-        if (mOutputFormat->findRect("crop", &left, &top, &right, &bottom)) {
-            mCrypto->notifyResolution(right - left + 1, bottom - top + 1);
-        } else if (mOutputFormat->findInt32("width", &width)
-                && mOutputFormat->findInt32("height", &height)) {
-            mCrypto->notifyResolution(width, height);
+    // Update the width and the height.
+    int32_t left = 0, top = 0, right = 0, bottom = 0, width = 0, height = 0;
+    bool resolutionChanged = false;
+    if (mOutputFormat->findRect("crop", &left, &top, &right, &bottom)) {
+        mWidth = right - left + 1;
+        mHeight = bottom - top + 1;
+        resolutionChanged = true;
+    } else if (mOutputFormat->findInt32("width", &width) &&
+               mOutputFormat->findInt32("height", &height)) {
+        mWidth = width;
+        mHeight = height;
+        resolutionChanged = true;
+    }
+
+    // Notify mCrypto and the RM of video resolution changes
+    if (resolutionChanged) {
+        if (mCrypto != NULL) {
+            mCrypto->notifyResolution(mWidth, mHeight);
         }
+        ClientConfigParcel clientConfig;
+        initClientConfigParcel(clientConfig);
+        mResourceManagerProxy->notifyClientConfigChanged(clientConfig);
+        mReliabilityContextMetrics.resolutionChangeCount++;
     }
 
     updateHdrMetrics(false /* isConfig */);
@@ -5708,6 +5805,10 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
     if (err != OK) {
         return -EINVAL;
     }
+
+    int32_t usedMaxInputSize = mApiUsageMetrics.inputBufferSize.usedMax;
+    mApiUsageMetrics.inputBufferSize.usedMax = size > usedMaxInputSize ? size : usedMaxInputSize;
+
     if (hasCryptoOrDescrambler() && !c2Buffer && !memory) {
         AString *errorDetailMsg;
         CHECK(msg->findPointer("errorDetailMsg", (void **)&errorDetailMsg));
@@ -5753,6 +5854,10 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
     }
 
     if (err == OK) {
+        if (mTunneled && (flags & (BUFFER_FLAG_DECODE_ONLY | BUFFER_FLAG_END_OF_STREAM)) == 0) {
+            mVideoRenderQualityTracker.onTunnelFrameQueued(timeUs);
+        }
+
         // synchronization boundary for getBufferAndFormat
         Mutex::Autolock al(mBufferLock);
         info->mOwnedByClient = false;
@@ -5835,7 +5940,7 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
     }
 
     if (render && buffer->size() != 0) {
-        int64_t mediaTimeUs = -1;
+        int64_t mediaTimeUs = INT64_MIN;
         buffer->meta()->findInt64("timeUs", &mediaTimeUs);
 
         bool noRenderTime = false;
@@ -5865,7 +5970,12 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
 
         // If rendering to the screen, then schedule a time in the future to poll to see if this
         // frame was ever rendered to seed onFrameRendered callbacks.
-        if (mIsSurfaceToScreen) {
+        if (mIsSurfaceToDisplay) {
+            if (mediaTimeUs != INT64_MIN) {
+                noRenderTime ? mVideoRenderQualityTracker.onFrameReleased(mediaTimeUs)
+                             : mVideoRenderQualityTracker.onFrameReleased(mediaTimeUs,
+                                                                          renderTimeNs);
+            }
             // can't initialize this in the constructor because the Looper parent class needs to be
             // initialized first
             if (mMsgPollForRenderedBuffers == nullptr) {
@@ -5895,6 +6005,12 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
             ALOGI("rendring output error %d", err);
         }
     } else {
+        if (mIsSurfaceToDisplay) {
+            int64_t mediaTimeUs = INT64_MIN;
+            if (buffer->meta()->findInt64("timeUs", &mediaTimeUs)) {
+                mVideoRenderQualityTracker.onFrameSkipped(mediaTimeUs);
+            }
+        }
         mBufferChannel->discardBuffer(buffer);
     }
 
@@ -5961,7 +6077,7 @@ status_t MediaCodec::connectToSurface(const sp<Surface> &surface) {
 
         // in case we don't connect, ensure that we don't signal the surface is
         // connected to the screen
-        mIsSurfaceToScreen = false;
+        mIsSurfaceToDisplay = false;
 
         err = nativeWindowConnect(surface.get(), "connectToSurface");
         if (err == OK) {
@@ -5991,7 +6107,7 @@ status_t MediaCodec::connectToSurface(const sp<Surface> &surface) {
             // keep track whether or not the buffers of the connected surface go to the screen
             int result = 0;
             surface->query(NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER, &result);
-            mIsSurfaceToScreen = result != 0;
+            mIsSurfaceToDisplay = result != 0;
         }
     }
     // do not return ALREADY_EXISTS unless surfaces are the same
@@ -6009,7 +6125,7 @@ status_t MediaCodec::disconnectFromSurface() {
         }
         // assume disconnected even on error
         mSurface.clear();
-        mIsSurfaceToScreen = false;
+        mIsSurfaceToDisplay = false;
     }
     return err;
 }

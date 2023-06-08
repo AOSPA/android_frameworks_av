@@ -205,7 +205,7 @@ status_t AidlCamera3Device::initialize(sp<CameraProviderManager> manager,
         return res;
     }
     mSupportNativeZoomRatio = manager->supportNativeZoomRatio(mId.string());
-    mSupportNativeJpegR = manager->supportNativeJpegR(mId.string());
+    mIsCompositeJpegRDisabled = manager->isCompositeJpegRDisabled(mId.string());
 
     std::vector<std::string> physicalCameraIds;
     bool isLogical = manager->isLogicalCamera(mId.string(), &physicalCameraIds);
@@ -1419,9 +1419,10 @@ AidlCamera3Device::AidlRequestThread::AidlRequestThread(wp<Camera3Device> parent
                 const Vector<int32_t>& sessionParamKeys,
                 bool useHalBufManager,
                 bool supportCameraMute,
-                bool overrideToPortrait) :
+                bool overrideToPortrait,
+                bool supportSettingsOverride) :
           RequestThread(parent, statusTracker, interface, sessionParamKeys, useHalBufManager,
-                  supportCameraMute, overrideToPortrait) {}
+                  supportCameraMute, overrideToPortrait, supportSettingsOverride) {}
 
 status_t AidlCamera3Device::AidlRequestThread::switchToOffline(
         const std::vector<int32_t>& streamsToKeep,
@@ -1591,9 +1592,10 @@ sp<Camera3Device::RequestThread> AidlCamera3Device::createNewRequestThread(
                 const Vector<int32_t>& sessionParamKeys,
                 bool useHalBufManager,
                 bool supportCameraMute,
-                bool overrideToPortrait) {
+                bool overrideToPortrait,
+                bool supportSettingsOverride) {
     return new AidlRequestThread(parent, statusTracker, interface, sessionParamKeys,
-            useHalBufManager, supportCameraMute, overrideToPortrait);
+            useHalBufManager, supportCameraMute, overrideToPortrait, supportSettingsOverride);
 };
 
 sp<Camera3Device::Camera3DeviceInjectionMethods>

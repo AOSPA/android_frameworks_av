@@ -58,6 +58,7 @@
 #include <audiomanager/IAudioManager.h>
 
 #include "AudioFlinger.h"
+#include "EffectConfiguration.h"
 #include "NBAIO_Tee.h"
 #include "PropertyUtils.h"
 
@@ -111,6 +112,7 @@ using ::android::base::StringPrintf;
 using media::IEffectClient;
 using media::audio::common::AudioMMapPolicyInfo;
 using media::audio::common::AudioMMapPolicyType;
+using media::audio::common::AudioMode;
 using android::content::AttributionSourceState;
 using android::detail::AudioHalVersionInfo;
 
@@ -236,6 +238,7 @@ BINDER_METHOD_ENTRY(setBluetoothVariableLatencyEnabled) \
 BINDER_METHOD_ENTRY(isBluetoothVariableLatencyEnabled) \
 BINDER_METHOD_ENTRY(supportsBluetoothVariableLatency) \
 BINDER_METHOD_ENTRY(getSoundDoseInterface) \
+BINDER_METHOD_ENTRY(getAudioPolicyConfig) \
 
 // singleton for Binder Method Statistics for IAudioFlinger
 static auto& getIAudioFlingerStatistics() {
@@ -370,7 +373,7 @@ AudioFlinger::AudioFlinger()
     BatteryNotifier::getInstance().noteResetAudio();
 
     mDevicesFactoryHal = DevicesFactoryHalInterface::create();
-    mEffectsFactoryHal = EffectsFactoryHalInterface::create();
+    mEffectsFactoryHal = audioflinger::EffectConfiguration::getEffectsFactoryHal();
 
     mMediaLogNotifier->run("MediaLogNotifier");
     std::vector<pid_t> halPids;
@@ -485,14 +488,17 @@ int32_t AudioFlinger::getAAudioHardwareBurstMinUsec() {
     return mAAudioHwBurstMinMicros;
 }
 
-status_t AudioFlinger::setDeviceConnectedState(const struct audio_port_v7 *port, bool connected) {
+status_t AudioFlinger::setDeviceConnectedState(const struct audio_port_v7 *port,
+                                               media::DeviceConnectedState state) {
     status_t final_result = NO_INIT;
     Mutex::Autolock _l(mLock);
     AutoMutex lock(mHardwareLock);
     mHardwareStatus = AUDIO_HW_SET_CONNECTED_STATE;
     for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
         sp<DeviceHalInterface> dev = mAudioHwDevs.valueAt(i)->hwDevice();
-        status_t result = dev->setConnectedState(port, connected);
+        status_t result = state == media::DeviceConnectedState::PREPARE_TO_DISCONNECT
+                ? dev->prepareToDisconnectExternalDevice(port)
+                : dev->setConnectedState(port, state == media::DeviceConnectedState::CONNECTED);
         // Same logic as with setParameter: it's a success if at least one
         // HAL module accepts the update.
         if (final_result != NO_ERROR) {
@@ -836,6 +842,8 @@ void AudioFlinger::dumpInternals(int fd, const Vector<String16>& args __unused)
     for (const auto& vibratorInfo : mAudioVibratorInfos) {
         dprintf(fd, "  - %s\n", vibratorInfo.toString().c_str());
     }
+    dprintf(fd, "Bluetooth latency modes are %senabled\n",
+            mBluetoothLatencyModesEnabled ? "" : "not ");
 }
 
 void AudioFlinger::dumpPermissionDenial(int fd, const Vector<String16>& args __unused)
@@ -1236,21 +1244,20 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         output.portId = portId;
 
         if (lStatus == NO_ERROR) {
+            // no risk of deadlock because AudioFlinger::mLock is held
+            Mutex::Autolock _dl(thread->mLock);
             // Connect secondary outputs. Failure on a secondary output must not imped the primary
             // Any secondary output setup failure will lead to a desync between the AP and AF until
             // the track is destroyed.
             updateSecondaryOutputsForTrack_l(track.get(), thread, secondaryOutputs);
-        }
-
-        // move effect chain to this output thread if an effect on same session was waiting
-        // for a track to be created
-        if (lStatus == NO_ERROR && effectThread != NULL) {
-            // no risk of deadlock because AudioFlinger::mLock is held
-            Mutex::Autolock _dl(thread->mLock);
-            Mutex::Autolock _sl(effectThread->mLock);
-            if (moveEffectChain_l(sessionId, effectThread, thread) == NO_ERROR) {
-                effectThreadId = thread->id();
-                effectIds = thread->getEffectIds_l(sessionId);
+            // move effect chain to this output thread if an effect on same session was waiting
+            // for a track to be created
+            if (effectThread != nullptr) {
+                Mutex::Autolock _sl(effectThread->mLock);
+                if (moveEffectChain_l(sessionId, effectThread, thread) == NO_ERROR) {
+                    effectThreadId = thread->id();
+                    effectIds = thread->getEffectIds_l(sessionId);
+                }
             }
         }
 
@@ -1861,6 +1868,8 @@ void AudioFlinger::filterReservedParameters(String8& keyValuePairs, uid_t callin
         String8(AudioParameter::keyStreamSupportedFormats),
         String8(AudioParameter::keyStreamSupportedChannels),
         String8(AudioParameter::keyStreamSupportedSamplingRates),
+        String8(AudioParameter::keyClosing),
+        String8(AudioParameter::keyExiting),
     };
 
     if (isAudioServerUid(callingUid)) {
@@ -2569,6 +2578,47 @@ Exit:
 
 // ----------------------------------------------------------------------------
 
+status_t AudioFlinger::getAudioPolicyConfig(media::AudioPolicyConfig *config)
+{
+    if (config == nullptr) {
+        return BAD_VALUE;
+    }
+    Mutex::Autolock _l(mLock);
+    AutoMutex lock(mHardwareLock);
+    RETURN_STATUS_IF_ERROR(
+            mDevicesFactoryHal->getSurroundSoundConfig(&config->surroundSoundConfig));
+    RETURN_STATUS_IF_ERROR(mDevicesFactoryHal->getEngineConfig(&config->engineConfig));
+    std::vector<std::string> hwModuleNames;
+    RETURN_STATUS_IF_ERROR(mDevicesFactoryHal->getDeviceNames(&hwModuleNames));
+    std::set<AudioMode> allSupportedModes;
+    for (const auto& name : hwModuleNames) {
+        AudioHwDevice* module = loadHwModule_l(name.c_str());
+        if (module == nullptr) continue;
+        media::AudioHwModule aidlModule;
+        if (module->hwDevice()->getAudioPorts(&aidlModule.ports) == OK &&
+                module->hwDevice()->getAudioRoutes(&aidlModule.routes) == OK) {
+            aidlModule.handle = module->handle();
+            aidlModule.name = module->moduleName();
+            config->modules.push_back(std::move(aidlModule));
+        }
+        std::vector<AudioMode> supportedModes;
+        if (module->hwDevice()->getSupportedModes(&supportedModes) == OK) {
+            allSupportedModes.insert(supportedModes.begin(), supportedModes.end());
+        }
+    }
+    if (!allSupportedModes.empty()) {
+        config->supportedModes.insert(config->supportedModes.end(),
+                allSupportedModes.begin(), allSupportedModes.end());
+    } else {
+        ALOGW("%s: The HAL does not provide telephony functionality", __func__);
+        config->supportedModes = { media::audio::common::AudioMode::NORMAL,
+            media::audio::common::AudioMode::RINGTONE,
+            media::audio::common::AudioMode::IN_CALL,
+            media::audio::common::AudioMode::IN_COMMUNICATION };
+    }
+    return OK;
+}
+
 audio_module_handle_t AudioFlinger::loadHwModule(const char *name)
 {
     if (name == NULL) {
@@ -2579,16 +2629,17 @@ audio_module_handle_t AudioFlinger::loadHwModule(const char *name)
     }
     Mutex::Autolock _l(mLock);
     AutoMutex lock(mHardwareLock);
-    return loadHwModule_l(name);
+    AudioHwDevice* module = loadHwModule_l(name);
+    return module != nullptr ? module->handle() : AUDIO_MODULE_HANDLE_NONE;
 }
 
 // loadHwModule_l() must be called with AudioFlinger::mLock and AudioFlinger::mHardwareLock held
-audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
+AudioHwDevice* AudioFlinger::loadHwModule_l(const char *name)
 {
     for (size_t i = 0; i < mAudioHwDevs.size(); i++) {
         if (strncmp(mAudioHwDevs.valueAt(i)->moduleName(), name, strlen(name)) == 0) {
             ALOGW("loadHwModule() module %s already loaded", name);
-            return mAudioHwDevs.keyAt(i);
+            return mAudioHwDevs.valueAt(i);
         }
     }
 
@@ -2597,7 +2648,7 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
     int rc = mDevicesFactoryHal->openDevice(name, &dev);
     if (rc) {
         ALOGE("loadHwModule() error %d loading module %s", rc, name);
-        return AUDIO_MODULE_HANDLE_NONE;
+        return nullptr;
     }
     if (!mMelReporter->activateHalSoundDoseComputation(name, dev)) {
         ALOGW("loadHwModule() sound dose reporting is not available");
@@ -2608,7 +2659,7 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
     mHardwareStatus = AUDIO_HW_IDLE;
     if (rc) {
         ALOGE("loadHwModule() init check error %d for module %s", rc, name);
-        return AUDIO_MODULE_HANDLE_NONE;
+        return nullptr;
     }
 
     // Check and cache this HAL's level of support for master mute and master
@@ -2682,8 +2733,7 @@ audio_module_handle_t AudioFlinger::loadHwModule_l(const char *name)
 
     ALOGI("loadHwModule() Loaded %s audio interface, handle %d", name, handle);
 
-    return handle;
-
+    return audioDevice;
 }
 
 // ----------------------------------------------------------------------------
@@ -3953,7 +4003,7 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
         patchTrack->setPeerProxy(patchRecord, true /* holdReference */);
         patchRecord->setPeerProxy(patchTrack, false /* holdReference */);
     }
-    track->setTeePatches(std::move(teePatches));
+    track->setTeePatchesToUpdate(std::move(teePatches));
 }
 
 sp<AudioFlinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_event_t type,
@@ -4728,6 +4778,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::SET_REQUESTED_LATENCY_MODE:
         case TransactionCode::GET_SUPPORTED_LATENCY_MODES:
         case TransactionCode::INVALIDATE_TRACKS:
+        case TransactionCode::GET_AUDIO_POLICY_CONFIG:
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, code, IPCThreadState::self()->getCallingPid());
             // return status only for non void methods
