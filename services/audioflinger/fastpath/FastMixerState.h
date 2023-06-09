@@ -37,19 +37,22 @@ public:
     // The provider implementation is responsible for validating that the return value is in range.
     virtual gain_minifloat_packed_t getVolumeLR() = 0;
 protected:
-    VolumeProvider() { }
+    VolumeProvider() = default;
     virtual ~VolumeProvider() = default;
 };
 
 // Represents the state of a fast track
 struct FastTrack {
-    FastTrack();
+    // must be nullptr if inactive, or non-nullptr if active
+    ExtendedAudioBufferProvider* mBufferProvider = nullptr;
 
-    ExtendedAudioBufferProvider* mBufferProvider; // must be NULL if inactive, or non-NULL if active
-    VolumeProvider*         mVolumeProvider; // optional; if NULL then full-scale
-    audio_channel_mask_t    mChannelMask;    // AUDIO_CHANNEL_OUT_MONO or AUDIO_CHANNEL_OUT_STEREO
-    audio_format_t          mFormat;         // track format
-    int                     mGeneration;     // increment when any field is assigned
+    // optional: if nullptr then full-scale
+    VolumeProvider*         mVolumeProvider = nullptr;
+
+    // AUDIO_CHANNEL_OUT_MONO or AUDIO_CHANNEL_OUT_STEREO
+    audio_channel_mask_t    mChannelMask = AUDIO_CHANNEL_OUT_STEREO;
+    audio_format_t          mFormat = AUDIO_FORMAT_INVALID;         // track format
+    int                     mGeneration = 0;     // increment when any field is assigned
     bool                    mHapticPlaybackEnabled = false; // haptic playback is enabled or not
     os::HapticScale         mHapticIntensity = os::HapticScale::MUTE; // intensity of haptic data
     float                   mHapticMaxAmplitude = NAN; // max amplitude allowed for haptic data
@@ -60,23 +63,24 @@ static_assert(!std::is_polymorphic_v<FastTrack>);
 
 // Represents a single state of the fast mixer
 struct FastMixerState : FastThreadState {
-                FastMixerState();
+    FastMixerState();
 
     // These are the minimum, maximum, and default values for maximum number of fast tracks
-    static const unsigned kMinFastTracks = 2;
-    static const unsigned kMaxFastTracks = 32;
-    static const unsigned kDefaultFastTracks = 8;
+    static constexpr unsigned kMinFastTracks = 2;
+    static constexpr unsigned kMaxFastTracks = 32;
+    static constexpr unsigned kDefaultFastTracks = 8;
 
     static unsigned sMaxFastTracks;             // Configured maximum number of fast tracks
     static pthread_once_t sMaxFastTracksOnce;   // Protects initializer for sMaxFastTracks
 
     // all pointer fields use raw pointers; objects are owned and ref-counted by the normal mixer
     FastTrack   mFastTracks[kMaxFastTracks];
-    int         mFastTracksGen; // increment when any mFastTracks[i].mGeneration is incremented
-    unsigned    mTrackMask;     // bit i is set if and only if mFastTracks[i] is active
-    NBAIO_Sink* mOutputSink;    // HAL output device, must already be negotiated
-    int         mOutputSinkGen; // increment when mOutputSink is assigned
-    size_t      mFrameCount;    // number of frames per fast mix buffer
+    int         mFastTracksGen = 0; // increment when any
+                                    // mFastTracks[i].mGeneration is incremented
+    unsigned    mTrackMask = 0;     // bit i is set if and only if mFastTracks[i] is active
+    NBAIO_Sink* mOutputSink = nullptr; // HAL output device, must already be negotiated
+    int         mOutputSinkGen = 0; // increment when mOutputSink is assigned
+    size_t      mFrameCount = 0;    // number of frames per fast mix buffer
     audio_channel_mask_t mSinkChannelMask; // If not AUDIO_CHANNEL_NONE, specifies sink channel
                                            // mask when it cannot be directly calculated from
                                            // channel count
