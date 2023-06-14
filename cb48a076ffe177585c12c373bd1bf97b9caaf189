@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "8f277621_2a8302d2",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000579
+      },
+      "writtenOn": "2023-06-14T18:03:15Z",
+      "side": 1,
+      "message": "Arian, [08/06/2023, 21:38]\nNeeded as in needed for portrait in MIUI camera\n\ncontext for reviewers",
+      "revId": "cb48a076ffe177585c12c373bd1bf97b9caaf189",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
