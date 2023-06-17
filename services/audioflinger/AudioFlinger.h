@@ -95,14 +95,15 @@
 #include <timing/SyncEvent.h>
 #include <timing/SynchronizedRecordState.h>
 
+#include <datapath/AudioHwDevice.h>
+#include <datapath/AudioStreamOut.h>
+#include <datapath/SpdifStreamOut.h>
+#include <datapath/ThreadMetrics.h>
+#include <datapath/TrackMetrics.h>
 #include <fastpath/FastCapture.h>
 #include <fastpath/FastMixer.h>
 #include <media/nbaio/NBAIO.h>
-#include "AudioStreamOut.h"
-#include "SpdifStreamOut.h"
-#include "AudioHwDevice.h"
-#include "ThreadMetrics.h"
-#include "TrackMetrics.h"
+
 #include "AllocatorFactory.h"
 #include <android/os/IPowerManager.h>
 
@@ -347,10 +348,10 @@ public:
         const sp<os::ExternalVibration>& externalVibration);
     static void onExternalVibrationStop(const sp<os::ExternalVibration>& externalVibration);
 
-    status_t addEffectToHal(audio_port_handle_t deviceId,
-            audio_module_handle_t hwModuleId, const sp<EffectHalInterface>& effect);
-    status_t removeEffectFromHal(audio_port_handle_t deviceId,
-            audio_module_handle_t hwModuleId, const sp<EffectHalInterface>& effect);
+    status_t addEffectToHal(
+            const struct audio_port_config *device, const sp<EffectHalInterface>& effect);
+    status_t removeEffectFromHal(
+            const struct audio_port_config *device, const sp<EffectHalInterface>& effect);
 
     void updateDownStreamPatches_l(const struct audio_patch *patch,
                                    const std::set<audio_io_handle_t>& streams);
