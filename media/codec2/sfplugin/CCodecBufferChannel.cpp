@@ -156,13 +156,12 @@ CCodecBufferChannel::CCodecBufferChannel(
       mFirstValidFrameIndex(0u),
       mIsSurfaceToDisplay(false),
       mHasPresentFenceTimes(false),
-      mRenderingDepth(0u),
+      mRenderingDepth(3u),
       mMetaMode(MODE_NONE),
       mInputMetEos(false),
       mLastInputBufferAvailableTs(0u),
       mIsHWDecoder(false),
       mSendEncryptedInfoBuffer(false) {
-    mOutputSurface.lock()->maxDequeueBuffers = kSmoothnessFactor;
     {
         Mutexed<Input>::Locked input(mInput);
         input->buffers.reset(new DummyInputBuffers(""));
@@ -184,8 +183,9 @@ CCodecBufferChannel::CCodecBufferChannel(
         pools->outputPoolId = C2BlockPool::BASIC_LINEAR;
     }
     std::string value = server_configurable_flags::GetServerConfigurableFlag(
-            "media_native", "ccodec_rendering_depth", "0");
+            "media_native", "ccodec_rendering_depth", "3");
     android::base::ParseInt(value, &mRenderingDepth);
+    mOutputSurface.lock()->maxDequeueBuffers = kSmoothnessFactor + mRenderingDepth;
 }
 
 CCodecBufferChannel::~CCodecBufferChannel() {
