@@ -1912,7 +1912,7 @@ class AudioPolicyManagerTestMMapPlaybackRerouting
     bool mIsBitPerfect;
 };
 
-TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, MmapPlaybackStreamMatchingLoopbackDapMixFails) {
+TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, MmapPlaybackStreamMatchingDapMixFails) {
     // Add mix matching the test uid.
     const int testUid = 12345;
     const auto param = GetParam();
@@ -1929,8 +1929,7 @@ TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, MmapPlaybackStreamMatchingLo
                                          &mOutputType, &mIsSpatialized, &mIsBitPerfect));
 }
 
-TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting,
-        NonMmapPlaybackStreamMatchingLoopbackDapMixSucceeds) {
+TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, NonMmapPlaybackStreamMatchingDapMixSucceeds) {
     // Add mix matching the test uid.
     const int testUid = 12345;
     const auto param = GetParam();
@@ -1947,30 +1946,15 @@ TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting,
                                          &mOutputType, &mIsSpatialized, &mIsBitPerfect));
 }
 
-TEST_F(AudioPolicyManagerTestMMapPlaybackRerouting,
-        MmapPlaybackStreamMatchingRenderDapMixSucceeds) {
-      // Add render-only mix matching the test uid.
-    const int testUid = 12345;
-    status_t ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER, AUDIO_DEVICE_OUT_SPEAKER,
-                                /*mixAddress=*/"", audioConfig, {createUidCriterion(testUid)});
-    ASSERT_EQ(NO_ERROR, ret);
-
-    // Geting output for matching uid should succeed for mmaped stream.
-    audio_output_flags_t outputFlags = AUDIO_OUTPUT_FLAG_MMAP_NOIRQ;
-    ASSERT_EQ(NO_ERROR,
-              mManager->getOutputForAttr(&attr, &mOutput, AUDIO_SESSION_NONE, &mStream,
-                                         createAttributionSourceState(testUid), &audioConfig,
-                                         &outputFlags, &mSelectedDeviceId, &mPortId, {},
-                                         &mOutputType, &mIsSpatialized, &mIsBitPerfect));
-}
-
 INSTANTIATE_TEST_SUITE_P(
         MmapPlaybackRerouting, AudioPolicyManagerTestMMapPlaybackRerouting,
         testing::Values(DPMmapTestParam(MIX_ROUTE_FLAG_LOOP_BACK, AUDIO_DEVICE_OUT_REMOTE_SUBMIX,
                                         /*deviceAddress=*/"remote_submix_media"),
                         DPMmapTestParam(MIX_ROUTE_FLAG_LOOP_BACK_AND_RENDER,
                                         AUDIO_DEVICE_OUT_REMOTE_SUBMIX,
-                                        /*deviceAddress=*/"remote_submix_media")));
+                                        /*deviceAddress=*/"remote_submix_media"),
+                        DPMmapTestParam(MIX_ROUTE_FLAG_RENDER, AUDIO_DEVICE_OUT_SPEAKER,
+                                        /*deviceAddress=*/"")));
 
 class AudioPolicyManagerTestDPMixRecordInjection : public AudioPolicyManagerTestDynamicPolicy,
         public testing::WithParamInterface<DPTestParam> {
