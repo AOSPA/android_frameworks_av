@@ -1565,7 +1565,7 @@ protected:
 
             // Support low latency mode by default as unless explicitly indicated by the audio HAL
             // we assume the audio path is compatible with the head tracking latency requirements
-            std::vector<audio_latency_mode_t> mSupportedLatencyModes = {AUDIO_LATENCY_MODE_LOW};
+            std::vector<audio_latency_mode_t> mSupportedLatencyModes = {AUDIO_LATENCY_MODE_FREE,AUDIO_LATENCY_MODE_LOW};
             // default to invalid value to force first update to the audio HAL
             audio_latency_mode_t mSetLatencyMode =
                     (audio_latency_mode_t)AUDIO_LATENCY_MODE_INVALID;
