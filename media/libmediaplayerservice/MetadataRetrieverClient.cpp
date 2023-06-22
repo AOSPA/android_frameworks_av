@@ -13,6 +13,11 @@
 ** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
+**
+** Changes from Qualcomm Innovation Center are provided under the following license:
+** Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+** SPDX-License-Identifier: BSD-3-Clause-Clear
+**
 */
 
 //#define LOG_NDEBUG 0
@@ -50,6 +55,13 @@ MetadataRetrieverClient::MetadataRetrieverClient(pid_t pid)
 {
     ALOGV("MetadataRetrieverClient constructor pid(%d)", pid);
     mPid = pid;
+    mPerfBoost = nullptr;
+    // Trigger Perf boost to support faster HEIF decoding. Set the duration
+    // to indefinite. This perflock will be released when MetadataRetrieverClient
+    // is released.
+#ifdef ENABLE_HEIF_DECODE_BOOST
+    mPerfBoost = std::make_unique<HeifPerfBoost>(true, 0);
+#endif
     mAlbumArt = NULL;
     mRetriever = NULL;
 }

@@ -29,6 +29,7 @@ cc_library {
         "StagefrightMetadataRetriever.cpp",
         "StagefrightRecorder.cpp",
         "TestPlayerStub.cpp",
+        "mpctl/PerfBoost.cpp",
     ],
 
     shared_libs: [

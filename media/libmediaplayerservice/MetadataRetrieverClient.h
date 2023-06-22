@@ -13,6 +13,10 @@
 ** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
+**
+** Changes from Qualcomm Innovation Center are provided under the following license:
+** Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+** SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
 #ifndef ANDROID_MEDIAMETADATARETRIEVERSERVICE_H
@@ -26,6 +30,7 @@
 #include <binder/IMemory.h>
 
 #include <media/MediaMetadataRetrieverInterface.h>
+#include "mpctl/PerfBoost.h"
 
 
 namespace android {
@@ -76,6 +81,7 @@ private:
 
     // Keep the shared memory copy of album art
     sp<IMemory>                            mAlbumArt;
+    std::unique_ptr<HeifPerfBoost>         mPerfBoost;
 };
 
 }; // namespace android
