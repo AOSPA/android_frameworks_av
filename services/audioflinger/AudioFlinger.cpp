@@ -59,7 +59,6 @@
 
 #include "AudioFlinger.h"
 #include "EffectConfiguration.h"
-#include "NBAIO_Tee.h"
 #include "PropertyUtils.h"
 
 #include <media/AudioResamplerPublic.h>
@@ -87,9 +86,8 @@
 #include <private/android_filesystem_config.h>
 
 //#define BUFLOG_NDEBUG 0
-#include <BufLog.h>
-
-#include "TypedLogger.h"
+#include <afutils/BufLog.h>
+#include <afutils/TypedLogger.h>
 
 // ----------------------------------------------------------------------------
 
@@ -1262,18 +1260,19 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         }
 
         // Look for sync events awaiting for a session to be used.
-        for (size_t i = 0; i < mPendingSyncEvents.size(); i++) {
-            if (mPendingSyncEvents[i]->triggerSession() == sessionId) {
-                if (thread->isValidSyncEvent(mPendingSyncEvents[i])) {
+        for (auto it = mPendingSyncEvents.begin(); it != mPendingSyncEvents.end();) {
+            if ((*it)->triggerSession() == sessionId) {
+                if (thread->isValidSyncEvent(*it)) {
                     if (lStatus == NO_ERROR) {
-                        (void) track->setSyncEvent(mPendingSyncEvents[i]);
+                        (void) track->setSyncEvent(*it);
                     } else {
-                        mPendingSyncEvents[i]->cancel();
+                        (*it)->cancel();
                     }
-                    mPendingSyncEvents.removeAt(i);
-                    i--;
+                    it = mPendingSyncEvents.erase(it);
+                    continue;
                 }
             }
+            ++it;
         }
         if ((output.flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) == AUDIO_OUTPUT_FLAG_HW_AV_SYNC) {
             setAudioHwSyncForSession_l(thread, sessionId);
@@ -3004,14 +3003,6 @@ sp<AudioFlinger::ThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t mo
         return nullptr;
     }
 
-#ifndef MULTICHANNEL_EFFECT_CHAIN
-    if (flags & AUDIO_OUTPUT_FLAG_SPATIALIZER) {
-        ALOGE("openOutput_l() cannot create spatializer thread "
-                "without #define MULTICHANNEL_EFFECT_CHAIN");
-        return nullptr;
-    }
-#endif
-
     mHardwareStatus = AUDIO_HW_OUTPUT_OPEN;
 
     // FOR TESTING ONLY:
@@ -4006,15 +3997,16 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
     track->setTeePatchesToUpdate(std::move(teePatches));
 }
 
-sp<AudioFlinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_event_t type,
+sp<audioflinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_event_t type,
                                     audio_session_t triggerSession,
                                     audio_session_t listenerSession,
-                                    sync_event_callback_t callBack,
+                                    const audioflinger::SyncEventCallback& callBack,
                                     const wp<RefBase>& cookie)
 {
     Mutex::Autolock _l(mLock);
 
-    sp<SyncEvent> event = new SyncEvent(type, triggerSession, listenerSession, callBack, cookie);
+    auto event = sp<audioflinger::SyncEvent>::make(
+            type, triggerSession, listenerSession, callBack, cookie);
     status_t playStatus = NAME_NOT_FOUND;
     status_t recStatus = NAME_NOT_FOUND;
     for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
@@ -4030,7 +4022,7 @@ sp<AudioFlinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_even
         }
     }
     if (playStatus == NAME_NOT_FOUND || recStatus == NAME_NOT_FOUND) {
-        mPendingSyncEvents.add(event);
+        mPendingSyncEvents.emplace_back(event);
     } else {
         ALOGV("createSyncEvent() invalid event %d", event->type());
         event.clear();

@@ -76,8 +76,6 @@
 #include <media/audiohal/StreamHalInterface.h>
 
 #include "AudioFlinger.h"
-#include "FastMixer.h"
-#include "FastCapture.h"
 #include <mediautils/SchedulingPolicyService.h>
 #include <mediautils/ServiceUtilities.h>
 
@@ -91,10 +89,10 @@
 #include <cpustats/ThreadCpuUsage.h>
 #endif
 
-#include "AutoPark.h"
+#include <fastpath/AutoPark.h>
 
 #include <pthread.h>
-#include "TypedLogger.h"
+#include <afutils/TypedLogger.h>
 
 // ----------------------------------------------------------------------------
 
@@ -1413,15 +1411,6 @@ status_t AudioFlinger::PlaybackThread::checkEffectCompatibility_l(
 
     switch (mType) {
     case MIXER: {
-#ifndef MULTICHANNEL_EFFECT_CHAIN
-        // Reject any effect on mixer multichannel sinks.
-        // TODO: fix both format and multichannel issues with effects.
-        if (mChannelCount != FCC_2) {
-            ALOGW("%s: effect %s for multichannel(%d) on MIXER thread %s",
-                    __func__, desc->name, mChannelCount, mThreadName);
-            return BAD_VALUE;
-        }
-#endif
         audio_output_flags_t flags = mOutput->flags;
         if (hasFastMixer() || (flags & AUDIO_OUTPUT_FLAG_FAST)) {
             if (sessionId == AUDIO_SESSION_OUTPUT_MIX) {
@@ -1471,15 +1460,6 @@ status_t AudioFlinger::PlaybackThread::checkEffectCompatibility_l(
         //     will take care of invalidating the tracks of the thread
         break;
     case DUPLICATING:
-#ifndef MULTICHANNEL_EFFECT_CHAIN
-        // Reject any effect on mixer multichannel sinks.
-        // TODO: fix both format and multichannel issues with effects.
-        if (mChannelCount != FCC_2) {
-            ALOGW("%s: effect %s for multichannel(%d) on DUPLICATING thread %s",
-                    __func__, desc->name, mChannelCount, mThreadName);
-            return BAD_VALUE;
-        }
-#endif
         if (audio_is_global_session(sessionId)) {
             ALOGW("%s: global effect %s on DUPLICATING thread %s",
                     __func__, desc->name, mThreadName);
@@ -3206,7 +3186,7 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
     free(mEffectBuffer);
     mEffectBuffer = NULL;
     if (mEffectBufferEnabled) {
-        mEffectBufferFormat = EFFECT_BUFFER_FORMAT;
+        mEffectBufferFormat = AUDIO_FORMAT_PCM_FLOAT;
         mEffectBufferSize = mNormalFrameCount * mixerChannelCount
                 * audio_bytes_per_sample(mEffectBufferFormat);
         (void)posix_memalign(&mEffectBuffer, 32, mEffectBufferSize);
@@ -3377,7 +3357,7 @@ uint32_t AudioFlinger::PlaybackThread::activeSleepTimeUs() const
     return (uint32_t)((uint32_t)((mNormalFrameCount * 1000) / mSampleRate) * 1000);
 }
 
-status_t AudioFlinger::PlaybackThread::setSyncEvent(const sp<SyncEvent>& event)
+status_t AudioFlinger::PlaybackThread::setSyncEvent(const sp<audioflinger::SyncEvent>& event)
 {
     if (!isValidSyncEvent(event)) {
         return BAD_VALUE;
@@ -3396,7 +3376,8 @@ status_t AudioFlinger::PlaybackThread::setSyncEvent(const sp<SyncEvent>& event)
     return NAME_NOT_FOUND;
 }
 
-bool AudioFlinger::PlaybackThread::isValidSyncEvent(const sp<SyncEvent>& event) const
+bool AudioFlinger::PlaybackThread::isValidSyncEvent(
+        const sp<audioflinger::SyncEvent>& event) const
 {
     return event->type() == AudioSystem::SYNC_EVENT_PRESENTATION_COMPLETE;
 }
@@ -3660,7 +3641,7 @@ status_t AudioFlinger::PlaybackThread::addEffectChain_l(const sp<EffectChain>& c
 {
     audio_session_t session = chain->sessionId();
     sp<EffectBufferHalInterface> halInBuffer, halOutBuffer;
-    effect_buffer_t *buffer = nullptr; // only used for non global sessions
+    float *buffer = nullptr; // only used for non global sessions
 
     if (mType == SPATIALIZER) {
         if (!audio_is_global_session(session)) {
@@ -3678,7 +3659,7 @@ status_t AudioFlinger::PlaybackThread::addEffectChain_l(const sp<EffectChain>& c
             size_t numSamples = mNormalFrameCount
                     * (audio_channel_count_from_out_mask(channelMask) + mHapticChannelCount);
             status_t result = mAudioFlinger->mEffectsFactoryHal->allocateBuffer(
-                    numSamples * sizeof(effect_buffer_t),
+                    numSamples * sizeof(float),
                     &halInBuffer);
             if (result != OK) return result;
 
@@ -3688,11 +3669,8 @@ status_t AudioFlinger::PlaybackThread::addEffectChain_l(const sp<EffectChain>& c
                     &halOutBuffer);
             if (result != OK) return result;
 
-#ifdef FLOAT_EFFECT_CHAIN
             buffer = halInBuffer ? halInBuffer->audioBuffer()->f32 : buffer;
-#else
-            buffer = halInBuffer ? halInBuffer->audioBuffer()->s16 : buffer;
-#endif
+
             ALOGV("addEffectChain_l() creating new input buffer %p session %d",
                     buffer, session);
         } else {
@@ -3720,7 +3698,7 @@ status_t AudioFlinger::PlaybackThread::addEffectChain_l(const sp<EffectChain>& c
         halOutBuffer = halInBuffer;
         ALOGV("addEffectChain_l() %p on thread %p for session %d", chain.get(), this, session);
         if (!audio_is_global_session(session)) {
-            buffer = halInBuffer ? reinterpret_cast<effect_buffer_t*>(halInBuffer->externalData())
+            buffer = halInBuffer ? reinterpret_cast<float*>(halInBuffer->externalData())
                                  : buffer;
             // Only one effect chain can be present in direct output thread and it uses
             // the sink buffer as input
@@ -3729,14 +3707,11 @@ status_t AudioFlinger::PlaybackThread::addEffectChain_l(const sp<EffectChain>& c
                         * (audio_channel_count_from_out_mask(mMixerChannelMask)
                                                              + mHapticChannelCount);
                 const status_t allocateStatus = mAudioFlinger->mEffectsFactoryHal->allocateBuffer(
-                        numSamples * sizeof(effect_buffer_t),
+                        numSamples * sizeof(float),
                         &halInBuffer);
                 if (allocateStatus != OK) return allocateStatus;
-#ifdef FLOAT_EFFECT_CHAIN
+
                 buffer = halInBuffer ? halInBuffer->audioBuffer()->f32 : buffer;
-#else
-                buffer = halInBuffer ? halInBuffer->audioBuffer()->s16 : buffer;
-#endif
                 ALOGV("addEffectChain_l() creating new input buffer %p session %d",
                         buffer, session);
             }
@@ -3820,7 +3795,7 @@ size_t AudioFlinger::PlaybackThread::removeEffectChain_l(const sp<EffectChain>& 
             for (size_t j = 0; j < mTracks.size(); ++j) {
                 sp<Track> track = mTracks[j];
                 if (session == track->sessionId()) {
-                    track->setMainBuffer(reinterpret_cast<effect_buffer_t*>(mSinkBuffer));
+                    track->setMainBuffer(reinterpret_cast<float*>(mSinkBuffer));
                     chain->decTrackCnt();
                 }
             }
@@ -3873,7 +3848,7 @@ void AudioFlinger::PlaybackThread::detachAuxEffect_l(int effectId)
 bool AudioFlinger::PlaybackThread::threadLoop()
 NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
 {
-    tlNBLogWriter = mNBLogWriter.get();
+    aflog::setThreadWriter(mNBLogWriter.get());
 
     Vector< sp<Track> > tracksToRemove;
 
@@ -4243,12 +4218,12 @@ NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
 
                         const size_t audioBufferSize = mNormalFrameCount
                             * audio_bytes_per_frame(hapticSessionChannelCount,
-                                                    EFFECT_BUFFER_FORMAT);
+                                                    AUDIO_FORMAT_PCM_FLOAT);
                         memcpy_by_audio_format(
                                 (uint8_t*)effectChains[i]->outBuffer() + audioBufferSize,
-                                EFFECT_BUFFER_FORMAT,
+                                AUDIO_FORMAT_PCM_FLOAT,
                                 (const uint8_t*)effectChains[i]->inBuffer() + audioBufferSize,
-                                EFFECT_BUFFER_FORMAT, mNormalFrameCount * mHapticChannelCount);
+                                AUDIO_FORMAT_PCM_FLOAT, mNormalFrameCount * mHapticChannelCount);
                     }
                 }
             }
@@ -4743,7 +4718,8 @@ status_t AudioFlinger::PlaybackThread::handleVoipVolume_l(float *volume)
     if ((mOutput->flags & AUDIO_OUTPUT_FLAG_VOIP_RX) != 0) {
         if (*volume != mLeftVolFloat) {
             result = mOutput->stream->setVolume(*volume, *volume);
-            ALOGE_IF(result != OK,
+            // HAL can return INVALID_OPERATION if operation is not supported.
+            ALOGE_IF(result != OK && result != INVALID_OPERATION,
                      "Error when setting output stream volume: %d", result);
             if (result == NO_ERROR) {
                 mLeftVolFloat = *volume;
@@ -5948,7 +5924,7 @@ AudioFlinger::PlaybackThread::mixer_state AudioFlinger::MixerThread::prepareTrac
                 mAudioMixer->setParameter(
                         trackId,
                         AudioMixer::TRACK,
-                        AudioMixer::MIXER_FORMAT, (void *)EFFECT_BUFFER_FORMAT);
+                        AudioMixer::MIXER_FORMAT, (void *)AUDIO_FORMAT_PCM_FLOAT);
                 mAudioMixer->setParameter(
                         trackId,
                         AudioMixer::TRACK,
@@ -8578,7 +8554,11 @@ reacquire_wakelock:
                     overrun = OVERRUN_FALSE;
                 }
 
-                if (activeTrack->mFramesToDrop == 0) {
+                // MediaSyncEvent handling: Synchronize AudioRecord to AudioTrack completion.
+                const ssize_t framesToDrop =
+                        activeTrack->mSynchronizedRecordState.updateRecordFrames(framesOut);
+                if (framesToDrop == 0) {
+                    // no sync event, process normally, otherwise ignore.
                     if (framesOut > 0) {
                         activeTrack->mSink.frameCount = framesOut;
                         // Sanitize before releasing if the track has no access to the source data
@@ -8588,28 +8568,7 @@ reacquire_wakelock:
                         }
                         activeTrack->releaseBuffer(&activeTrack->mSink);
                     }
-                } else {
-                    // FIXME could do a partial drop of framesOut
-                    if (activeTrack->mFramesToDrop > 0) {
-                        activeTrack->mFramesToDrop -= (ssize_t)framesOut;
-                        if (activeTrack->mFramesToDrop <= 0) {
-                            activeTrack->clearSyncStartEvent();
-                        }
-                    } else {
-                        activeTrack->mFramesToDrop += framesOut;
-                        if (activeTrack->mFramesToDrop >= 0 || activeTrack->mSyncStartEvent == 0 ||
-                                activeTrack->mSyncStartEvent->isCancelled()) {
-                            ALOGW("Synced record %s, session %d, trigger session %d",
-                                  (activeTrack->mFramesToDrop >= 0) ? "timed out" : "cancelled",
-                                  activeTrack->sessionId(),
-                                  (activeTrack->mSyncStartEvent != 0) ?
-                                          activeTrack->mSyncStartEvent->triggerSession() :
-                                          AUDIO_SESSION_NONE);
-                            activeTrack->clearSyncStartEvent();
-                        }
-                    }
                 }
-
                 if (framesOut == 0) {
                     break;
                 }
@@ -8942,20 +8901,10 @@ status_t AudioFlinger::RecordThread::start(RecordThread::RecordTrack* recordTrac
     if (event == AudioSystem::SYNC_EVENT_NONE) {
         recordTrack->clearSyncStartEvent();
     } else if (event != AudioSystem::SYNC_EVENT_SAME) {
-        recordTrack->mSyncStartEvent = mAudioFlinger->createSyncEvent(event,
-                                       triggerSession,
-                                       recordTrack->sessionId(),
-                                       syncStartEventCallback,
-                                       recordTrack);
-        // Sync event can be cancelled by the trigger session if the track is not in a
-        // compatible state in which case we start record immediately
-        if (recordTrack->mSyncStartEvent->isCancelled()) {
-            recordTrack->clearSyncStartEvent();
-        } else {
-            // do not wait for the event for more than AudioSystem::kSyncRecordStartTimeOutMs
-            recordTrack->mFramesToDrop = -(ssize_t)
-                    ((AudioSystem::kSyncRecordStartTimeOutMs * recordTrack->mSampleRate) / 1000);
-        }
+        recordTrack->mSynchronizedRecordState.startRecording(
+                mAudioFlinger->createSyncEvent(
+                        event, triggerSession,
+                        recordTrack->sessionId(), syncStartEventCallback, recordTrack));
     }
 
     {
@@ -9037,9 +8986,9 @@ status_t AudioFlinger::RecordThread::start(RecordThread::RecordTrack* recordTrac
     }
 }
 
-void AudioFlinger::RecordThread::syncStartEventCallback(const wp<SyncEvent>& event)
+void AudioFlinger::RecordThread::syncStartEventCallback(const wp<audioflinger::SyncEvent>& event)
 {
-    sp<SyncEvent> strongEvent = event.promote();
+    sp<audioflinger::SyncEvent> strongEvent = event.promote();
 
     if (strongEvent != 0) {
         sp<RefBase> ptr = strongEvent->cookie().promote();
@@ -9078,12 +9027,14 @@ bool AudioFlinger::RecordThread::stop(RecordThread::RecordTrack* recordTrack) {
     return false;
 }
 
-bool AudioFlinger::RecordThread::isValidSyncEvent(const sp<SyncEvent>& event __unused) const
+bool AudioFlinger::RecordThread::isValidSyncEvent(
+        const sp<audioflinger::SyncEvent>& /* event */) const
 {
     return false;
 }
 
-status_t AudioFlinger::RecordThread::setSyncEvent(const sp<SyncEvent>& event __unused)
+status_t AudioFlinger::RecordThread::setSyncEvent(
+        const sp<audioflinger::SyncEvent>& event __unused)
 {
 #if 0   // This branch is currently dead code, but is preserved in case it will be needed in future
     if (!isValidSyncEvent(event)) {
@@ -10656,12 +10607,13 @@ void AudioFlinger::MmapThread::threadLoop_exit()
     // and because it can cause a recursive mutex lock on stop().
 }
 
-status_t AudioFlinger::MmapThread::setSyncEvent(const sp<SyncEvent>& event __unused)
+status_t AudioFlinger::MmapThread::setSyncEvent(const sp<audioflinger::SyncEvent>& /* event */)
 {
     return BAD_VALUE;
 }
 
-bool AudioFlinger::MmapThread::isValidSyncEvent(const sp<SyncEvent>& event __unused) const
+bool AudioFlinger::MmapThread::isValidSyncEvent(
+        const sp<audioflinger::SyncEvent>& /* event */) const
 {
     return false;
 }

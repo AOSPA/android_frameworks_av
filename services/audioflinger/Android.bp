@@ -134,48 +134,8 @@ cc_defaults {
     ],
 }
 
-cc_library_shared {
-    name: "libaudioflinger",
-
-    defaults: [
-        "latest_android_media_audio_common_types_cpp_shared",
-        "latest_android_hardware_audio_core_sounddose_ndk_shared",
-        "audioflinger_flags_defaults",
-    ],
-
-    srcs: [
-        "AudioFlinger.cpp",
-        "AudioHwDevice.cpp",
-        "AudioStreamOut.cpp",
-        "AudioWatchdog.cpp",
-        "BufLog.cpp",
-        "DeviceEffectManager.cpp",
-        "Effects.cpp",
-        "FastCapture.cpp",
-        "FastCaptureDumpState.cpp",
-        "FastCaptureState.cpp",
-        "FastMixer.cpp",
-        "FastMixerDumpState.cpp",
-        "FastMixerState.cpp",
-        "FastThread.cpp",
-        "FastThreadDumpState.cpp",
-        "FastThreadState.cpp",
-        "MelReporter.cpp",
-        "NBAIO_Tee.cpp",
-        "PatchCommandThread.cpp",
-        "PatchPanel.cpp",
-        "PropertyUtils.cpp",
-        "SpdifStreamOut.cpp",
-        "StateQueue.cpp",
-        "Threads.cpp",
-        "Tracks.cpp",
-        "TypedLogger.cpp",
-    ],
-
-    include_dirs: [
-        "frameworks/av/services/audiopolicy",
-        "frameworks/av/services/medialog",
-    ],
+cc_defaults {
+    name: "libaudioflinger_dependencies",
 
     shared_libs: [
         "audioflinger-aidl-cpp",
@@ -184,11 +144,12 @@ cc_library_shared {
         "effect-aidl-cpp",
         "libaudioclient_aidl_conversion",
         "libactivitymanager_aidl",
+        "libaudioflinger_fastpath",
         "libaudioflinger_timing",
+        "libaudioflinger_utils",
         "libaudiofoundation",
         "libaudiohal",
         "libaudioprocessing",
-        "libaudiospdif",
         "libaudioutils",
         "libcutils",
         "libutils",
@@ -197,7 +158,6 @@ cc_library_shared {
         "libbinder_ndk",
         "libaudioclient",
         "libaudiomanager",
-        "libmedialogservice",
         "libmediametrics",
         "libmediautils",
         "libnbaio",
@@ -213,8 +173,44 @@ cc_library_shared {
     ],
 
     static_libs: [
+        "libmedialogservice",
+        "libaudiospdif",
+    ],
+}
+
+
+cc_library {
+    name: "libaudioflinger",
+
+    defaults: [
+        "libaudioflinger_dependencies",
+        "latest_android_media_audio_common_types_cpp_shared",
+        "latest_android_hardware_audio_core_sounddose_ndk_shared",
+        "audioflinger_flags_defaults",
+    ],
+
+    srcs: [
+        "AudioFlinger.cpp",
+        "AudioHwDevice.cpp",
+        "AudioStreamOut.cpp",
+        "DeviceEffectManager.cpp",
+        "Effects.cpp",
+        "MelReporter.cpp",
+        "PatchCommandThread.cpp",
+        "PatchPanel.cpp",
+        "PropertyUtils.cpp",
+        "SpdifStreamOut.cpp",
+        "Threads.cpp",
+        "Tracks.cpp",
+    ],
+
+    include_dirs: [
+        "frameworks/av/services/audiopolicy",
+        "frameworks/av/services/medialog",
+    ],
+
+    static_libs: [
         "libcpustats",
-        "libsndfile",
         "libpermission",
     ],
 
@@ -232,7 +228,6 @@ cc_library_shared {
     ],
 
     cflags: [
-        "-DSTATE_QUEUE_INSTANTIATIONS=\"StateQueueInstantiations.cpp\"",
         "-fvisibility=hidden",
         "-Werror",
         "-Wall",
