@@ -542,9 +542,14 @@ status_t MediaCodecSource::initEncoder() {
                     ((mFlags & FLAG_PREFER_SOFTWARE_CODEC) ? MediaCodecList::kPreferSoftwareCodecs : 0),
                     &matchingCodecs);
         }
+        int32_t callingPid = MediaCodec::kNoPid;
+        int32_t callingUid = MediaCodec::kNoUid;
+        mOutputFormat->findInt32("calling-pid", &callingPid);
+        mOutputFormat->findInt32("calling-uid", &callingUid);
+
         for (size_t ix = 0; ix < matchingCodecs.size(); ++ix) {
             mEncoder = MediaCodec::CreateByComponentName(
-                    mCodecLooper, matchingCodecs[ix]);
+                    mCodecLooper, matchingCodecs[ix], NULL, callingPid, callingUid);
 
             if (mEncoder == NULL) {
                 continue;
