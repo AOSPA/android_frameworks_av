@@ -3024,7 +3024,10 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
 
     meta->setInt64(kKeyTime, startTimeUs);
 
+    nsecs_t sourceStartedTime = systemTime(SYSTEM_TIME_REALTIME);
     status_t err = mSource->start(meta.get());
+    nsecs_t sourceFinishedTime = systemTime(SYSTEM_TIME_REALTIME);
+    ALOGI("Time taken by %s Track Source to start : %" PRId64 "ms" , mIsVideo ? "video" : "audio" , (sourceFinishedTime - sourceStartedTime)/1000000);
     if (err != OK) {
         mDone = mReachedEOS = true;
         return err;
