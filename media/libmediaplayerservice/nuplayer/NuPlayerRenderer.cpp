@@ -2092,7 +2092,12 @@ void NuPlayer::Renderer::startAudioOffloadPauseTimeout() {
                                            mAudioOffloadPauseTimeoutGeneration);
         sp<AMessage> msg = new AMessage(kWhatAudioOffloadPauseTimeout, this);
         msg->setInt32("drainGeneration", mAudioOffloadPauseTimeoutGeneration);
-        msg->post(pauseTimeOutDuration*1000000);
+        // If offload duration is less than 65secs, keep pause timeout to 10secs
+        if (mCurrentOffloadInfo.duration_us < 65000000) {
+            msg->post(kOffloadPauseMaxUs);
+        } else {
+            msg->post(pauseTimeOutDuration*1000000);
+        }
     }
 }
 
