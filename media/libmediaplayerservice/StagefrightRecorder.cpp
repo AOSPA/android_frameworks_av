@@ -1915,8 +1915,11 @@ status_t StagefrightRecorder::setupMediaSource(
     ATRACE_CALL();
     if (mVideoSource == VIDEO_SOURCE_DEFAULT
             || mVideoSource == VIDEO_SOURCE_CAMERA) {
+        nsecs_t setupStartedTime = systemTime(SYSTEM_TIME_REALTIME);
         sp<CameraSource> cameraSource;
         status_t err = setupCameraSource(&cameraSource);
+        nsecs_t setupFinishedTime = systemTime(SYSTEM_TIME_REALTIME);
+        ALOGI("Time taken by setupMediaSource : %" PRId64 "ms" , (setupFinishedTime - setupStartedTime)/1000000);
         if (err != OK) {
             return err;
         }
