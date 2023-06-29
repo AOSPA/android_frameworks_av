@@ -117,6 +117,8 @@
 #include "android/media/BnAudioRecord.h"
 #include "android/media/BnEffect.h"
 
+#include "Client.h"
+
 // include AudioFlinger component interfaces
 #include "IAfEffect.h"
 
@@ -146,6 +148,7 @@ using android::content::AttributionSourceState;
 class AudioFlinger : public AudioFlingerServerAdapter::Delegate
 {
     friend class sp<AudioFlinger>;
+    friend class Client; // removeClient_l();
 public:
     static void instantiate() ANDROID_API;
 
@@ -497,26 +500,6 @@ public:
 private:
     void dumpToThreadLog_l(const sp<ThreadBase> &thread);
 
-public:
-    // TODO(b/288339104) Move to separate file
-    // --- Client ---
-    class Client : public RefBase {
-      public:
-        Client(const sp<AudioFlinger>& audioFlinger, pid_t pid);
-        virtual             ~Client();
-        AllocatorFactory::ClientAllocator& allocator();
-        pid_t               pid() const { return mPid; }
-        sp<AudioFlinger>    audioFlinger() const { return mAudioFlinger; }
-
-    private:
-        DISALLOW_COPY_AND_ASSIGN(Client);
-
-        const sp<AudioFlinger>    mAudioFlinger;
-        const pid_t         mPid;
-        AllocatorFactory::ClientAllocator mClientAllocator;
-    };
-private:
-
     // --- Notification Client ---
     class NotificationClient : public IBinder::DeathRecipient {
     public:
@@ -791,6 +774,9 @@ private:
               status_t moveEffectChain_l(audio_session_t sessionId,
                                      PlaybackThread *srcThread,
                                      PlaybackThread *dstThread);
+              status_t moveEffectChain_l(audio_session_t sessionId,
+                                         RecordThread *srcThread,
+                                         RecordThread *dstThread);
 
               status_t moveAuxEffectToIo(int EffectId,
                                          const sp<PlaybackThread>& dstThread,
@@ -839,6 +825,9 @@ public:
                 bool updateOrphanEffectChains(const sp<IAfEffectModule>& effect);
 private:
                 std::vector< sp<IAfEffectModule> > purgeStaleEffects_l();
+
+                std::vector< sp<IAfEffectModule> > purgeOrphanEffectChains_l();
+                bool updateOrphanEffectChains_l(const sp<IAfEffectModule>& effect);
 
                 void broadcastParametersToRecordThreads_l(const String8& keyValuePairs);
                 void updateOutDevicesForRecordThreads_l(const DeviceDescriptorBaseVector& devices);

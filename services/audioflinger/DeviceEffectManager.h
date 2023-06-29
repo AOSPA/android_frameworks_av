@@ -32,7 +32,7 @@ public:
 
     sp<IAfEffectHandle> createEffect_l(effect_descriptor_t *descriptor,
                 const AudioDeviceTypeAddr& device,
-                const sp<AudioFlinger::Client>& client,
+                const sp<Client>& client,
                 const sp<media::IEffectClient>& effectClient,
                 const std::map<audio_patch_handle_t, PatchPanel::Patch>& patches,
                 int *enabled,
@@ -62,6 +62,9 @@ public:
     void onCreateAudioPatch(audio_patch_handle_t handle,
                             const PatchPanel::Patch& patch) override;
     void onReleaseAudioPatch(audio_patch_handle_t handle) override;
+    void onUpdateAudioPatch(audio_patch_handle_t oldHandle,
+                            audio_patch_handle_t newHandle,
+                            const PatchPanel::Patch& patch) override;
 
 private:
     status_t checkEffectCompatibility(const effect_descriptor_t *desc);

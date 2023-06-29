@@ -290,7 +290,7 @@ class EffectHandle: public IAfEffectHandle, public android::media::BnEffect {
 public:
 
     EffectHandle(const sp<IAfEffectBase>& effect,
-            const sp<AudioFlinger::Client>& client,
+            const sp<Client>& client,
             const sp<media::IEffectClient>& effectClient,
             int32_t priority, bool notifyFramesProcessed);
     ~EffectHandle() override;
@@ -311,8 +311,7 @@ public:
     android::binder::Status getConfig(media::EffectConfig* _config,
                                       int32_t* _aidl_return) final;
 
-    // TODO(b/288339104) type
-    sp<RefBase /* AudioFlinger::Client */> client() const final { return mClient; }
+    const sp<Client>& client() const final { return mClient; }
 
     sp<android::media::IEffect> asIEffect() final {
         return sp<android::media::IEffect>::fromExisting(this);
@@ -357,7 +356,7 @@ private:
     Mutex mLock;                             // protects IEffect method calls
     const wp<IAfEffectBase> mEffect;               // pointer to controlled EffectModule
     const sp<media::IEffectClient> mEffectClient;  // callback interface for client notifications
-    /*const*/ sp<AudioFlinger::Client> mClient;    // client for shared memory allocation, see
+    /*const*/ sp<Client> mClient;            // client for shared memory allocation, see
                                              //   disconnect()
     sp<IMemory> mCblkMemory;                 // shared memory for control block
     effect_param_cblk_t* mCblk;              // control block for deferred parameter setting via
@@ -680,10 +679,19 @@ public:
         return onCreatePatch(patchHandle,
                 *reinterpret_cast<const AudioFlinger::PatchPanel::Patch *>(patch));
     }
+    // TODO(b/288339104) type
+    status_t onUpdatePatch(audio_patch_handle_t oldPatchHandle, audio_patch_handle_t newPatchHandle,
+            /* const PatchPanel::Patch& */ const void * patch) final {
+        return onUpdatePatch(oldPatchHandle, newPatchHandle,
+                *reinterpret_cast<const AudioFlinger::PatchPanel::Patch *>(patch));
+    }
 
     status_t init(const std::map<audio_patch_handle_t, AudioFlinger::PatchPanel::Patch>& patches);
     status_t onCreatePatch(
             audio_patch_handle_t patchHandle, const AudioFlinger::PatchPanel::Patch& patch);
+
+    status_t onUpdatePatch(audio_patch_handle_t oldPatchHandle, audio_patch_handle_t newPatchHandle,
+            const AudioFlinger::PatchPanel::Patch& patch);
 
     void onReleasePatch(audio_patch_handle_t patchHandle) final;
 
@@ -697,6 +705,11 @@ public:
     uint32_t sampleRate() const final;
     audio_channel_mask_t channelMask() const final;
     uint32_t channelCount() const final;
+
+    status_t command(int32_t cmdCode,
+                     const std::vector<uint8_t>& cmdData,
+                     int32_t maxReplySize,
+                     std::vector<uint8_t>* reply) final;
 
     void dump2(int fd, int spaces) const final;
 

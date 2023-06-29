@@ -109,6 +109,11 @@ public:
     virtual sp<IAfEffectModule> asEffectModule() = 0;
     virtual sp<IAfDeviceEffectProxy> asDeviceEffectProxy() = 0;
 
+    virtual status_t command(int32_t cmdCode,
+            const std::vector<uint8_t>& cmdData,
+            int32_t maxReplySize,
+            std::vector<uint8_t>* reply) = 0;
+
     virtual void dump(int fd, const Vector<String16>& args) const = 0;
 
 private:
@@ -116,11 +121,6 @@ private:
     virtual status_t setEnabled_l(bool enabled) = 0;
     virtual void setSuspended(bool suspended) = 0;
     virtual bool suspended() const = 0;
-
-    virtual status_t command(int32_t cmdCode,
-            const std::vector<uint8_t>& cmdData,
-            int32_t maxReplySize,
-            std::vector<uint8_t>* reply) = 0;
 
     virtual ssize_t disconnectHandle(IAfEffectHandle *handle, bool unpinIfLast) = 0;
     virtual ssize_t removeHandle_l(IAfEffectHandle *handle) = 0;
@@ -307,7 +307,7 @@ class IAfEffectHandle : public virtual RefBase {
 public:
     static sp<IAfEffectHandle> create(
             const sp<IAfEffectBase>& effect,
-            const sp<RefBase /*AudioFlinger::Client */>& client,  // TODO(b/288339104) type
+            const sp<Client>& client,
             const sp<media::IEffectClient>& effectClient,
             int32_t priority, bool notifyFramesProcessed);
 
@@ -316,8 +316,7 @@ public:
     virtual int id() const = 0;
     virtual wp<IAfEffectBase> effect() const = 0;
     virtual sp<android::media::IEffect> asIEffect() = 0;
-    // TODO(b/288339104) type
-    virtual sp<RefBase /* AudioFlinger::Client */> client() const = 0;
+    virtual const sp<Client>& client() const = 0;
 
 private:
     virtual void setControl(bool hasControl, bool signal, bool enabled) = 0;
@@ -348,6 +347,9 @@ public:
 
     virtual status_t onCreatePatch(
             audio_patch_handle_t patchHandle,
+            /* const PatchPanel::Patch& */ const void * patch) = 0;
+    virtual status_t onUpdatePatch(audio_patch_handle_t oldPatchHandle,
+            audio_patch_handle_t newPatchHandle,
             /* const PatchPanel::Patch& */ const void * patch) = 0;
     virtual void onReleasePatch(audio_patch_handle_t patchHandle) = 0;
 

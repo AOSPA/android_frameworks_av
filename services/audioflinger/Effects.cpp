@@ -1679,17 +1679,16 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
 /* static */
 sp<IAfEffectHandle> IAfEffectHandle::create(
         const sp<IAfEffectBase>& effect,
-        const sp<RefBase /*AudioFlinger::Client */>& client, // TODO(b/288339104) update type
+        const sp<Client>& client,
         const sp<media::IEffectClient>& effectClient,
         int32_t priority, bool notifyFramesProcessed)
 {
     return sp<EffectHandle>::make(
-            effect, sp<AudioFlinger::Client>::cast(client),
-            effectClient, priority, notifyFramesProcessed);
+            effect, client, effectClient, priority, notifyFramesProcessed);
 }
 
 EffectHandle::EffectHandle(const sp<IAfEffectBase>& effect,
-                                         const sp<AudioFlinger::Client>& client,
+                                         const sp<Client>& client,
                                          const sp<media::IEffectClient>& effectClient,
                                          int32_t priority, bool notifyFramesProcessed)
     : BnEffect(),
@@ -3311,6 +3310,23 @@ status_t DeviceEffectProxy::init(
     return status;
 }
 
+status_t DeviceEffectProxy::onUpdatePatch(audio_patch_handle_t oldPatchHandle,
+        audio_patch_handle_t newPatchHandle,
+        const AudioFlinger::PatchPanel::Patch& patch __unused) {
+    status_t status = NAME_NOT_FOUND;
+    ALOGV("%s", __func__);
+    Mutex::Autolock _l(mProxyLock);
+    if (mEffectHandles.find(oldPatchHandle) != mEffectHandles.end()) {
+        ALOGV("%s replacing effect from handle %d to handle %d", __func__, oldPatchHandle,
+                newPatchHandle);
+        sp<IAfEffectHandle> effect = mEffectHandles.at(oldPatchHandle);
+        mEffectHandles.erase(oldPatchHandle);
+        mEffectHandles.emplace(newPatchHandle, effect);
+        status = NO_ERROR;
+    }
+    return status;
+}
+
 status_t DeviceEffectProxy::onCreatePatch(
         audio_patch_handle_t patchHandle, const AudioFlinger::PatchPanel::Patch& patch) {
     status_t status = NAME_NOT_FOUND;
@@ -3453,6 +3469,23 @@ status_t DeviceEffectProxy::removeEffectFromHal(
         return NO_INIT;
     }
     return mManagerCallback->removeEffectFromHal(&mDevicePort, effect);
+}
+
+status_t DeviceEffectProxy::command(
+        int32_t cmdCode, const std::vector<uint8_t>& cmdData, int32_t maxReplySize,
+        std::vector<uint8_t>* reply) {
+    Mutex::Autolock _l(mProxyLock);
+    status_t status = EffectBase::command(cmdCode, cmdData, maxReplySize, reply);
+    if (status == NO_ERROR) {
+        for (auto& handle : mEffectHandles) {
+            sp<IAfEffectBase> effect = handle.second->effect().promote();
+            if (effect != nullptr) {
+                status = effect->command(cmdCode, cmdData, maxReplySize, reply);
+            }
+        }
+    }
+    ALOGV("%s status %d", __func__, status);
+    return status;
 }
 
 bool DeviceEffectProxy::isOutput() const {
