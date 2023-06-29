@@ -67,7 +67,7 @@ public:
                                 pid_t creatorPid,
                                 uid_t uid,
                                 bool isOut,
-                                alloc_type alloc = ALLOC_CBLK,
+                                const alloc_type alloc = ALLOC_CBLK,
                                 track_type type = TYPE_DEFAULT,
                                 audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE,
                                 std::string metricsId = {});
@@ -84,7 +84,7 @@ public:
             pid_t       creatorPid() const { return mCreatorPid; }
 
             audio_port_handle_t portId() const { return mPortId; }
-    virtual status_t    setSyncEvent(const sp<SyncEvent>& event);
+    virtual status_t    setSyncEvent(const sp<audioflinger::SyncEvent>& event);
 
             sp<IMemory> getBuffers() const { return mBufferMemory; }
             void*       buffer() const { return mBuffer; }
@@ -352,6 +352,7 @@ protected:
                                     // this could be a track type if needed later
 
     const wp<ThreadBase> mThread;
+    const alloc_type     mAllocType;
     /*const*/ sp<Client> mClient;   // see explanation at ~TrackBase() why not const
     sp<IMemory>         mCblkMemory;
     audio_track_cblk_t* mCblk;
@@ -375,7 +376,7 @@ protected:
 
     const audio_session_t mSessionId;
     uid_t               mUid;
-    Vector < sp<SyncEvent> >mSyncEvents;
+    std::list<sp<audioflinger::SyncEvent>> mSyncEvents;
     const bool          mIsOut;
     sp<ServerProxy>     mServerProxy;
     const int           mId;

@@ -1,0 +1,161 @@
+package {
+    // See: http://go/android-license-faq
+    // A large-scale-change added 'default_applicable_licenses' to import
+    // all of the 'license_kinds' from "frameworks_base_license"
+    // to get the below license kinds:
+    //   SPDX-license-identifier-Apache-2.0
+    default_applicable_licenses: ["frameworks_av_services_audioflinger_license"],
+}
+
+fastpath_tidy_errors = [
+    // https://clang.llvm.org/extra/clang-tidy/checks/list.html
+    // For many categories, the checks are too many to specify individually.
+    // Feel free to disable as needed - as warnings are generally ignored,
+    // we treat warnings as errors.
+    "android-*",
+    "bugprone-*",
+    "cert-*",
+    "clang-analyzer-security*",
+    "google-*",
+    "misc-*",
+    //"modernize-*",  // explicitly list the modernize as they can be subjective.
+    "modernize-avoid-bind",
+    //"modernize-avoid-c-arrays", // std::array<> can be verbose
+    "modernize-concat-nested-namespaces",
+    //"modernize-deprecated-headers", // C headers still ok even if there is C++ equivalent.
+    "modernize-deprecated-ios-base-aliases",
+    "modernize-loop-convert",
+    "modernize-make-shared",
+    "modernize-make-unique",
+    // "modernize-pass-by-value",
+    "modernize-raw-string-literal",
+    "modernize-redundant-void-arg",
+    "modernize-replace-auto-ptr",
+    "modernize-replace-random-shuffle",
+    "modernize-return-braced-init-list",
+    "modernize-shrink-to-fit",
+    "modernize-unary-static-assert",
+    // "modernize-use-auto",  // found in MediaMetricsService.h, debatable - auto can obscure type
+    "modernize-use-bool-literals",
+    "modernize-use-default-member-init",
+    "modernize-use-emplace",
+    "modernize-use-equals-default",
+    "modernize-use-equals-delete",
+    // "modernize-use-nodiscard",
+    "modernize-use-noexcept",
+    "modernize-use-nullptr",
+    "modernize-use-override",
+    //"modernize-use-trailing-return-type", // not necessarily more readable
+    "modernize-use-transparent-functors",
+    "modernize-use-uncaught-exceptions",
+    "modernize-use-using",
+    "performance-*",
+
+    // Remove some pedantic stylistic requirements.
+    "-google-readability-casting", // C++ casts not always necessary and may be verbose
+    "-google-readability-todo",    // do not require TODO(info)
+
+    "-bugprone-unhandled-self-assignment",
+    "-bugprone-suspicious-string-compare",
+    "-cert-oop54-cpp", // found in TransactionLog.h
+    "-bugprone-narrowing-conversions", // b/182410845
+
+    // TODO(b/275642749) Reenable these warnings
+    "-bugprone-assignment-in-if-condition",
+    "-bugprone-forward-declaration-namespace",
+    "-bugprone-parent-virtual-call",
+    "-cert-dcl59-cpp",
+    "-cert-err34-c",
+    "-google-runtime-int",
+    "-misc-non-private-member-variables-in-classes",
+    "-modernize-concat-nested-namespaces",
+    "-modernize-loop-convert",
+    "-modernize-use-default-member-init",
+    "-performance-no-int-to-ptr",
+]
+
+// Eventually use common tidy defaults
+cc_defaults {
+    name: "fastpath_flags_defaults",
+    // https://clang.llvm.org/docs/UsersManual.html#command-line-options
+    // https://clang.llvm.org/docs/DiagnosticsReference.html
+    cflags: [
+        "-Wall",
+        "-Wdeprecated",
+        "-Werror",
+        "-Werror=implicit-fallthrough",
+        "-Werror=sometimes-uninitialized",
+        "-Werror=conditional-uninitialized",
+        "-Wextra",
+
+        // suppress some warning chatter.
+        "-Wno-deprecated-copy-with-dtor",
+        "-Wno-deprecated-copy-with-user-provided-dtor",
+
+        "-Wredundant-decls",
+        "-Wshadow",
+        "-Wstrict-aliasing",
+        "-fstrict-aliasing",
+        "-Wthread-safety",
+        //"-Wthread-safety-negative", // experimental - looks broken in R.
+        "-Wunreachable-code",
+        "-Wunreachable-code-break",
+        "-Wunreachable-code-return",
+        "-Wunused",
+        "-Wused-but-marked-unused",
+        "-D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS",
+    ],
+    // https://clang.llvm.org/extra/clang-tidy/
+    tidy: true,
+    tidy_checks: fastpath_tidy_errors,
+    tidy_checks_as_errors: fastpath_tidy_errors,
+    tidy_flags: [
+      "-format-style=file",
+    ],
+}
+
+cc_library_shared {
+    name: "libaudioflinger_fastpath",
+
+    defaults: [
+        "fastpath_flags_defaults",
+    ],
+
+    srcs: [
+        "FastCapture.cpp",
+        "FastCaptureDumpState.cpp",
+        "FastCaptureState.cpp",
+        "FastMixer.cpp",
+        "FastMixerDumpState.cpp",
+        "FastMixerState.cpp",
+        "FastThread.cpp",
+        "FastThreadDumpState.cpp",
+        "FastThreadState.cpp",
+        "StateQueue.cpp",
+    ],
+
+    include_dirs: [
+        "frameworks/av/services/audioflinger", // for Configuration
+    ],
+
+    shared_libs: [
+        "libaudioflinger_utils", // NBAIO_Tee
+        "libaudioprocessing",
+        "libaudioutils",
+        "libcutils",
+        "liblog",
+        "libnbaio",
+        "libnblog", // legacy NBLog that can be removed.
+        "libutils",
+    ],
+
+    header_libs: [
+        "libaudiohal_headers",
+        "libmedia_headers",
+    ],
+
+    sanitize: {
+        integer_overflow: true,
+    },
+
+}

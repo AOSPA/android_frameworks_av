@@ -520,8 +520,8 @@ public:
                                                  audio_session_t sessionId,
                                                  bool threadLocked);
 
-                virtual status_t    setSyncEvent(const sp<SyncEvent>& event) = 0;
-                virtual bool        isValidSyncEvent(const sp<SyncEvent>& event) const = 0;
+                virtual status_t setSyncEvent(const sp<audioflinger::SyncEvent>& event) = 0;
+                virtual bool isValidSyncEvent(const sp<audioflinger::SyncEvent>& event) const = 0;
 
                 // Return a reference to a per-thread heap which can be used to allocate IMemory
                 // objects that will be read-only to client processes, read/write to mediaserver,
@@ -1022,8 +1022,8 @@ public:
                 status_t    getRenderPosition(uint32_t *halFrames, uint32_t *dspFrames);
                 // Consider also removing and passing an explicit mMainBuffer initialization
                 // parameter to AF::PlaybackThread::Track::Track().
-                effect_buffer_t *sinkBuffer() const {
-                    return reinterpret_cast<effect_buffer_t *>(mSinkBuffer); };
+                float *sinkBuffer() const {
+                    return reinterpret_cast<float *>(mSinkBuffer); };
 
     virtual     void detachAuxEffect_l(int effectId);
                 status_t attachAuxEffect(const sp<AudioFlinger::PlaybackThread::Track>& track,
@@ -1039,8 +1039,8 @@ public:
                 virtual product_strategy_t getStrategyForSession_l(audio_session_t sessionId);
 
 
-                virtual status_t setSyncEvent(const sp<SyncEvent>& event);
-                virtual bool     isValidSyncEvent(const sp<SyncEvent>& event) const;
+                status_t setSyncEvent(const sp<audioflinger::SyncEvent>& event) override;
+                bool     isValidSyncEvent(const sp<audioflinger::SyncEvent>& event) const override;
 
                 // called with AudioFlinger lock held
                         bool     invalidateTracks_l(audio_stream_type_t streamType);
@@ -2004,10 +2004,10 @@ public:
             // FIXME replace by Set [and implement Bag/Multiset for other uses].
             KeyedVector<audio_session_t, bool> sessionIds() const;
 
-    virtual status_t setSyncEvent(const sp<SyncEvent>& event);
-    virtual bool     isValidSyncEvent(const sp<SyncEvent>& event) const;
+            status_t setSyncEvent(const sp<audioflinger::SyncEvent>& event) override;
+            bool     isValidSyncEvent(const sp<audioflinger::SyncEvent>& event) const override;
 
-    static void syncStartEventCallback(const wp<SyncEvent>& event);
+    static void syncStartEventCallback(const wp<audioflinger::SyncEvent>& event);
 
     virtual size_t      frameCount() const { return mFrameCount; }
             bool        hasFastCapture() const { return mFastCapture != 0; }
@@ -2211,8 +2211,8 @@ class MmapThread : public ThreadBase
                                 // Note: using mActiveTracks as no mTracks here.
                                 return ThreadBase::hasAudioSession_l(sessionId, mActiveTracks);
                             }
-    virtual     status_t    setSyncEvent(const sp<SyncEvent>& event);
-    virtual     bool        isValidSyncEvent(const sp<SyncEvent>& event) const;
+    virtual     status_t    setSyncEvent(const sp<audioflinger::SyncEvent>& event);
+    virtual     bool        isValidSyncEvent(const sp<audioflinger::SyncEvent>& event) const;
 
     virtual     void        checkSilentMode_l() {}
     virtual     void        processVolume_l() {}

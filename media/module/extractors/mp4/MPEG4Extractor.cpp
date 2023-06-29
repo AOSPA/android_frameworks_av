@@ -26,7 +26,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <log/log.h>
 #include <utils/Log.h>
 
 #include "AC4Parser.h"
@@ -2008,7 +2007,7 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             uint8_t mhac_header[mhac_header_size];
             off64_t data_offset = *offset;
 
-            if (chunk_size < sizeof(mhac_header)) {
+            if (mLastTrack == NULL || chunk_size < sizeof(mhac_header)) {
                 return ERROR_MALFORMED;
             }
 
