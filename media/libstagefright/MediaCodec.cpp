@@ -30,6 +30,7 @@
 
 #include "include/SoftwareRenderer.h"
 
+#include <android/api-level.h>
 #include <android/binder_manager.h>
 #include <android/content/pm/IPackageManagerNative.h>
 #include <android/hardware/cas/native/1.0/IDescrambler.h>
@@ -81,6 +82,7 @@
 #include <media/stagefright/SurfaceUtils.h>
 #include <nativeloader/dlext_namespaces.h>
 #include <private/android_filesystem_config.h>
+#include <server_configurable_flags/get_flags.h>
 #include <utils/Singleton.h>
 #include <stagefright/AVExtensions.h>
 
@@ -557,6 +559,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientCreated() {
                                 .uid = static_cast<int32_t>(mUid),
                                 .id = getId(mClient),
                                 .name = mCodecName};
+    if (mService == NULL) {
+        return;
+    }
     mService->notifyClientCreated(clientInfo);
 }
 
@@ -566,6 +571,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientStarted(
     clientConfig.clientInfo.uid = static_cast<int32_t>(mUid);
     clientConfig.clientInfo.id = getId(mClient);
     clientConfig.clientInfo.name = mCodecName;
+    if (mService == NULL) {
+        return;
+    }
     mService->notifyClientStarted(clientConfig);
 }
 
@@ -575,6 +583,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientStopped(
     clientConfig.clientInfo.uid = static_cast<int32_t>(mUid);
     clientConfig.clientInfo.id = getId(mClient);
     clientConfig.clientInfo.name = mCodecName;
+    if (mService == NULL) {
+        return;
+    }
     mService->notifyClientStopped(clientConfig);
 }
 
@@ -584,6 +595,9 @@ void MediaCodec::ResourceManagerServiceProxy::notifyClientConfigChanged(
     clientConfig.clientInfo.uid = static_cast<int32_t>(mUid);
     clientConfig.clientInfo.id = getId(mClient);
     clientConfig.clientInfo.name = mCodecName;
+    if (mService == NULL) {
+        return;
+    }
     mService->notifyClientConfigChanged(clientConfig);
 }
 
@@ -1024,6 +1038,9 @@ MediaCodec::MediaCodec(
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
       mIsSurfaceToDisplay(false),
+      mVideoRenderQualityTracker(
+              VideoRenderQualityTracker::Configuration::getFromServerConfigurableFlags(
+                      server_configurable_flags::GetServerConfigurableFlag)),
       mLatencyUnknown(0),
       mBytesEncoded(0),
       mEarliestEncodedPtsUs(INT64_MAX),
@@ -6097,7 +6114,7 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
             ALOGI("rendring output error %d", err);
         }
     } else {
-        if (mIsSurfaceToDisplay) {
+        if (mIsSurfaceToDisplay && buffer->size() != 0) {
             int64_t mediaTimeUs = INT64_MIN;
             if (buffer->meta()->findInt64("timeUs", &mediaTimeUs)) {
                 mVideoRenderQualityTracker.onFrameSkipped(mediaTimeUs);

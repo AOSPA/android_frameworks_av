@@ -323,6 +323,9 @@ private:
         std::unique_ptr<OutputBuffers> buffers;
         size_t numSlots;
         uint32_t outputDelay;
+        // true iff the underlying block pool is bounded --- for example,
+        // a BufferQueue-based block pool would be bounded by the BufferQueue.
+        bool bounded;
     };
     Mutexed<Output> mOutput;
     Mutexed<std::list<std::unique_ptr<C2Work>>> mFlushedConfigs;
@@ -343,6 +346,7 @@ private:
         std::map<uint64_t, int> rotation;
     };
     Mutexed<OutputSurface> mOutputSurface;
+    int mRenderingDepth;
 
     struct BlockPools {
         C2Allocator::id_t inputAllocatorId;
