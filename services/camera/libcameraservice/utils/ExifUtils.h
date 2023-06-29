@@ -194,6 +194,17 @@ public:
     // Gets length of APP1 segment. This method must be called only after calling
     // GenerateAPP1().
     virtual unsigned int getApp1Length() = 0;
+
+    //MIUI ADD: Updates part of the exif info of the heif with the exif info of the jpeg.
+    virtual bool getIsoSpeedRatings(uint16_t *isoSpeedRatings) = 0;
+    virtual bool setIsoSpeedRatings(uint16_t isoSpeedRatings) = 0;
+
+    virtual bool getFocalLength35mmFilm(uint16_t *focalLength35mmFilm) = 0;
+    virtual bool setFocalLength35mmFilm(uint16_t focalLength35mmFilm) = 0;
+
+    virtual bool getImgColorSpace(uint16_t *colorSpace) = 0;
+    virtual bool setImgColorSpace(uint16_t colorSpace) = 0;
+    //MIUI ADD: end
 };
 
 } // namespace camera3

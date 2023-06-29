@@ -185,6 +185,17 @@ public:
     // GenerateAPP1().
     virtual unsigned int getApp1Length();
 
+    //MIUI ADD: Updates part of the exif info of the heif with the exif info of the jpeg.
+    virtual bool getIsoSpeedRatings(uint16_t *isoSpeedRatings);
+    virtual bool setIsoSpeedRatings(uint16_t isoSpeedRatings);
+
+    virtual bool getFocalLength35mmFilm(uint16_t *focalLength35mmFilm);
+    virtual bool setFocalLength35mmFilm(uint16_t focalLength35mmFilm);
+
+    virtual bool getImgColorSpace(uint16_t *colorSpace);
+    virtual bool setImgColorSpace(uint16_t colorSpace);
+    //MIUI ADD: end
+
   protected:
     // sets the version of this standard supported.
     // Returns false if memory allocation fails.
@@ -731,6 +742,53 @@ unsigned int ExifUtilsImpl::getApp1Length() {
     return app1_length_;
 }
 
+//MIUI ADD: Updates part of the exif info of the heif with the exif info of the jpeg.
+bool ExifUtilsImpl::getIsoSpeedRatings(uint16_t *isoSpeedRatings){
+    ExifEntry *iso = exif_content_get_entry(exif_data_->ifd[EXIF_IFD_EXIF], EXIF_TAG_ISO_SPEED_RATINGS);
+    if(iso == nullptr || (iso->size != sizeof(ExifShort))){
+        ALOGE("isoSpeedRating EXIF entry invalid!");
+        return false;
+    }
+    *isoSpeedRatings = exif_get_short(iso->data, exif_data_get_byte_order(exif_data_));
+    return true;
+}
+
+bool ExifUtilsImpl::setIsoSpeedRatings(uint16_t isoSpeedRatings){
+    SET_SHORT(EXIF_IFD_EXIF, EXIF_TAG_ISO_SPEED_RATINGS, isoSpeedRatings);
+    return true;
+}
+
+bool ExifUtilsImpl::getFocalLength35mmFilm(uint16_t *focalLength35mmFilm){
+    ExifEntry *focalLenghth35mm = exif_content_get_entry(exif_data_->ifd[EXIF_IFD_EXIF], EXIF_TAG_FOCAL_LENGTH_IN_35MM_FILM);
+    if(focalLenghth35mm == nullptr || (focalLenghth35mm->size != sizeof(ExifShort))){
+        ALOGE("focalLenghth35mm EXIF entry invalid!");
+        return false;
+    }
+    *focalLength35mmFilm = exif_get_short(focalLenghth35mm->data, exif_data_get_byte_order(exif_data_));
+    return true;
+}
+
+bool ExifUtilsImpl::setFocalLength35mmFilm(uint16_t focalLength35mmFilm){
+    SET_SHORT(EXIF_IFD_EXIF, EXIF_TAG_FOCAL_LENGTH_IN_35MM_FILM, focalLength35mmFilm);
+    return true;
+}
+
+bool ExifUtilsImpl::getImgColorSpace(uint16_t *colorSpace){
+    ExifEntry *entryColorSpace = exif_content_get_entry(exif_data_->ifd[EXIF_IFD_EXIF], EXIF_TAG_COLOR_SPACE);
+    if(entryColorSpace == nullptr || (entryColorSpace->size != sizeof(ExifShort))){
+        ALOGE("ColorSpace EXIF entry invalid!");
+        return false;
+    }
+    *colorSpace = exif_get_short(entryColorSpace->data, exif_data_get_byte_order(exif_data_));
+    return true;
+}
+
+bool ExifUtilsImpl::setImgColorSpace(uint16_t colorSpace){
+    SET_SHORT(EXIF_IFD_EXIF, EXIF_TAG_COLOR_SPACE, colorSpace);
+    return true;
+}
+//MIUI ADD: end
+
 bool ExifUtilsImpl::setExifVersion(const std::string& exif_version) {
     SET_STRING(EXIF_IFD_EXIF, EXIF_TAG_EXIF_VERSION, EXIF_FORMAT_UNDEFINED, exif_version);
     return true;
@@ -745,7 +803,9 @@ void ExifUtilsImpl::reset() {
          * allocated by JpegCompressor. sets |exif_data_->data| to nullptr to
          * prevent exif_data_unref() destroy it incorrectly.
          */
+#ifndef CAMERA_PACKAGE_NAME
         exif_data_->data = nullptr;
+#endif
         exif_data_->size = 0;
         exif_data_unref(exif_data_);
         exif_data_ = nullptr;
