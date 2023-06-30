@@ -41,7 +41,7 @@ void AudioFlinger::DeviceEffectManager::onCreateAudioPatch(audio_patch_handle_t 
             patch.mAudioPatch.num_sinks > 0 ? patch.mAudioPatch.sinks[0].ext.device.type : 0);
     Mutex::Autolock _l(mLock);
     for (auto& effect : mDeviceEffects) {
-        status_t status = effect.second->onCreatePatch(handle, patch);
+        status_t status = effect.second->onCreatePatch(handle, &patch); // TODO(b/288339104) void*
         ALOGV("%s Effect onCreatePatch status %d", __func__, status);
         ALOGW_IF(status == BAD_VALUE, "%s onCreatePatch error %d", __func__, status);
     }
@@ -55,19 +55,32 @@ void AudioFlinger::DeviceEffectManager::onReleaseAudioPatch(audio_patch_handle_t
     }
 }
 
+void AudioFlinger::DeviceEffectManager::onUpdateAudioPatch(audio_patch_handle_t oldHandle,
+        audio_patch_handle_t newHandle, const PatchPanel::Patch& patch) {
+    ALOGV("%s oldhandle %d newHandle %d mHalHandle %d device sink %08x",
+            __func__, oldHandle, newHandle, patch.mHalHandle,
+            patch.mAudioPatch.num_sinks > 0 ? patch.mAudioPatch.sinks[0].ext.device.type : 0);
+    Mutex::Autolock _l(mLock);
+    for (auto& effect : mDeviceEffects) {
+        // TODO(b/288339104) void*
+        status_t status = effect.second->onUpdatePatch(oldHandle, newHandle, &patch);
+        ALOGW_IF(status != NO_ERROR, "%s onUpdatePatch error %d", __func__, status);
+    }
+}
+
 // DeviceEffectManager::createEffect_l() must be called with AudioFlinger::mLock held
-sp<AudioFlinger::EffectHandle> AudioFlinger::DeviceEffectManager::createEffect_l(
+sp<IAfEffectHandle> AudioFlinger::DeviceEffectManager::createEffect_l(
         effect_descriptor_t *descriptor,
         const AudioDeviceTypeAddr& device,
-        const sp<AudioFlinger::Client>& client,
+        const sp<Client>& client,
         const sp<IEffectClient>& effectClient,
         const std::map<audio_patch_handle_t, PatchPanel::Patch>& patches,
         int *enabled,
         status_t *status,
         bool probe,
         bool notifyFramesProcessed) {
-    sp<DeviceEffectProxy> effect;
-    sp<EffectHandle> handle;
+    sp<IAfDeviceEffectProxy> effect;
+    sp<IAfEffectHandle> handle;
     status_t lStatus;
 
     lStatus = checkEffectCompatibility(descriptor);
@@ -82,18 +95,18 @@ sp<AudioFlinger::EffectHandle> AudioFlinger::DeviceEffectManager::createEffect_l
         if (iter != mDeviceEffects.end()) {
             effect = iter->second;
         } else {
-            effect = new DeviceEffectProxy(device, mMyCallback,
+            effect = IAfDeviceEffectProxy::create(device, mMyCallback,
                     descriptor, mAudioFlinger.nextUniqueId(AUDIO_UNIQUE_ID_USE_EFFECT),
                     notifyFramesProcessed);
         }
         // create effect handle and connect it to effect module
-        handle = new EffectHandle(effect, client, effectClient, 0 /*priority*/,
-                                  notifyFramesProcessed);
+        handle = IAfEffectHandle::create(
+                effect, client, effectClient, 0 /*priority*/, notifyFramesProcessed);
         lStatus = handle->initCheck();
         if (lStatus == NO_ERROR) {
             lStatus = effect->addHandle(handle.get());
             if (lStatus == NO_ERROR) {
-                lStatus = effect->init(patches);
+                lStatus = effect->init(&patches); // TODO(b/288339104) void*
                 if (lStatus == NAME_NOT_FOUND) {
                     lStatus = NO_ERROR;
                 }
@@ -165,7 +178,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
         outStr.appendFormat("%*sEffect for device %s address %s:\n", 2, "",
                 ::android::toString(iter.first.mType).c_str(), iter.first.getAddress());
         write(fd, outStr.string(), outStr.size());
-        iter.second->dump(fd, 4);
+        iter.second->dump2(fd, 4);
     }
 
     if (locked) {
@@ -174,7 +187,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
 }
 
 
-size_t AudioFlinger::DeviceEffectManager::removeEffect(const sp<DeviceEffectProxy>& effect)
+size_t AudioFlinger::DeviceEffectManager::removeEffect(const sp<IAfDeviceEffectProxy>& effect)
 {
     Mutex::Autolock _l(mLock);
     mDeviceEffects.erase(effect->device());
@@ -182,13 +195,13 @@ size_t AudioFlinger::DeviceEffectManager::removeEffect(const sp<DeviceEffectProx
 }
 
 bool AudioFlinger::DeviceEffectManagerCallback::disconnectEffectHandle(
-        EffectHandle *handle, bool unpinIfLast) {
-    sp<EffectBase> effectBase = handle->effect().promote();
+        IAfEffectHandle *handle, bool unpinIfLast) {
+    sp<IAfEffectBase> effectBase = handle->effect().promote();
     if (effectBase == nullptr) {
         return false;
     }
 
-    sp<DeviceEffectProxy> effect = effectBase->asDeviceEffectProxy();
+    sp<IAfDeviceEffectProxy> effect = effectBase->asDeviceEffectProxy();
     if (effect == nullptr) {
         return false;
     }
