@@ -829,8 +829,6 @@ protected:
                         return wakeLockUids; // moved by underlying SharedBuffer
                     }
 
-                    std::map<uid_t, std::pair<ssize_t /* previous */, ssize_t /* current */>>
-                                        mBatteryCounter;
                     SortedVector<sp<T>> mActiveTracks;
                     int                 mActiveTracksGeneration;
                     int                 mLastActiveTracksGeneration;
@@ -846,8 +844,6 @@ private:
                 void dumpBase_l(int fd, const Vector<String16>& args);
                 void dumpEffectChains_l(int fd, const Vector<String16>& args);
 };
-
-private:
 
 class VolumeInterface {
  public:
@@ -2375,3 +2371,5 @@ private:
     float mVolumeLeft = 0.f;
     float mVolumeRight = 0.f;
 };
+
+private:

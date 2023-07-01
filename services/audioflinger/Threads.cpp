@@ -1858,7 +1858,7 @@ ssize_t AudioFlinger::ThreadBase::ActiveTracks<T>::add(const sp<T> &track) {
     logTrack("add", track);
     mActiveTracksGeneration++;
     mLatestActiveTrack = track;
-    ++mBatteryCounter[track->uid()].second;
+    track->beginBatteryAttribution();
     mHasChanged = true;
     return mActiveTracks.add(track);
 }
@@ -1872,7 +1872,7 @@ ssize_t AudioFlinger::ThreadBase::ActiveTracks<T>::remove(const sp<T> &track) {
     }
     logTrack("remove", track);
     mActiveTracksGeneration++;
-    --mBatteryCounter[track->uid()].second;
+    track->endBatteryAttribution();
     // mLatestActiveTrack is not cleared even if is the same as track.
     mHasChanged = true;
 #ifdef TEE_SINK
@@ -1885,14 +1885,13 @@ ssize_t AudioFlinger::ThreadBase::ActiveTracks<T>::remove(const sp<T> &track) {
 template <typename T>
 void AudioFlinger::ThreadBase::ActiveTracks<T>::clear() {
     for (const sp<T> &track : mActiveTracks) {
-        BatteryNotifier::getInstance().noteStopAudio(track->uid());
+        track->endBatteryAttribution();
         logTrack("clear", track);
     }
     mLastActiveTracksGeneration = mActiveTracksGeneration;
     if (!mActiveTracks.empty()) { mHasChanged = true; }
     mActiveTracks.clear();
     mLatestActiveTrack.clear();
-    mBatteryCounter.clear();
 }
 
 template <typename T>
@@ -1902,27 +1901,6 @@ void AudioFlinger::ThreadBase::ActiveTracks<T>::updatePowerState(
     if (mActiveTracksGeneration != mLastActiveTracksGeneration || force) {
         thread->updateWakeLockUids_l(getWakeLockUids());
         mLastActiveTracksGeneration = mActiveTracksGeneration;
-    }
-
-    // Updates BatteryNotifier uids
-    for (auto it = mBatteryCounter.begin(); it != mBatteryCounter.end();) {
-        const uid_t uid = it->first;
-        ssize_t &previous = it->second.first;
-        ssize_t &current = it->second.second;
-        if (current > 0) {
-            if (previous == 0) {
-                BatteryNotifier::getInstance().noteStartAudio(uid);
-            }
-            previous = current;
-            ++it;
-        } else if (current == 0) {
-            if (previous > 0) {
-                BatteryNotifier::getInstance().noteStopAudio(uid);
-            }
-            it = mBatteryCounter.erase(it); // std::map<> is stable on iterator erase.
-        } else /* (current < 0) */ {
-            LOG_ALWAYS_FATAL("negative battery count %zd", current);
-        }
     }
 }
 
@@ -7503,7 +7481,8 @@ void AudioFlinger::DuplicatingThread::dumpInternals_l(int fd, const Vector<Strin
     if (numTracks > 0) {
         ss << ":";
         for (const auto &track : mOutputTracks) {
-            const sp<ThreadBase> thread = track->thread().promote();
+            // TODO(b/288339104) type
+            const auto thread = sp<ThreadBase>::cast(track->thread().promote());
             ss << " (" << track->id() << " : ";
             if (thread.get() != nullptr) {
                 ss << thread.get() << ", " << thread->id();
@@ -7587,7 +7566,8 @@ void AudioFlinger::DuplicatingThread::updateWaitTime_l()
 {
     mWaitTimeMs = UINT_MAX;
     for (size_t i = 0; i < mOutputTracks.size(); i++) {
-        sp<ThreadBase> strong = mOutputTracks[i]->thread().promote();
+        // TODO(b/288339104) type
+        const auto strong = sp<ThreadBase>::cast(mOutputTracks[i]->thread().promote());
         if (strong != 0) {
             uint32_t waitTimeMs = (strong->frameCount() * 2 * 1000) / strong->sampleRate();
             if (waitTimeMs < mWaitTimeMs) {
@@ -7600,7 +7580,8 @@ void AudioFlinger::DuplicatingThread::updateWaitTime_l()
 bool AudioFlinger::DuplicatingThread::outputsReady()
 {
     for (size_t i = 0; i < outputTracks.size(); i++) {
-        sp<ThreadBase> thread = outputTracks[i]->thread().promote();
+        // TODO(b/288339104) type
+        const auto thread = sp<ThreadBase>::cast(outputTracks[i]->thread().promote());
         if (thread == 0) {
             ALOGW("DuplicatingThread::outputsReady() could not promote thread on output track %p",
                     outputTracks[i].get());
@@ -8878,10 +8859,11 @@ void AudioFlinger::RecordThread::syncStartEventCallback(const wp<audioflinger::S
     sp<audioflinger::SyncEvent> strongEvent = event.promote();
 
     if (strongEvent != 0) {
-        sp<RefBase> ptr = std::any_cast<const wp<RefBase>>(strongEvent->cookie()).promote();
-        if (ptr != 0) {
-            RecordTrack *recordTrack = (RecordTrack *)ptr.get();
-            recordTrack->handleSyncStartEvent(strongEvent);
+        sp<IAfTrackBase> ptr =
+                std::any_cast<const wp<IAfTrackBase>>(strongEvent->cookie()).promote();
+        if (ptr != nullptr) {
+            // TODO(b/288339104) handleSyncStartEvent is in IAfTrackBase not IAfRecordTrack.
+            ptr->handleSyncStartEvent(strongEvent);
         }
     }
 }
