@@ -12,6 +12,10 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
 #define LOG_TAG "APM_AudioPolicyManager"
@@ -543,6 +547,7 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
     AudioParameter param;
     int isReconfigA2dpSupported = 0;
     int volIndex = 0;
+    int isA2dpSuspended = 0;
 
     ALOGV("handleDeviceConfigChange(() device: 0x%X, address %s name %s encodedFormat: 0x%X",
           device, device_address, device_name, encodedFormat);
@@ -610,6 +615,14 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
           mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_MEDIA),
                                               nullptr, true /*fromCache*/).types());
     }
+
+    // get the a2dpSuspended status for the device
+    if (audio_is_a2dp_out_device(device)) {
+        reply = mpClientInterface->getParameters(AUDIO_IO_HANDLE_NONE, String8("A2dpSuspended"));
+        AudioParameter repliedParameters(reply);
+        repliedParameters.getInt(String8("A2dpSuspended"), isA2dpSuspended);
+    }
+
     // Toggle the device state: UNAVAILABLE -> AVAILABLE
     // This will force reading again the device configuration
     status = setDeviceConnectionState(device,
@@ -620,6 +633,12 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
         ALOGW("handleDeviceConfigChange() error disabling connection state: %d",
               status);
         goto exit;
+    }
+
+    // if a2dp was in suspended state before disconnection, set A2dpSuspended=true.
+    // this will be cached and applied during device connection
+    if (isA2dpSuspended) {
+        mpClientInterface->setParameters(AUDIO_IO_HANDLE_NONE, String8("A2dpSuspended=true"));
     }
 
     status = setDeviceConnectionState(device,
