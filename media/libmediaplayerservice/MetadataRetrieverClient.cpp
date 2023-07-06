@@ -55,13 +55,10 @@ MetadataRetrieverClient::MetadataRetrieverClient(pid_t pid)
 {
     ALOGV("MetadataRetrieverClient constructor pid(%d)", pid);
     mPid = pid;
-    mPerfBoost = nullptr;
     // Trigger Perf boost to support faster HEIF decoding. Set the duration
     // to indefinite. This perflock will be released when MetadataRetrieverClient
     // is released.
-#ifdef ENABLE_HEIF_DECODE_BOOST
     mPerfBoost = std::make_unique<HeifPerfBoost>(true, 0);
-#endif
     mAlbumArt = NULL;
     mRetriever = NULL;
 }
