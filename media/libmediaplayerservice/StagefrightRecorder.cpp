@@ -1267,10 +1267,6 @@ status_t StagefrightRecorder::start() {
         case OUTPUT_FORMAT_MPEG_4:
         case OUTPUT_FORMAT_WEBM:
         {
-            bool isMPEG4 = true;
-            if (mOutputFormat == OUTPUT_FORMAT_WEBM) {
-                isMPEG4 = false;
-            }
             sp<MetaData> meta = new MetaData;
             setupMPEG4orWEBMMetaData(&meta);
             status = mWriter->start(meta.get());

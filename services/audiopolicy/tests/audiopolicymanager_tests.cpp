@@ -1232,6 +1232,19 @@ TEST_F(AudioPolicyManagerTestWithConfigurationFile, BitPerfectPlayback) {
     EXPECT_FALSE(isBitPerfect);
     EXPECT_EQ(bitPerfectOutput, output);
 
+    const audio_attributes_t dtmfAttr = {
+            .content_type = AUDIO_CONTENT_TYPE_UNKNOWN,
+            .usage = AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING,
+    };
+    audio_io_handle_t dtmfOutput = AUDIO_IO_HANDLE_NONE;
+    selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    portId = AUDIO_PORT_HANDLE_NONE;
+    getOutputForAttr(&selectedDeviceId, AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO,
+            48000, AUDIO_OUTPUT_FLAG_NONE, &dtmfOutput, &portId, dtmfAttr,
+            AUDIO_SESSION_NONE, anotherUid, &isBitPerfect);
+    EXPECT_FALSE(isBitPerfect);
+    EXPECT_EQ(bitPerfectOutput, dtmfOutput);
+
     // When configuration matches preferred mixer attributes, which is bit-perfect, but the client
     // is not the owner of preferred mixer attributes, the playback will not be bit-perfect.
     getOutputForAttr(&selectedDeviceId, bitPerfectFormat, bitPerfectChannelMask,
@@ -1899,7 +1912,7 @@ class AudioPolicyManagerTestMMapPlaybackRerouting
     bool mIsBitPerfect;
 };
 
-TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, MmapPlaybackStreamMatchingDapMixFails) {
+TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, MmapPlaybackStreamMatchingLoopbackDapMixFails) {
     // Add mix matching the test uid.
     const int testUid = 12345;
     const auto param = GetParam();
@@ -1916,7 +1929,8 @@ TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, MmapPlaybackStreamMatchingDa
                                          &mOutputType, &mIsSpatialized, &mIsBitPerfect));
 }
 
-TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, NonMmapPlaybackStreamMatchingDapMixSucceeds) {
+TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting,
+        NonMmapPlaybackStreamMatchingLoopbackDapMixSucceeds) {
     // Add mix matching the test uid.
     const int testUid = 12345;
     const auto param = GetParam();
@@ -1933,15 +1947,30 @@ TEST_P(AudioPolicyManagerTestMMapPlaybackRerouting, NonMmapPlaybackStreamMatchin
                                          &mOutputType, &mIsSpatialized, &mIsBitPerfect));
 }
 
+TEST_F(AudioPolicyManagerTestMMapPlaybackRerouting,
+        MmapPlaybackStreamMatchingRenderDapMixSucceeds) {
+      // Add render-only mix matching the test uid.
+    const int testUid = 12345;
+    status_t ret = addPolicyMix(MIX_TYPE_PLAYERS, MIX_ROUTE_FLAG_RENDER, AUDIO_DEVICE_OUT_SPEAKER,
+                                /*mixAddress=*/"", audioConfig, {createUidCriterion(testUid)});
+    ASSERT_EQ(NO_ERROR, ret);
+
+    // Geting output for matching uid should succeed for mmaped stream.
+    audio_output_flags_t outputFlags = AUDIO_OUTPUT_FLAG_MMAP_NOIRQ;
+    ASSERT_EQ(NO_ERROR,
+              mManager->getOutputForAttr(&attr, &mOutput, AUDIO_SESSION_NONE, &mStream,
+                                         createAttributionSourceState(testUid), &audioConfig,
+                                         &outputFlags, &mSelectedDeviceId, &mPortId, {},
+                                         &mOutputType, &mIsSpatialized, &mIsBitPerfect));
+}
+
 INSTANTIATE_TEST_SUITE_P(
         MmapPlaybackRerouting, AudioPolicyManagerTestMMapPlaybackRerouting,
         testing::Values(DPMmapTestParam(MIX_ROUTE_FLAG_LOOP_BACK, AUDIO_DEVICE_OUT_REMOTE_SUBMIX,
                                         /*deviceAddress=*/"remote_submix_media"),
                         DPMmapTestParam(MIX_ROUTE_FLAG_LOOP_BACK_AND_RENDER,
                                         AUDIO_DEVICE_OUT_REMOTE_SUBMIX,
-                                        /*deviceAddress=*/"remote_submix_media"),
-                        DPMmapTestParam(MIX_ROUTE_FLAG_RENDER, AUDIO_DEVICE_OUT_SPEAKER,
-                                        /*deviceAddress=*/"")));
+                                        /*deviceAddress=*/"remote_submix_media")));
 
 class AudioPolicyManagerTestDPMixRecordInjection : public AudioPolicyManagerTestDynamicPolicy,
         public testing::WithParamInterface<DPTestParam> {
