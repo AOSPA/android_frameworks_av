@@ -15,14 +15,14 @@
 ** limitations under the License.
 */
 
-#ifndef INCLUDING_FROM_AUDIOFLINGER_H
-    #error This header file should only be included from AudioFlinger.h
-#endif
+#pragma once
+
+namespace android {
 
 // base for record and playback
 class TrackBase : public ExtendedAudioBufferProvider, public virtual IAfTrackBase {
 public:
-                        TrackBase(ThreadBase *thread,
+                        TrackBase(AudioFlinger::ThreadBase* thread,
                                 const sp<Client>& client,
                                 const audio_attributes_t& mAttr,
                                 uint32_t sampleRate,
@@ -322,7 +322,7 @@ protected:
                                     // true for Track, false for RecordTrack,
                                     // this could be a track type if needed later
 
-    const wp<ThreadBase> mThread;
+    const wp<AudioFlinger::ThreadBase> mThread;
     const alloc_type     mAllocType;
     /*const*/ sp<Client> mClient;   // see explanation at ~TrackBase() why not const
     sp<IMemory>         mCblkMemory;
@@ -388,36 +388,27 @@ protected:
     std::optional<mediautils::BatteryStatsAudioHandle> mBatteryStatsHolder;
 };
 
-// PatchProxyBufferProvider interface is implemented by PatchTrack and PatchRecord.
-// it provides buffer access methods that map those of a ClientProxy (see AudioTrackShared.h)
-class PatchProxyBufferProvider
+class PatchTrackBase : public PatchProxyBufferProvider, public virtual IAfPatchTrackBase
 {
 public:
-
-    virtual ~PatchProxyBufferProvider() = default;
-
-    virtual bool        producesBufferOnDemand() const = 0;
-    virtual status_t    obtainBuffer(Proxy::Buffer* buffer,
-                                     const struct timespec *requested = NULL) = 0;
-    virtual void        releaseBuffer(Proxy::Buffer* buffer) = 0;
-};
-
-class PatchTrackBase : public PatchProxyBufferProvider
-{
-public:
-    using Timeout = std::optional<std::chrono::nanoseconds>;
-                        PatchTrackBase(const sp<ClientProxy>& proxy, const ThreadBase& thread,
+                        PatchTrackBase(const sp<ClientProxy>& proxy,
+                                       const AudioFlinger::ThreadBase& thread,
                                        const Timeout& timeout);
-            void        setPeerTimeout(std::chrono::nanoseconds timeout);
-            template <typename T>
-            void        setPeerProxy(const sp<T> &proxy, bool holdReference) {
-                            mPeerReferenceHold = holdReference ? proxy : nullptr;
-                            mPeerProxy = proxy.get();
-                        }
-            void        clearPeerProxy() {
+            void setPeerTimeout(std::chrono::nanoseconds timeout) final;
+            void setPeerProxy(const sp<IAfPatchTrackBase>& proxy, bool holdReference) final {
+                if (proxy) {
+                    mPeerReferenceHold = holdReference ? proxy : nullptr;
+                    mPeerProxy = proxy->asPatchProxyBufferProvider();
+                } else {
+                    clearPeerProxy();
+                }
+            }
+            void clearPeerProxy() final {
                             mPeerReferenceHold.clear();
                             mPeerProxy = nullptr;
                         }
+
+            PatchProxyBufferProvider* asPatchProxyBufferProvider() final { return this; }
 
             bool        producesBufferOnDemand() const override { return false; }
 
@@ -426,5 +417,6 @@ protected:
     sp<RefBase>                 mPeerReferenceHold;   // keeps mPeerProxy alive during access.
     PatchProxyBufferProvider*   mPeerProxy = nullptr;
     struct timespec             mPeerTimeout{};
-
 };
+
+} // namespace android
