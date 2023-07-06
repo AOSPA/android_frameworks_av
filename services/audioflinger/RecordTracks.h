@@ -15,16 +15,16 @@
 ** limitations under the License.
 */
 
+#pragma once
+
 #include <android/content/AttributionSourceState.h>
 
-#ifndef INCLUDING_FROM_AUDIOFLINGER_H
-    #error This header file should only be included from AudioFlinger.h
-#endif
+namespace android {
 
 // record track
-class RecordTrack : public TrackBase, public IAfRecordTrack {
+class RecordTrack : public TrackBase, public virtual IAfRecordTrack {
 public:
-                        RecordTrack(RecordThread *thread,
+                        RecordTrack(AudioFlinger::RecordThread* thread,
                                 const sp<Client>& client,
                                 const audio_attributes_t& attr,
                                 uint32_t sampleRate,
@@ -85,14 +85,26 @@ public:
     using MetadataInserter = std::back_insert_iterator<SinkMetadatas>;
     void copyMetadataTo(MetadataInserter& backInserter) const final;
 
+    AudioBufferProvider::Buffer& sinkBuffer() final { return mSink; }
+    audioflinger::SynchronizedRecordState& synchronizedRecordState() final {
+        return mSynchronizedRecordState;
+    }
+    RecordBufferConverter* recordBufferConverter() const final { return mRecordBufferConverter; }
+    ResamplerBufferProvider* resamplerBufferProvider() const final {
+        return mResamplerBufferProvider;
+    }
+
 private:
     friend class AudioFlinger;  // for mState
 
     DISALLOW_COPY_AND_ASSIGN(RecordTrack);
 
+protected:
     // AudioBufferProvider interface
-    virtual status_t getNextBuffer(AudioBufferProvider::Buffer* buffer);
+    status_t getNextBuffer(AudioBufferProvider::Buffer* buffer) override;
     // releaseBuffer() not overridden
+
+private:
 
     bool                mOverflow;  // overflow on most recent attempt to fill client buffer
 
@@ -106,7 +118,7 @@ private:
                     mSynchronizedRecordState{mSampleRate}; // sampleRate defined in base
 
             // used by resampler to find source frames
-            ResamplerBufferProvider            *mResamplerBufferProvider;
+            ResamplerBufferProvider* mResamplerBufferProvider;
 
             // used by the record thread to convert frames to proper destination format
             RecordBufferConverter              *mRecordBufferConverter;
@@ -119,10 +131,9 @@ private:
 };
 
 // playback track, used by PatchPanel
-class PatchRecord : public RecordTrack, public PatchTrackBase {
+class PatchRecord : public RecordTrack, public PatchTrackBase, public IAfPatchRecord {
 public:
-
-    PatchRecord(RecordThread *recordThread,
+    PatchRecord(AudioFlinger::RecordThread* recordThread,
                 uint32_t sampleRate,
                 audio_channel_mask_t channelMask,
                 audio_format_t format,
@@ -132,20 +143,20 @@ public:
                 audio_input_flags_t flags,
                 const Timeout& timeout = {},
                 audio_source_t source = AUDIO_SOURCE_DEFAULT);
-    virtual             ~PatchRecord();
+    ~PatchRecord() override;
 
-    virtual Source* getSource() { return nullptr; }
+    Source* getSource() override { return nullptr; }
 
     // AudioBufferProvider interface
-    virtual status_t getNextBuffer(AudioBufferProvider::Buffer* buffer);
-    virtual void releaseBuffer(AudioBufferProvider::Buffer* buffer);
+    status_t getNextBuffer(AudioBufferProvider::Buffer* buffer) override;
+    void releaseBuffer(AudioBufferProvider::Buffer* buffer) override;
 
     // PatchProxyBufferProvider interface
-    virtual status_t    obtainBuffer(Proxy::Buffer *buffer,
-                                     const struct timespec *timeOut = NULL);
-    virtual void        releaseBuffer(Proxy::Buffer *buffer);
+    status_t obtainBuffer(Proxy::Buffer* buffer,
+                                     const struct timespec* timeOut = nullptr) override;
+    void releaseBuffer(Proxy::Buffer* buffer) override;
 
-    size_t writeFrames(const void* src, size_t frameCount, size_t frameSize) {
+    size_t writeFrames(const void* src, size_t frameCount, size_t frameSize) final {
         return writeFrames(this, src, frameCount, frameSize);
     }
 
@@ -158,7 +169,7 @@ protected:
 
 class PassthruPatchRecord : public PatchRecord, public Source {
 public:
-    PassthruPatchRecord(RecordThread *recordThread,
+    PassthruPatchRecord(AudioFlinger::RecordThread* recordThread,
                         uint32_t sampleRate,
                         audio_channel_mask_t channelMask,
                         audio_format_t format,
@@ -166,25 +177,25 @@ public:
                         audio_input_flags_t flags,
                         audio_source_t source = AUDIO_SOURCE_DEFAULT);
 
-    Source* getSource() override { return static_cast<Source*>(this); }
+    Source* getSource() final { return static_cast<Source*>(this); }
 
     // Source interface
-    status_t read(void *buffer, size_t bytes, size_t *read) override;
-    status_t getCapturePosition(int64_t *frames, int64_t *time) override;
-    status_t standby() override;
+    status_t read(void* buffer, size_t bytes, size_t* read) final;
+    status_t getCapturePosition(int64_t* frames, int64_t* time) final;
+    status_t standby() final;
 
     // AudioBufferProvider interface
     // This interface is used by RecordThread to pass the data obtained
     // from HAL or other source to the client. PassthruPatchRecord receives
     // the data in 'obtainBuffer' so these calls are stubbed out.
-    status_t getNextBuffer(AudioBufferProvider::Buffer* buffer) override;
-    void releaseBuffer(AudioBufferProvider::Buffer* buffer) override;
+    status_t getNextBuffer(AudioBufferProvider::Buffer* buffer) final;
+    void releaseBuffer(AudioBufferProvider::Buffer* buffer) final;
 
     // PatchProxyBufferProvider interface
     // This interface is used from DirectOutputThread to acquire data from HAL.
-    bool producesBufferOnDemand() const override { return true; }
-    status_t obtainBuffer(Proxy::Buffer *buffer, const struct timespec *timeOut = nullptr) override;
-    void releaseBuffer(Proxy::Buffer *buffer) override;
+    bool producesBufferOnDemand() const final { return true; }
+    status_t obtainBuffer(Proxy::Buffer* buffer, const struct timespec* timeOut = nullptr) final;
+    void releaseBuffer(Proxy::Buffer* buffer) final;
 
 private:
     // This is to use with PatchRecord::writeFrames
@@ -201,7 +212,7 @@ private:
         PassthruPatchRecord& mPassthru;
     };
 
-    sp<StreamInHalInterface> obtainStream(sp<ThreadBase>* thread);
+    sp<StreamInHalInterface> obtainStream(sp<AudioFlinger::ThreadBase>* thread);
 
     PatchRecordAudioBufferProvider mPatchRecordAudioBufferProvider;
     std::unique_ptr<void, decltype(free)*> mSinkBuffer;  // frame size aligned continuous buffer
@@ -213,3 +224,5 @@ private:
     status_t mReadError = NO_ERROR; // GUARDED_BY(mReadLock)
     int64_t mLastReadFrames = 0;  // accessed on RecordThread only
 };
+
+} // namespace android
