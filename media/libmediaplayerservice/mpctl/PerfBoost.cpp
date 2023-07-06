@@ -87,7 +87,7 @@ HeifMPCtl::~HeifMPCtl() {
         }
 }
 
-HeifPerfBoost::HeifPerfBoost(bool sync, int durationMs): mSync(sync) {
+HeifPerfBoost::HeifPerfBoost(bool sync, int durationMs): mPerfLockHandle(0), mSync(sync) {
         if (HeifMPCtl::getMPCtlLibInstance().mPerfHint) {
             ALOGV("Requesting %s for duration [%u] ms", __func__, durationMs);
             mPerfLockHandle = HeifMPCtl::getMPCtlLibInstance().mPerfHint(
