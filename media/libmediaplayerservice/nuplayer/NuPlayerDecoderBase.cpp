@@ -125,6 +125,16 @@ void NuPlayer::DecoderBase::onRequestInputBuffers() {
     }
 }
 
+void NuPlayer::DecoderBase::logLatencyBegin(std::string strId) {
+    mLatencyStartTime[strId] = std::chrono::system_clock::now();
+}
+
+void NuPlayer::DecoderBase::logLatencyEnd(std::string strId) {
+    auto it = mLatencyStartTime.find(strId);
+    std::chrono::duration<double> duration = std::chrono::system_clock::now() - it->second;
+    ALOGI("%s latency : %.2f ms", strId.c_str(), (duration.count() * 1000));
+}
+
 void NuPlayer::DecoderBase::onMessageReceived(const sp<AMessage> &msg) {
 
     switch (msg->what()) {
