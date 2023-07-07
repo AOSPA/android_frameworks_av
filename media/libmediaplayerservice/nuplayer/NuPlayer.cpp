@@ -279,6 +279,16 @@ bool NuPlayer::IsHTTPLiveURL(const char *url) {
     return false;
 }
 
+void NuPlayer::logLatencyBegin(std::string strId) {
+    mLatencyStartTime[strId] = std::chrono::system_clock::now();
+}
+
+void NuPlayer::logLatencyEnd(std::string strId) {
+    auto it = mLatencyStartTime.find(strId);
+    std::chrono::duration<double> duration = std::chrono::system_clock::now() - it->second;
+    ALOGI("%s latency : %.2f ms", strId.c_str(), (duration.count() * 1000));
+}
+
 void NuPlayer::setDataSourceAsync(
         const sp<IMediaHTTPService> &httpService,
         const char *url,
@@ -1170,7 +1180,7 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 mRenderer->queueEOS(audio, err);
             } else if (what == DecoderBase::kWhatFlushCompleted) {
                 ALOGV("decoder %s flush completed", audio ? "audio" : "video");
-
+                logLatencyEnd(audio ? "audioFlush" : "videoFlush");
                 handleFlushComplete(audio, true /* isDecoder */);
                 finishFlushIfPossible();
             } else if (what == DecoderBase::kWhatVideoSizeChanged) {
@@ -1184,6 +1194,7 @@ void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 updateVideoSize(inputFormat, format);
             } else if (what == DecoderBase::kWhatShutdownCompleted) {
                 ALOGV("%s shutdown completed", audio ? "audio" : "video");
+                logLatencyEnd(audio ? "audioShutdown" : "videoShutdown");
                 if (audio) {
                     Mutex::Autolock autoLock(mDecoderLock);
                     mAudioDecoder.clear();
@@ -1852,6 +1863,7 @@ void NuPlayer::handleFlushComplete(bool audio, bool isDecoder) {
             *state = SHUTTING_DOWN_DECODER;
 
             ALOGV("initiating %s decoder shutdown", audio ? "audio" : "video");
+            logLatencyBegin(audio ? "audioShutdown" : "videoShutdown");
             getDecoder(audio)->initiateShutdown();
             break;
         }
@@ -2479,10 +2491,12 @@ void NuPlayer::performDecoderFlush(FlushCommand audio, FlushCommand video) {
     }
 
     if (audio != FLUSH_CMD_NONE && mAudioDecoder != NULL) {
+        logLatencyBegin("audioFlush");
         flushDecoder(true /* audio */, (audio == FLUSH_CMD_SHUTDOWN));
     }
 
     if (video != FLUSH_CMD_NONE && mVideoDecoder != NULL) {
+        logLatencyBegin("videoFlush");
         flushDecoder(false /* audio */, (video == FLUSH_CMD_SHUTDOWN));
     }
 }

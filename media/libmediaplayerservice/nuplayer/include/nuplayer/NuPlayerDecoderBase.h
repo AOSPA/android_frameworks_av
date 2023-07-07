@@ -46,6 +46,8 @@ struct NuPlayer::DecoderBase : public AHandler {
     void signalFlush();
     void signalResume(bool notifyComplete);
     void initiateShutdown();
+    void logLatencyBegin(std::string strId);
+    void logLatencyEnd(std::string strId);
 
     virtual sp<AMessage> getStats() {
         return mStats;
@@ -90,6 +92,7 @@ protected:
     bool mPaused;
     sp<AMessage> mStats;
     Mutex mStatsLock;
+    std::unordered_map<std::string, std::chrono::time_point<std::chrono::system_clock>> mLatencyStartTime;
 
 private:
     enum {

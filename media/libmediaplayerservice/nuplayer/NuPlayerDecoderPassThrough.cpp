@@ -60,6 +60,7 @@ NuPlayer::DecoderPassThrough::~DecoderPassThrough() {
 
 void NuPlayer::DecoderPassThrough::onConfigure(const sp<AMessage> &format) {
     ALOGV("[%s] onConfigure", mComponentName.c_str());
+    logLatencyBegin("audioStartDecPassThrough");
     mCachedBytes = 0;
     mPendingBuffersToDrain = 0;
     mReachedEOS = false;
@@ -79,6 +80,7 @@ void NuPlayer::DecoderPassThrough::onConfigure(const sp<AMessage> &format) {
     if (err != OK) {
         handleError(err);
     }
+    logLatencyEnd("audioStartDecPassThrough");
 }
 
 void NuPlayer::DecoderPassThrough::onSetParameters(const sp<AMessage> &/*params*/) {
@@ -394,7 +396,6 @@ void NuPlayer::DecoderPassThrough::onFlush() {
     sp<AMessage> notify = mNotify->dup();
     notify->setInt32("what", kWhatFlushCompleted);
     notify->post();
-
 }
 
 void NuPlayer::DecoderPassThrough::onShutdown(bool notifyComplete) {
