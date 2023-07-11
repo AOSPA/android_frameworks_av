@@ -1275,7 +1275,7 @@ status_t HeicCompositeStream::initializeCodec(uint32_t width, uint32_t height,
 
     bool useGrid = false;
     AString hevcName;
-    bool isHWEnc = false;
+    bool isHWEncWithoutGrid = false;
     bool isSizeSupported = isSizeSupportedByHeifEncoder(width, height,
             &mUseHeic, &useGrid, nullptr, &hevcName);
     if (!isSizeSupported) {
@@ -1374,13 +1374,15 @@ status_t HeicCompositeStream::initializeCodec(uint32_t width, uint32_t height,
     // This only serves as a hint to encoder when encoding is not real-time.
     outputFormat->setInt32(KEY_OPERATING_RATE, useGrid ? kGridOpRate : kNoGridOpRate);
 
+    // BLOCK_MODEL is enabled only for HW encoder with surface input. Surface mode is used only
+    // when grid is not used.
     mCodec->getName(&hevcName);
-    isHWEnc = hevcName.startsWith("c2.qti");
+    isHWEncWithoutGrid = hevcName.startsWith("c2.qti.heic.encoder") && !useGrid;
 
     res = mCodec->configure(outputFormat, nullptr /*nativeWindow*/,
             nullptr /*crypto*/,
             CONFIGURE_FLAG_ENCODE |
-            (isHWEnc ? CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
+            (isHWEncWithoutGrid ? CONFIGURE_FLAG_USE_BLOCK_MODEL : 0));
     if (res != OK) {
         ALOGE("%s: Failed to configure codec: %s (%d)", __FUNCTION__,
                 strerror(-res), res);
