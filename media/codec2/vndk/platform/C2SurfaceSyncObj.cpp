@@ -114,8 +114,8 @@ C2SyncVariables *C2SurfaceSyncMemory::mem() {
 }
 
 namespace {
-    constexpr int kSpinNumForLock = 100;
-    constexpr int kSpinNumForUnlock = 200;
+    constexpr int kSpinNumForLock = 0;
+    constexpr int kSpinNumForUnlock = 0;
 
     enum : uint32_t {
         FUTEX_UNLOCKED = 0,
@@ -125,40 +125,70 @@ namespace {
 }
 
 int C2SyncVariables::lock() {
-    uint32_t old;
+    uint32_t old = FUTEX_UNLOCKED;
+
+    // see if we can lock uncontended immediately (if previously unlocked)
+    if (mLock.compare_exchange_strong(old, FUTEX_LOCKED_UNCONTENDED)) {
+        return 0;
+    }
+
+    // spin to see if we can get it with a short wait without involving kernel
     for (int i = 0; i < kSpinNumForLock; i++) {
-        old = 0;
+        sched_yield();
+
+        old = FUTEX_UNLOCKED;
         if (mLock.compare_exchange_strong(old, FUTEX_LOCKED_UNCONTENDED)) {
             return 0;
         }
-        sched_yield();
     }
 
-    if (old == FUTEX_LOCKED_UNCONTENDED)
+    // still locked, if other side thinks it was uncontended, now it is contended, so let them
+    // know that they need to wake us up.
+    if (old == FUTEX_LOCKED_UNCONTENDED) {
         old = mLock.exchange(FUTEX_LOCKED_CONTENDED);
+        // It is possible that the other holder released the lock at this very moment (and old
+        // becomes UNLOCKED), If so, we will not involve the kernel to wait for the lock to be
+        // released, but are still marking our lock contended (even though we are the only
+        // holders.)
+    }
 
-    while (old) {
-        (void) syscall(__NR_futex, &mLock, FUTEX_WAIT, FUTEX_LOCKED_CONTENDED, NULL, NULL, 0);
+    // while the futex is still locked by someone else
+    while (old != FUTEX_UNLOCKED) {
+        // wait until other side releases the lock (and still contented)
+        (void)syscall(__NR_futex, &mLock, FUTEX_WAIT, FUTEX_LOCKED_CONTENDED, NULL, NULL, 0);
+        // try to relock
         old = mLock.exchange(FUTEX_LOCKED_CONTENDED);
     }
     return 0;
 }
 
 int C2SyncVariables::unlock() {
-    if (mLock.exchange(FUTEX_UNLOCKED) == FUTEX_LOCKED_UNCONTENDED) return 0;
+    // TRICKY: here we assume that we are holding this lock
 
+    // unlock the lock immediately (since we were holding it)
+    // If it is (still) locked uncontested, we are done (no need to involve the kernel)
+    if (mLock.exchange(FUTEX_UNLOCKED) == FUTEX_LOCKED_UNCONTENDED) {
+        return 0;
+    }
+
+    // not sure why we need to spin for unlock as here we know already we have a waiter who
+    // we need to wake up.
     for (int i = 0; i < kSpinNumForUnlock; i++) {
-        if (mLock.load()) {
+        // here we seem to check if someone relocked this lock, and if they relocked uncontested,
+        // we up it to contested.
+        if (mLock.load() != FUTEX_UNLOCKED) {
             uint32_t old = FUTEX_LOCKED_UNCONTENDED;
             mLock.compare_exchange_strong(old, FUTEX_LOCKED_CONTENDED);
             if (old) {
+                // if the lock was unlocked (again) we are done (?)
                 return 0;
             }
         }
         sched_yield();
     }
 
-    (void) syscall(__NR_futex, &mLock, FUTEX_WAKE, 1, NULL, NULL, 0);
+    // wake up on waiter
+    (void)syscall(__NR_futex, &mLock, FUTEX_WAKE, 1, NULL, NULL, 0);
     return 0;
 }
 
