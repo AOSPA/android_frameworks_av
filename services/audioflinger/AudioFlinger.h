@@ -98,10 +98,12 @@
 #include <timing/SynchronizedRecordState.h>
 
 #include <datapath/AudioHwDevice.h>
+#include <datapath/AudioStreamIn.h>
 #include <datapath/AudioStreamOut.h>
 #include <datapath/SpdifStreamOut.h>
 #include <datapath/ThreadMetrics.h>
 #include <datapath/TrackMetrics.h>
+#include <datapath/VolumeInterface.h>
 #include <fastpath/FastCapture.h>
 #include <fastpath/FastMixer.h>
 #include <media/nbaio/NBAIO.h>
@@ -577,7 +579,6 @@ public:
     class PatchPanel;
     class DeviceEffectManagerCallback;
 private:
-    struct AudioStreamIn;
     struct TeePatch;
 public:
     using TeePatches = std::vector<TeePatch>;
@@ -655,8 +656,8 @@ private:
               MixerThread *checkMixerThread_l(audio_io_handle_t output) const;
               RecordThread *checkRecordThread_l(audio_io_handle_t input) const;
               MmapThread *checkMmapThread_l(audio_io_handle_t io) const;
-              VolumeInterface *getVolumeInterface_l(audio_io_handle_t output) const;
-              Vector <VolumeInterface *> getAllVolumeInterfaces_l() const;
+              sp<VolumeInterface> getVolumeInterface_l(audio_io_handle_t output) const;
+              std::vector<sp<VolumeInterface>> getAllVolumeInterfaces_l() const;
 
               sp<ThreadBase> openInput_l(audio_module_handle_t module,
                                            audio_io_handle_t *input,
@@ -769,29 +770,6 @@ private:
                 void forwardParametersToDownstreamPatches_l(
                         audio_io_handle_t upStream, const String8& keyValuePairs,
                         const std::function<bool(const sp<PlaybackThread>&)>& useThread = nullptr);
-
-    // AudioStreamIn is immutable, so their fields are const.
-    // For emphasis, we could also make all pointers to them be "const *",
-    // but that would clutter the code unnecessarily.
-
-    struct AudioStreamIn : public Source {
-        AudioHwDevice* const audioHwDev;
-        sp<StreamInHalInterface> stream;
-        audio_input_flags_t flags;
-
-        sp<DeviceHalInterface> hwDev() const { return audioHwDev->hwDevice(); }
-
-        AudioStreamIn(AudioHwDevice *dev, const sp<StreamInHalInterface>& in,
-                audio_input_flags_t flags) :
-            audioHwDev(dev), stream(in), flags(flags) {}
-        status_t read(void *buffer, size_t bytes, size_t *read) override {
-            return stream->read(buffer, bytes, read);
-        }
-        status_t getCapturePosition(int64_t *frames, int64_t *time) override {
-            return stream->getCapturePosition(frames, time);
-        }
-        status_t standby() override { return stream->standby(); }
-    };
 
     struct TeePatch {
         sp<IAfPatchRecord> patchRecord;
