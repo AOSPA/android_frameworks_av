@@ -328,7 +328,6 @@ AudioFlinger::AudioFlinger()
       mTotalMemory(0),
       mClientSharedHeapSize(kMinimumClientSharedHeapSizeBytes),
       mGlobalEffectEnableTime(0),
-      mPatchPanel(this),
       mPatchCommandThread(sp<PatchCommandThread>::make()),
       mDeviceEffectManager(sp<DeviceEffectManager>::make(*this)),
       mMelReporter(sp<MelReporter>::make(*this)),
@@ -934,7 +933,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             dev->dump(fd, args);
         }
 
-        mPatchPanel.dump(fd);
+        mPatchPanel->dump(fd);
 
         mDeviceEffectManager->dump(fd);
 
@@ -1822,8 +1821,8 @@ void AudioFlinger::forwardParametersToDownstreamPatches_l(
         audio_io_handle_t upStream, const String8& keyValuePairs,
         const std::function<bool(const sp<IAfPlaybackThread>&)>& useThread)
 {
-    std::vector<PatchPanel::SoftwarePatch> swPatches;
-    if (mPatchPanel.getDownstreamSoftwarePatches(upStream, &swPatches) != OK) return;
+    std::vector<SoftwarePatch> swPatches;
+    if (mPatchPanel->getDownstreamSoftwarePatches(upStream, &swPatches) != OK) return;
     ALOGV_IF(!swPatches.empty(), "%s found %zu downstream patches for stream ID %d",
             __func__, swPatches.size(), upStream);
     for (const auto& swPatch : swPatches) {
@@ -3039,8 +3038,8 @@ sp<IAfThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t module,
 
     if (status == NO_ERROR) {
         if (flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) {
-            const sp<IAfMmapPlaybackThread> thread =
-                    new MmapPlaybackThread(this, *output, outHwDev, outputStream, mSystemReady);
+            const sp<IAfMmapPlaybackThread> thread = IAfMmapPlaybackThread::create(
+                    this, *output, outHwDev, outputStream, mSystemReady);
             mMmapThreads.add(*output, thread);
             ALOGV("openOutput_l() created mmap playback thread: ID %d thread %p",
                   *output, thread.get());
@@ -3048,34 +3047,36 @@ sp<IAfThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t module,
         } else {
             sp<IAfPlaybackThread> thread;
             if (flags & AUDIO_OUTPUT_FLAG_BIT_PERFECT) {
-                thread = sp<BitPerfectThread>::make(this, outputStream, *output, mSystemReady);
+                thread = IAfPlaybackThread::createBitPerfectThread(
+                        this, outputStream, *output, mSystemReady);
                 ALOGV("%s() created bit-perfect output: ID %d thread %p",
                       __func__, *output, thread.get());
             } else if (flags & AUDIO_OUTPUT_FLAG_SPATIALIZER) {
-                thread = new SpatializerThread(this, outputStream, *output,
+                thread = IAfPlaybackThread::createSpatializerThread(this, outputStream, *output,
                                                     mSystemReady, mixerConfig);
                 ALOGV("openOutput_l() created spatializer output: ID %d thread %p",
                       *output, thread.get());
             } else if (flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
-                thread = new OffloadThread(this, outputStream, *output,
+                thread = IAfPlaybackThread::createOffloadThread(this, outputStream, *output,
                         mSystemReady, halConfig->offload_info);
                 ALOGV("openOutput_l() created offload output: ID %d thread %p",
                       *output, thread.get());
             } else if ((flags & AUDIO_OUTPUT_FLAG_DIRECT)
                     || !isValidPcmSinkFormat(halConfig->format)
                     || !isValidPcmSinkChannelMask(halConfig->channel_mask)) {
-                thread = new DirectOutputThread(this, outputStream, *output,
+                thread = IAfPlaybackThread::createDirectOutputThread(this, outputStream, *output,
                         mSystemReady, halConfig->offload_info);
                 ALOGV("openOutput_l() created direct output: ID %d thread %p",
                       *output, thread.get());
             } else {
-                thread = new MixerThread(this, outputStream, *output, mSystemReady);
+                thread = IAfPlaybackThread::createMixerThread(
+                        this, outputStream, *output, mSystemReady);
                 ALOGV("openOutput_l() created mixer output: ID %d thread %p",
                       *output, thread.get());
             }
             mPlaybackThreads.add(*output, thread);
             struct audio_patch patch;
-            mPatchPanel.notifyStreamOpened(outHwDev, *output, &patch);
+            mPatchPanel->notifyStreamOpened(outHwDev, *output, &patch);
             if (thread->isMsdDevice()) {
                 thread->setDownStreamPatch(&patch);
             }
@@ -3172,7 +3173,8 @@ audio_io_handle_t AudioFlinger::openDuplicateOutput(audio_io_handle_t output1,
     }
 
     audio_io_handle_t id = nextUniqueId(AUDIO_UNIQUE_ID_USE_OUTPUT);
-    IAfDuplicatingThread* const thread = new DuplicatingThread(this, thread1, id, mSystemReady);
+    const sp<IAfDuplicatingThread> thread = IAfDuplicatingThread::create(
+            this, thread1, id, mSystemReady);
     thread->addOutputTrack(thread2);
     mPlaybackThreads.add(id, thread);
     // notify client processes of the new output creation
@@ -3237,7 +3239,7 @@ status_t AudioFlinger::closeOutput_nonvirtual(audio_io_handle_t output)
             ALOGD("closing mmapThread %p", mmapThread.get());
         }
         ioConfigChanged(AUDIO_OUTPUT_CLOSED, sp<AudioIoDescriptor>::make(output));
-        mPatchPanel.notifyStreamClosed(output);
+        mPatchPanel->notifyStreamClosed(output);
     }
     // The thread entity (active unit of execution) is no longer running here,
     // but the IAfThreadBase container still exists.
@@ -3411,7 +3413,7 @@ sp<IAfThreadBase> AudioFlinger::openInput_l(audio_module_handle_t module,
         AudioStreamIn *inputStream = new AudioStreamIn(inHwDev, inStream, flags);
         if ((flags & AUDIO_INPUT_FLAG_MMAP_NOIRQ) != 0) {
             const sp<IAfMmapCaptureThread> thread =
-                    new MmapCaptureThread(this, *input, inHwDev, inputStream, mSystemReady);
+                    IAfMmapCaptureThread::create(this, *input, inHwDev, inputStream, mSystemReady);
             mMmapThreads.add(*input, thread);
             ALOGV("openInput_l() created mmap capture thread: ID %d thread %p", *input,
                     thread.get());
@@ -4326,7 +4328,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
             sp<Client> client = registerPid(currentPid);
             ALOGV("%s device type %#x address %s", __func__, device.mType, device.getAddress());
             handle = mDeviceEffectManager->createEffect_l(
-                    &descOut, device, client, effectClient, mPatchPanel.patches_l(),
+                    &descOut, device, client, effectClient, mPatchPanel->patches_l(),
                     &enabledOut, &lStatus, probe, request.notifyFramesProcessed);
             if (lStatus != NO_ERROR && lStatus != ALREADY_EXISTS) {
                 // remove local strong reference to Client with mClientLock held

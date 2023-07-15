@@ -15,14 +15,14 @@
 ** limitations under the License.
 */
 
-#ifndef INCLUDING_FROM_AUDIOFLINGER_H
-    #error This header file should only be included from AudioFlinger.h
-#endif
+#pragma once
+
+namespace android {
 
 class Command;
 
 // Thread to execute create and release patch commands asynchronously. This is needed because
-// PatchPanel::createAudioPatch and releaseAudioPatch are executed from audio policy service
+// IAfPatchPanel::createAudioPatch and releaseAudioPatch are executed from audio policy service
 // with mutex locked and effect management requires to call back into audio policy service
 class PatchCommandThread : public Thread {
 public:
@@ -36,11 +36,11 @@ public:
     class PatchCommandListener : public virtual RefBase {
     public:
         virtual void onCreateAudioPatch(audio_patch_handle_t handle,
-                                        const PatchPanel::Patch& patch) = 0;
+                                        const IAfPatchPanel::Patch& patch) = 0;
         virtual void onReleaseAudioPatch(audio_patch_handle_t handle) = 0;
         virtual void onUpdateAudioPatch(audio_patch_handle_t oldHandle,
                                         audio_patch_handle_t newHandle,
-                                        const PatchPanel::Patch& patch) = 0;
+                                        const IAfPatchPanel::Patch& patch) = 0;
     };
 
     PatchCommandThread() : Thread(false /* canCallJava */) {}
@@ -48,11 +48,11 @@ public:
 
     void addListener(const sp<PatchCommandListener>& listener);
 
-    void createAudioPatch(audio_patch_handle_t handle, const PatchPanel::Patch& patch);
+    void createAudioPatch(audio_patch_handle_t handle, const IAfPatchPanel::Patch& patch);
     void releaseAudioPatch(audio_patch_handle_t handle);
     void updateAudioPatch(audio_patch_handle_t oldHandle,
                           audio_patch_handle_t newHandle,
-                          const PatchPanel::Patch& patch);
+                          const IAfPatchPanel::Patch& patch);
 
     // Thread virtuals
     void onFirstRef() override;
@@ -61,11 +61,11 @@ public:
     void exit();
 
     void createAudioPatchCommand(audio_patch_handle_t handle,
-            const PatchPanel::Patch& patch);
+            const IAfPatchPanel::Patch& patch);
     void releaseAudioPatchCommand(audio_patch_handle_t handle);
     void updateAudioPatchCommand(audio_patch_handle_t oldHandle,
                                  audio_patch_handle_t newHandle,
-                                 const PatchPanel::Patch& patch);
+                                 const IAfPatchPanel::Patch& patch);
 private:
     class CommandData;
 
@@ -84,11 +84,11 @@ private:
 
     class CreateAudioPatchData : public CommandData {
     public:
-        CreateAudioPatchData(audio_patch_handle_t handle, const PatchPanel::Patch& patch)
+        CreateAudioPatchData(audio_patch_handle_t handle, const IAfPatchPanel::Patch& patch)
             :   mHandle(handle), mPatch(patch) {}
 
         const audio_patch_handle_t mHandle;
-        const PatchPanel::Patch mPatch;
+        const IAfPatchPanel::Patch mPatch;
     };
 
     class ReleaseAudioPatchData : public CommandData {
@@ -103,12 +103,12 @@ private:
     public:
         UpdateAudioPatchData(audio_patch_handle_t oldHandle,
                              audio_patch_handle_t newHandle,
-                             const PatchPanel::Patch& patch)
+                             const IAfPatchPanel::Patch& patch)
             :   mOldHandle(oldHandle), mNewHandle(newHandle), mPatch(patch) {}
 
         const audio_patch_handle_t mOldHandle;
         const audio_patch_handle_t mNewHandle;
-        const PatchPanel::Patch mPatch;
+        const IAfPatchPanel::Patch mPatch;
     };
 
     void sendCommand(const sp<Command>& command);
@@ -121,3 +121,5 @@ private:
     std::mutex mListenerLock;
     std::vector<wp<PatchCommandListener>> mListeners GUARDED_BY(mListenerLock);
 };
+
+}  // namespace android

@@ -124,9 +124,13 @@
 #include "ResamplerBufferProvider.h"
 
 // include AudioFlinger component interfaces
+#include "IAfPatchPanel.h"  // this should be listed before other IAf* interfaces.
 #include "IAfEffect.h"
 #include "IAfThread.h"
 #include "IAfTrack.h"
+
+// Classes that depend on IAf* interfaces but are not cross-dependent.
+#include "PatchCommandThread.h"
 
 namespace android {
 
@@ -150,10 +154,25 @@ static const nsecs_t kDefaultStandbyTimeInNsecs = seconds(3);
 
 using android::content::AttributionSourceState;
 
+struct stream_type_t {
+    float volume = 1.f;
+    bool mute = false;
+};
+
 class AudioFlinger : public AudioFlingerServerAdapter::Delegate
 {
     friend class sp<AudioFlinger>;
     friend class Client; // removeClient_l();
+    friend class PatchPanel;
+    // TODO(b/291012167) replace the Thread friends with an interface.
+    friend class DirectOutputThread;
+    friend class MixerThread;
+    friend class MmapPlaybackThread;
+    friend class MmapThread;
+    friend class PlaybackThread;
+    friend class RecordThread;
+    friend class ThreadBase;
+
 public:
     static void instantiate() ANDROID_API;
 
@@ -563,31 +582,12 @@ private:
     class DeviceEffectManager;
     // TODO(b/288339104) these should be separate files
 public:
-    class PatchPanel;
     class DeviceEffectManagerCallback;
 private:
     struct TeePatch;
 public:
     using TeePatches = std::vector<TeePatch>;
 private:
-
-    struct  stream_type_t {
-        stream_type_t()
-            :   volume(1.0f),
-                mute(false)
-        {
-        }
-        float       volume;
-        bool        mute;
-    };
-
-    // --- PlaybackThread ---
-
-#include "Threads.h"
-
-#include "PatchPanel.h"
-
-#include "PatchCommandThread.h"
 
 #include "DeviceEffectManager.h"
 
@@ -879,7 +879,8 @@ private:
     nsecs_t mGlobalEffectEnableTime;  // when a global effect was last enabled
 
     // protected by mLock
-    PatchPanel mPatchPanel;
+    const sp<IAfPatchPanel> mPatchPanel = IAfPatchPanel::create(this);
+
 public:
     // TODO(b/288339104) access by getter.
     sp<EffectsFactoryHalInterface> mEffectsFactoryHal;
