@@ -3695,7 +3695,7 @@ std::vector<sp<IAfEffectModule>> AudioFlinger::purgeStaleEffects_l() {
          // clang-tidy suggests const ref
         sp<IAfEffectChain> ec = chains[i];  // NOLINT(performance-unnecessary-copy-initialization)
         int sessionid = ec->sessionId();
-        const auto t = sp<IAfThreadBase>::cast(ec->thread().promote()); // TODO(b/288339104)
+        const auto t = ec->thread().promote();
         if (t == 0) {
             continue;
         }
@@ -4038,7 +4038,7 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
         patchTrack->setPeerProxy(patchRecord, true /* holdReference */);
         patchRecord->setPeerProxy(patchTrack, false /* holdReference */);
     }
-    track->setTeePatchesToUpdate_l(&teePatches);  // TODO(b/288339104) void* to std::move()
+    track->setTeePatchesToUpdate_l(std::move(teePatches));
 }
 
 sp<audioflinger::SyncEvent> AudioFlinger::createSyncEvent(AudioSystem::sync_event_t type,

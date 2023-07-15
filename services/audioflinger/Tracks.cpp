@@ -315,15 +315,15 @@ status_t TrackBase::setSyncEvent(
 }
 
 PatchTrackBase::PatchTrackBase(const sp<ClientProxy>& proxy,
-        const IAfThreadBase& thread, const Timeout& timeout)
+        IAfThreadBase* thread, const Timeout& timeout)
     : mProxy(proxy)
 {
     if (timeout) {
         setPeerTimeout(*timeout);
     } else {
         // Double buffer mixer
-        uint64_t mixBufferNs = ((uint64_t)2 * thread.frameCount() * 1000000000) /
-                                              thread.sampleRate();
+        uint64_t mixBufferNs = ((uint64_t)2 * thread->frameCount() * 1000000000) /
+                                              thread->sampleRate();
         setPeerTimeout(std::chrono::nanoseconds{mixBufferNs});
     }
 }
@@ -388,7 +388,6 @@ TrackHandle::TrackHandle(const sp<IAfTrack>& track)
     : BnAudioTrack(),
       mTrack(track)
 {
-    // TODO(b/288339104) binder thread priority change not needed.
     setMinSchedulerPolicy(SCHED_NORMAL, ANDROID_PRIORITY_AUDIO);
 }
 
@@ -1615,7 +1614,7 @@ void Track::updateTeePatches_l() {
     }
 }
 
-void Track::setTeePatchesToUpdate_l(AudioFlinger::TeePatches teePatchesToUpdate) {
+void Track::setTeePatchesToUpdate_l(TeePatches teePatchesToUpdate) {
     ALOGW_IF(mTeePatchesToUpdate.has_value(),
              "%s, existing tee patches to update will be ignored", __func__);
     mTeePatchesToUpdate = std::move(teePatchesToUpdate);
@@ -2451,7 +2450,7 @@ PatchTrack::PatchTrack(IAfPlaybackThread* playbackThread,
               TYPE_PATCH, AUDIO_PORT_HANDLE_NONE, frameCountToBeReady),
         PatchTrackBase(mCblk ? new ClientProxy(mCblk, mBuffer, frameCount, mFrameSize, true, true)
                         : nullptr,
-                       *playbackThread, timeout)
+                       playbackThread, timeout)
 {
     ALOGV("%s(%d): sampleRate %d mPeerTimeout %d.%03d sec",
                                       __func__, mId, sampleRate,
@@ -2612,7 +2611,6 @@ RecordHandle::RecordHandle(
     : BnAudioRecord(),
     mRecordTrack(recordTrack)
 {
-    // TODO(b/288339104) binder thread priority change not needed.
     setMinSchedulerPolicy(SCHED_NORMAL, ANDROID_PRIORITY_AUDIO);
 }
 
@@ -2667,7 +2665,7 @@ binder::Status RecordHandle::shareAudioHistory(
 #define LOG_TAG "AF::RecordTrack"
 
 
-/* static */ // TODO(b/288339104)
+/* static */
 sp<IAfRecordTrack> IAfRecordTrack::create(IAfRecordThread* thread,
         const sp<Client>& client,
         const audio_attributes_t& attr,
@@ -3125,7 +3123,7 @@ PatchRecord::PatchRecord(IAfRecordThread* recordThread,
                 audioServerAttributionSource(getpid()), flags, TYPE_PATCH),
         PatchTrackBase(mCblk ? new ClientProxy(mCblk, mBuffer, frameCount, mFrameSize, false, true)
                         : nullptr,
-                       *recordThread, timeout)
+                       recordThread, timeout)
 {
     ALOGV("%s(%d): sampleRate %d mPeerTimeout %d.%03d sec",
                                       __func__, mId, sampleRate,

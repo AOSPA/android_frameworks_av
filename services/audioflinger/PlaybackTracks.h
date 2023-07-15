@@ -189,11 +189,7 @@ public:
 
             // This function should be called with holding thread lock.
     void updateTeePatches_l() final;
-    void setTeePatchesToUpdate_l(const void* teePatchesToUpdate) final {
-        setTeePatchesToUpdate_l(  // TODO(b/288339104) void*
-                *reinterpret_cast<const AudioFlinger::TeePatches*>(teePatchesToUpdate));
-    }
-    void setTeePatchesToUpdate_l(AudioFlinger::TeePatches teePatchesToUpdate);
+    void setTeePatchesToUpdate_l(TeePatches teePatchesToUpdate) final;
 
     void tallyUnderrunFrames(size_t frames) final {
        if (isOut()) { // we expect this from output tracks only
@@ -218,11 +214,6 @@ public:
     void processMuteEvent_l(const sp<IAudioManager>& audioManager, mute_state_t muteState) final;
 
 protected:
-    // for numerous
-    friend class PlaybackThread;
-    friend class MixerThread;
-    friend class DirectOutputThread;
-    friend class OffloadThread;
 
     DISALLOW_COPY_AND_ASSIGN(Track);
 
@@ -389,8 +380,8 @@ private:
     bool                mFlushHwPending; // track requests for thread flush
     bool                mPauseHwPending = false; // direct/offload track request for thread pause
     audio_output_flags_t mFlags;
-    AudioFlinger::TeePatches  mTeePatches;
-    std::optional<AudioFlinger::TeePatches> mTeePatchesToUpdate;
+    TeePatches mTeePatches;
+    std::optional<TeePatches> mTeePatchesToUpdate;
     const float         mSpeed;
     const bool          mIsSpatialized;
     const bool          mIsBitPerfect;
