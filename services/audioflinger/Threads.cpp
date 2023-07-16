@@ -2968,6 +2968,7 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
 {
     // unfortunately we have no way of recovering from errors here, hence the LOG_ALWAYS_FATAL
     const audio_config_base_t audioConfig = mOutput->getAudioProperties();
+    bool isDup = false;
     mSampleRate = audioConfig.sample_rate;
     mChannelMask = audioConfig.channel_mask;
     if (!audio_is_output_channel(mChannelMask)) {
@@ -3050,10 +3051,14 @@ void AudioFlinger::PlaybackThread::readOutputParameters_l()
         // This may need to be updated as MixerThread/OutputTracks are added and not here.
     }
 
+    if (property_get_bool("vendor.audio.gaming.enabled", false /* default_value */) &&
+            mType == DUPLICATING) {
+        isDup = true;
+    }
     // Calculate size of normal sink buffer relative to the HAL output buffer size
     double multiplier = 1.0;
     // Note: mType == SPATIALIZER does not support FastMixer.
-    if (mType == MIXER && (kUseFastMixer == FastMixer_Static ||
+    if ((mType == MIXER || isDup) && (kUseFastMixer == FastMixer_Static ||
             kUseFastMixer == FastMixer_Dynamic)) {
         size_t minNormalFrameCount = (kMinNormalSinkBufferSizeMs * mSampleRate) / 1000;
         size_t maxNormalFrameCount = (kMaxNormalSinkBufferSizeMs * mSampleRate) / 1000;
