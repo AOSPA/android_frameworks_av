@@ -16,6 +16,24 @@
       "message": "thinking this should be conditioned, any reason not to?",
       "revId": "95b146d4a1d484251807a7be665a84897e89ae79",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "edb3c108_3c448896",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000579
+      },
+      "writtenOn": "2023-07-16T15:08:46Z",
+      "side": 1,
+      "message": "agreed, hardcoding unconditionally for miui cam doesnt seem very nice",
+      "parentUuid": "a27a05d6_c5c3f9ba",
+      "revId": "95b146d4a1d484251807a7be665a84897e89ae79",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
