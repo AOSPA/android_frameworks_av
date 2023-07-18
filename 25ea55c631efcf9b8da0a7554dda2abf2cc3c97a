@@ -16,6 +16,24 @@
       "message": "can you squash this into the other commit? I\u0027m thinking let\u0027s save ourselves some unnecessary conflict resolution for U.",
       "revId": "25ea55c631efcf9b8da0a7554dda2abf2cc3c97a",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ec029e35_da641b10",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000737
+      },
+      "writtenOn": "2023-07-18T16:57:07Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "08e8527d_5eafa4f0",
+      "revId": "25ea55c631efcf9b8da0a7554dda2abf2cc3c97a",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
