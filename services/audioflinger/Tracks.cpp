@@ -276,7 +276,7 @@ TrackBase::~TrackBase()
     mCblkMemory.clear();    // free the shared memory before releasing the heap it belongs to
     if (mClient != 0) {
         // Client destructor must run with AudioFlinger client mutex locked
-        Mutex::Autolock _l(mClient->audioFlinger()->mClientLock);
+        Mutex::Autolock _l(mClient->afClientCallback()->clientMutex());
         // If the client's reference count drops to zero, the associated destructor
         // must run with AudioFlinger lock held. Thus the explicit clear() rather than
         // relying on the automatic clear() at end of scope.
@@ -1164,10 +1164,10 @@ status_t Track::start(AudioSystem::sync_event_t event __unused,
     const sp<IAfThreadBase> thread = mThread.promote();
     if (thread != 0) {
         if (isOffloaded()) {
-            Mutex::Autolock _laf(thread->audioFlinger()->mLock);
+            Mutex::Autolock _laf(thread->afThreadCallback()->mutex());
             Mutex::Autolock _lth(thread->mutex());
             sp<IAfEffectChain> ec = thread->getEffectChain_l(mSessionId);
-            if (thread->audioFlinger()->isNonOffloadableGlobalEffectEnabled_l() ||
+            if (thread->afThreadCallback()->isNonOffloadableGlobalEffectEnabled_l() ||
                     (ec != 0 && ec->isNonOffloadableEnabled())) {
                 invalidate();
                 return PERMISSION_DENIED;
@@ -1273,7 +1273,8 @@ status_t Track::start(AudioSystem::sync_event_t event __unused,
     }
     if (status == NO_ERROR) {
         // send format to AudioManager for playback activity monitoring
-        const sp<IAudioManager> audioManager = thread->audioFlinger()->getOrCreateAudioManager();
+        const sp<IAudioManager> audioManager =
+                thread->afThreadCallback()->getOrCreateAudioManager();
         if (audioManager && mPortId != AUDIO_PORT_HANDLE_NONE) {
             std::unique_ptr<os::PersistableBundle> bundle =
                     std::make_unique<os::PersistableBundle>();
@@ -1678,7 +1679,7 @@ status_t Track::attachAuxEffect(int EffectId)
     auto dstThread = thread->asIAfPlaybackThread();
     // srcThread is initialized by call to moveAuxEffectToIo()
     sp<IAfPlaybackThread> srcThread;
-    sp<AudioFlinger> af = mClient->audioFlinger();
+    const auto& af = mClient->afClientCallback();
     status_t status = af->moveAuxEffectToIo(EffectId, dstThread, &srcThread);
 
     if (EffectId != 0 && status == NO_ERROR) {

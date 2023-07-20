@@ -329,8 +329,6 @@ AudioFlinger::AudioFlinger()
       mClientSharedHeapSize(kMinimumClientSharedHeapSizeBytes),
       mGlobalEffectEnableTime(0),
       mPatchCommandThread(sp<PatchCommandThread>::make()),
-      mDeviceEffectManager(sp<DeviceEffectManager>::make(*this)),
-      mMelReporter(sp<MelReporter>::make(*this)),
       mSystemReady(false),
       mBluetoothLatencyModesEnabled(true)
 {
@@ -404,7 +402,8 @@ void AudioFlinger::onFirstRef()
     mMode = AUDIO_MODE_NORMAL;
 
     gAudioFlinger = this;  // we are already refcounted, store into atomic pointer.
-
+    mDeviceEffectManager = sp<DeviceEffectManager>::make(
+            sp<IAfDeviceEffectManagerCallback>::fromExisting(this)),
     mDevicesFactoryHalCallback = new DevicesFactoryHalCallbackImpl;
     mDevicesFactoryHal->setCallbackOnce(mDevicesFactoryHalCallback);
 
@@ -412,6 +411,9 @@ void AudioFlinger::onFirstRef()
         mAAudioBurstsPerBuffer = getAAudioMixerBurstCountFromSystemProperty();
         mAAudioHwBurstMinMicros = getAAudioHardwareBurstMinUsecFromSystemProperty();
     }
+
+    mPatchPanel = IAfPatchPanel::create(sp<IAfPatchPanelCallback>::fromExisting(this));
+    mMelReporter = sp<MelReporter>::make(sp<IAfMelReporterCallback>::fromExisting(this));
 }
 
 status_t AudioFlinger::setAudioHalPids(const std::vector<pid_t>& pids) {
@@ -526,7 +528,7 @@ status_t AudioFlinger::setSimulateDeviceConnections(bool enabled) {
 }
 
 // getDefaultVibratorInfo_l must be called with AudioFlinger lock held.
-std::optional<media::AudioVibratorInfo> AudioFlinger::getDefaultVibratorInfo_l() {
+std::optional<media::AudioVibratorInfo> AudioFlinger::getDefaultVibratorInfo_l() const {
     if (mAudioVibratorInfos.empty()) {
         return {};
     }
@@ -1035,7 +1037,7 @@ sp<Client> AudioFlinger::registerPid(pid_t pid)
     // (for which promote() is always != 0), otherwise create a new entry and Client.
     sp<Client> client = mClients.valueFor(pid).promote();
     if (client == 0) {
-        client = new Client(this, pid);
+        client = sp<Client>::make(sp<IAfClientCallback>::fromExisting(this), pid);
         mClients.add(pid, client);
     }
 
@@ -2313,16 +2315,16 @@ sp<IAfThreadBase> AudioFlinger::getEffectThread_l(audio_session_t sessionId,
 
 // ----------------------------------------------------------------------------
 
-Client::Client(const sp<AudioFlinger>& audioFlinger, pid_t pid)
+Client::Client(const sp<IAfClientCallback>& afClientCallback, pid_t pid)
     :   RefBase(),
-        mAudioFlinger(audioFlinger),
+        mAfClientCallback(afClientCallback),
         mPid(pid),
         mClientAllocator(AllocatorFactory::getClientAllocator()) {}
 
 // Client destructor must be called with AudioFlinger::mClientLock held
 Client::~Client()
 {
-    mAudioFlinger->removeClient_l(mPid);
+    mAfClientCallback->removeClient_l(mPid);
 }
 
 AllocatorFactory::ClientAllocator& Client::allocator()
@@ -4760,7 +4762,7 @@ Exit:
     return status;
 }
 
-bool AudioFlinger::isNonOffloadableGlobalEffectEnabled_l()
+bool AudioFlinger::isNonOffloadableGlobalEffectEnabled_l() const
 NO_THREAD_SAFETY_ANALYSIS  // thread lock for getEffectChain_l.
 {
     if (mGlobalEffectEnableTime != 0 &&
