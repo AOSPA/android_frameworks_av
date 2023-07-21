@@ -277,7 +277,14 @@ public:
         }
         return false;
     }
-
+    bool isDirectOutput() {
+        if (const auto policyPort = getPolicyAudioPort(); policyPort != nullptr) {
+            if (const auto port = policyPort->asAudioPort(); port != nullptr) {
+                return port->isDirectOutput();
+            }
+        }
+        return false;
+    }
     TrackClientVector clientsList(bool activeOnly = false,
                                   product_strategy_t strategy = PRODUCT_STRATEGY_NONE,
                                   bool preferredDeviceOnly = false) const;

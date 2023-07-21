@@ -7666,6 +7666,8 @@ uint32_t AudioPolicyManager::checkDeviceMuteStrategies(const sp<AudioOutputDescr
         uint32_t tempMuteDurationMs = tempRecommendedMuteDuration > 0 ?
                 tempRecommendedMuteDuration : (outputDesc->latency() * muteLatencyFactor)
                 + routingLatency;
+        if (outputDesc->isDirectOutput() && tempRecommendedMuteDuration > 0)
+            muteWaitMs = tempMuteDurationMs;
 
         for (const auto &activeVs : outputDesc->getActiveVolumeSources()) {
             // make sure that we do not start the temporary mute period too early in case of
@@ -7679,6 +7681,7 @@ uint32_t AudioPolicyManager::checkDeviceMuteStrategies(const sp<AudioOutputDescr
     // wait for the PCM output buffers to empty before proceeding with the rest of the command
     if (muteWaitMs > delayMs) {
         muteWaitMs -= delayMs;
+        ALOGV("%s() muteWaitMs = %d", __func__, muteWaitMs);
         usleep(muteWaitMs * 1000);
         return muteWaitMs;
     }
