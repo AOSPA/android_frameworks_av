@@ -16,7 +16,25 @@
 
 #pragma once
 
-#include "IAfTrack.h"
+#include <android/media/IAudioTrackCallback.h>
+#include <android/media/IEffectClient.h>
+#include <audiomanager/IAudioManager.h>
+#include <audio_utils/MelProcessor.h>
+#include <binder/MemoryDealer.h>
+#include <datapath/AudioStreamIn.h>
+#include <datapath/AudioStreamOut.h>
+#include <datapath/VolumeInterface.h>
+#include <fastpath/FastMixerDumpState.h>
+#include <media/DeviceDescriptorBase.h>
+#include <media/MmapStreamInterface.h>
+#include <media/audiohal/StreamHalInterface.h>
+#include <media/nblog/NBLog.h>
+#include <timing/SyncEvent.h>
+#include <utils/Mutex.h>
+#include <utils/RefBase.h>
+#include <vibrator/ExternalVibration.h>
+
+#include <optional>
 
 namespace android {
 
@@ -26,6 +44,17 @@ class IAfMmapCaptureThread;
 class IAfMmapPlaybackThread;
 class IAfPlaybackThread;
 class IAfRecordThread;
+
+class IAfEffectChain;
+class IAfEffectHandle;
+class IAfEffectModule;
+class IAfPatchPanel;
+class IAfPatchRecord;
+class IAfPatchTrack;
+class IAfRecordTrack;
+class IAfTrack;
+class IAfTrackBase;
+class Client;
 class MelReporter;
 
 // Note this is exposed through IAfThreadBase::afThreadCallback()
@@ -43,6 +72,7 @@ public:
     virtual audio_mode_t getMode() const = 0;
     virtual bool isLowRamDevice() const = 0;
     virtual bool isAudioPolicyReady() const = 0;  // Effects
+    virtual uint32_t getScreenState() const = 0;
     virtual std::optional<media::AudioVibratorInfo> getDefaultVibratorInfo_l() const = 0;
     virtual const sp<IAfPatchPanel>& getPatchPanel() const = 0;
     virtual const sp<MelReporter>& getMelReporter() const = 0;

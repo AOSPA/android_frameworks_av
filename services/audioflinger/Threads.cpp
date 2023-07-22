@@ -94,6 +94,8 @@
 #include <fastpath/AutoPark.h>
 
 #include <pthread.h>
+#include <afutils/DumpTryLock.h>
+#include <afutils/Permission.h>
 #include <afutils/TypedLogger.h>
 
 // ----------------------------------------------------------------------------
@@ -949,7 +951,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
     dprintf(fd, "\n%s thread %p, name %s, tid %d, type %d (%s):\n", isOutput() ? "Output" : "Input",
             this, mThreadName, getTid(), type(), threadTypeToString(type()));
 
-    bool locked = AudioFlinger::dumpTryLock(mLock);
+    const bool locked = afutils::dumpTryLock(mLock);
     if (!locked) {
         dprintf(fd, "  Thread may be deadlocked\n");
     }
@@ -2066,7 +2068,7 @@ PlaybackThread::PlaybackThread(const sp<IAfThreadCallback>& afThreadCallback,
         mUseAsyncWrite(false),
         mWriteAckSequence(0),
         mDrainSequence(0),
-        mScreenState(AudioFlinger::mScreenState),
+        mScreenState(mAfThreadCallback->getScreenState()),
         // index 0 is reserved for normal mixer's submix
         mFastTrackAvailMask(((1 << FastMixerState::sMaxFastTracks) - 1) & ~1),
         mHwSupportsPause(false), mHwPaused(false), mFlushPending(false),
@@ -3399,7 +3401,7 @@ ssize_t PlaybackThread::threadLoop_write()
 
         ATRACE_BEGIN("write");
         // update the setpoint when AudioFlinger::mScreenState changes
-        uint32_t screenState = AudioFlinger::mScreenState;
+        const uint32_t screenState = mAfThreadCallback->getScreenState();
         if (screenState != mScreenState) {
             mScreenState = screenState;
             MonoPipe *pipe = (MonoPipe *)mPipeSink.get();
@@ -9997,7 +9999,7 @@ status_t MmapThread::start(const AudioClient& client,
     audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE;
 
     audio_io_handle_t io = mId;
-    AttributionSourceState adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+    const AttributionSourceState adjAttributionSource = afutils::checkAttributionSourcePackage(
             client.attributionSource);
 
     if (isOutput()) {

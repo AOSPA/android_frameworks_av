@@ -86,7 +86,9 @@
 #include <private/android_filesystem_config.h>
 
 //#define BUFLOG_NDEBUG 0
+#include <afutils/DumpTryLock.h>
 #include <afutils/BufLog.h>
+#include <afutils/Permission.h>
 #include <afutils/TypedLogger.h>
 
 // ----------------------------------------------------------------------------
@@ -125,8 +127,6 @@ static constexpr char kNoEffectsFactory[] = "Effects Factory is absent\n";
 static constexpr char kAudioServiceName[] = "audio";
 
 nsecs_t AudioFlinger::mStandbyTimeInNsecs = kDefaultStandbyTimeInNsecs;
-
-uint32_t AudioFlinger::mScreenState;
 
 // In order to avoid invalidating offloaded tracks each time a Visualizer is turned on and off
 // we define a minimum time during which a global effect is considered enabled.
@@ -268,33 +268,6 @@ class DevicesFactoryHalCallbackImpl : public DevicesFactoryHalCallback {
         notifier.detach();
     }
 };
-
-// TODO b/182392769: use attribution source util
-/* static */
-AttributionSourceState AudioFlinger::checkAttributionSourcePackage(
-        const AttributionSourceState& attributionSource) {
-    Vector<String16> packages;
-    PermissionController{}.getPackagesForUid(attributionSource.uid, packages);
-
-    AttributionSourceState checkedAttributionSource = attributionSource;
-    if (!attributionSource.packageName.has_value()
-            || attributionSource.packageName.value().size() == 0) {
-        if (!packages.isEmpty()) {
-            checkedAttributionSource.packageName =
-                std::move(legacy2aidl_String16_string(packages[0]).value());
-        }
-    } else {
-        String16 opPackageLegacy = VALUE_OR_FATAL(
-            aidl2legacy_string_view_String16(attributionSource.packageName.value_or("")));
-        if (std::find_if(packages.begin(), packages.end(),
-                [&opPackageLegacy](const auto& package) {
-                return opPackageLegacy == package; }) == packages.end()) {
-            ALOGW("The package name(%s) provided does not correspond to the uid %d",
-                    attributionSource.packageName.value_or("").c_str(), attributionSource.uid);
-        }
-    }
-    return checkedAttributionSource;
-}
 
 // ----------------------------------------------------------------------------
 
@@ -639,7 +612,7 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
                  __func__, callingUid, callingPid, clientPid);
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+    adjAttributionSource = afutils::checkAttributionSourcePackage(
             adjAttributionSource);
 
     if (direction == MmapStreamInterface::DIRECTION_OUTPUT) {
@@ -858,12 +831,6 @@ void AudioFlinger::dumpPermissionDenial(int fd, const Vector<String16>& args __u
     write(fd, result.string(), result.size());
 }
 
-bool AudioFlinger::dumpTryLock(Mutex& mutex)
-{
-    status_t err = mutex.timedLock(kDumpLockTimeoutNs);
-    return err == NO_ERROR;
-}
-
 status_t AudioFlinger::dump(int fd, const Vector<String16>& args)
 NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
 {
@@ -871,7 +838,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
         dumpPermissionDenial(fd, args);
     } else {
         // get state of hardware lock
-        bool hardwareLocked = dumpTryLock(mHardwareLock);
+        const bool hardwareLocked = afutils::dumpTryLock(mHardwareLock);
         if (!hardwareLocked) {
             String8 result(kHardwareLockedString);
             write(fd, result.string(), result.size());
@@ -879,7 +846,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             mHardwareLock.unlock();
         }
 
-        const bool locked = dumpTryLock(mLock);
+        const bool locked = afutils::dumpTryLock(mLock);
 
         // failed to lock - AudioFlinger is probably deadlocked
         if (!locked) {
@@ -887,7 +854,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             write(fd, result.string(), result.size());
         }
 
-        bool clientLocked = dumpTryLock(mClientLock);
+        const bool clientLocked = afutils::dumpTryLock(mClientLock);
         if (!clientLocked) {
             String8 result(kClientLockedString);
             write(fd, result.string(), result.size());
@@ -1145,7 +1112,7 @@ status_t AudioFlinger::createTrack(const media::CreateTrackRequest& _input,
         clientPid = callingPid;
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+    adjAttributionSource = afutils::checkAttributionSourcePackage(
             adjAttributionSource);
 
     audio_session_t sessionId = input.sessionId;
@@ -1955,8 +1922,8 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
         String8 screenState;
         if (param.get(String8(AudioParameter::keyScreenState), screenState) == NO_ERROR) {
             bool isOff = (screenState == AudioParameter::valueOff);
-            if (isOff != (AudioFlinger::mScreenState & 1)) {
-                AudioFlinger::mScreenState = ((AudioFlinger::mScreenState & ~1) + 2) | isOff;
+            if (isOff != (mScreenState & 1)) {
+                mScreenState = ((mScreenState & ~1) + 2) | isOff;
             }
         }
         return final_result;
@@ -2311,27 +2278,6 @@ sp<IAfThreadBase> AudioFlinger::getEffectThread_l(audio_session_t sessionId,
     return thread;
 }
 
-
-
-// ----------------------------------------------------------------------------
-
-Client::Client(const sp<IAfClientCallback>& afClientCallback, pid_t pid)
-    :   RefBase(),
-        mAfClientCallback(afClientCallback),
-        mPid(pid),
-        mClientAllocator(AllocatorFactory::getClientAllocator()) {}
-
-// Client destructor must be called with AudioFlinger::mClientLock held
-Client::~Client()
-{
-    mAfClientCallback->removeClient_l(mPid);
-}
-
-AllocatorFactory::ClientAllocator& Client::allocator()
-{
-    return mClientAllocator;
-}
-
 // ----------------------------------------------------------------------------
 
 AudioFlinger::NotificationClient::NotificationClient(const sp<AudioFlinger>& audioFlinger,
@@ -2428,7 +2374,7 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
                  __func__, callingUid, callingPid, currentPid);
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(
+    adjAttributionSource = afutils::checkAttributionSourcePackage(
             adjAttributionSource);
     // we don't yet support anything other than linear PCM
     if (!audio_is_valid_format(input.config.format) || !audio_is_linear_pcm(input.config.format)) {
@@ -4208,7 +4154,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
         adjAttributionSource.pid = VALUE_OR_RETURN_STATUS(legacy2aidl_pid_t_int32_t(callingPid));
         currentPid = callingPid;
     }
-    adjAttributionSource = AudioFlinger::checkAttributionSourcePackage(adjAttributionSource);
+    adjAttributionSource = afutils::checkAttributionSourcePackage(adjAttributionSource);
 
     ALOGV("createEffect pid %d, effectClient %p, priority %d, sessionId %d, io %d, factory %p",
           adjAttributionSource.pid, effectClient.get(), priority, sessionId, io,
@@ -4847,6 +4793,55 @@ bool AudioFlinger::updateOrphanEffectChains_l(const sp<IAfEffectModule>& effect)
     return false;
 }
 
+// ----------------------------------------------------------------------------
+// from PatchPanel
+
+/* List connected audio ports and their attributes */
+status_t AudioFlinger::listAudioPorts(unsigned int* num_ports,
+        struct audio_port* ports) const
+{
+    Mutex::Autolock _l(mLock);
+    return mPatchPanel->listAudioPorts(num_ports, ports);
+}
+
+/* Get supported attributes for a given audio port */
+status_t AudioFlinger::getAudioPort(struct audio_port_v7* port) const {
+    const status_t status = AudioValidator::validateAudioPort(*port);
+    if (status != NO_ERROR) {
+        return status;
+    }
+
+    Mutex::Autolock _l(mLock);
+    return mPatchPanel->getAudioPort(port);
+}
+
+/* Connect a patch between several source and sink ports */
+status_t AudioFlinger::createAudioPatch(
+        const struct audio_patch* patch, audio_patch_handle_t* handle)
+{
+    const status_t status = AudioValidator::validateAudioPatch(*patch);
+    if (status != NO_ERROR) {
+        return status;
+    }
+
+    Mutex::Autolock _l(mLock);
+    return mPatchPanel->createAudioPatch(patch, handle);
+}
+
+/* Disconnect a patch */
+status_t AudioFlinger::releaseAudioPatch(audio_patch_handle_t handle)
+{
+    Mutex::Autolock _l(mLock);
+    return mPatchPanel->releaseAudioPatch(handle);
+}
+
+/* List connected audio ports and they attributes */
+status_t AudioFlinger::listAudioPatches(
+        unsigned int* num_patches, struct audio_patch* patches) const
+{
+    Mutex::Autolock _l(mLock);
+    return mPatchPanel->listAudioPatches(num_patches, patches);
+}
 
 // ----------------------------------------------------------------------------
 
