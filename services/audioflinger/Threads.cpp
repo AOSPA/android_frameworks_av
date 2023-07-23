@@ -20,45 +20,49 @@
 // #define LOG_NDEBUG 0
 #define ATRACE_TAG ATRACE_TAG_AUDIO
 
-#include "Configuration.h"
-#include <math.h>
-#include <fcntl.h>
-#include <memory>
-#include <sstream>
-#include <string>
-#include <linux/futex.h>
-#include <sys/stat.h>
-#include <sys/syscall.h>
+#include "Threads.h"
+
+#include "Client.h"
+#include "IAfEffect.h"
+#include "MelReporter.h"
+#include "ResamplerBufferProvider.h"
+
+#include <afutils/DumpTryLock.h>
+#include <afutils/Permission.h>
+#include <afutils/TypedLogger.h>
+#include <afutils/Vibrator.h>
+#include <audio_utils/MelProcessor.h>
+#include <audio_utils/Metadata.h>
+#ifdef DEBUG_CPU_USAGE
+#include <audio_utils/Statistics.h>
+#include <cpustats/ThreadCpuUsage.h>
+#endif
+#include <audio_utils/channels.h>
+#include <audio_utils/format.h>
+#include <audio_utils/minifloat.h>
+#include <audio_utils/mono_blend.h>
+#include <audio_utils/primitives.h>
+#include <audio_utils/safe_math.h>
+#include <audiomanager/AudioManager.h>
+#include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
+#include <binder/PersistableBundle.h>
 #include <cutils/bitops.h>
 #include <cutils/properties.h>
-#include <binder/PersistableBundle.h>
+#include <fastpath/AutoPark.h>
 #include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioParameter.h>
 #include <media/AudioResamplerPublic.h>
+#ifdef ADD_BATTERY_DATA
+#include <media/IMediaPlayerService.h>
+#include <media/IMediaDeathNotifier.h>
+#endif
+#include <media/MmapStreamCallback.h>
 #include <media/RecordBufferConverter.h>
 #include <media/TypeConverter.h>
-#include <utils/Log.h>
-#include <utils/Trace.h>
-
-#include <private/media/AudioTrackShared.h>
-#include <private/android_filesystem_config.h>
-#include <audio_utils/Balance.h>
-#include <audio_utils/MelProcessor.h>
-#include <audio_utils/Metadata.h>
-#include <audio_utils/channels.h>
-#include <audio_utils/mono_blend.h>
-#include <audio_utils/primitives.h>
-#include <audio_utils/format.h>
-#include <audio_utils/minifloat.h>
-#include <audio_utils/safe_math.h>
-#include <system/audio_effects/effect_aec.h>
-#include <system/audio_effects/effect_downmix.h>
-#include <system/audio_effects/effect_ns.h>
-#include <system/audio_effects/effect_spatializer.h>
-#include <system/audio.h>
-
-// NBAIO implementations
+#include <media/audiohal/EffectsFactoryHalInterface.h>
+#include <media/audiohal/StreamHalInterface.h>
 #include <media/nbaio/AudioStreamInSource.h>
 #include <media/nbaio/AudioStreamOutSink.h>
 #include <media/nbaio/MonoPipe.h>
@@ -68,35 +72,27 @@
 #include <media/nbaio/SourceAudioBufferProvider.h>
 #include <mediautils/BatteryNotifier.h>
 #include <mediautils/Process.h>
-
-#include <audiomanager/AudioManager.h>
-#include <powermanager/PowerManager.h>
-
-#include <media/audiohal/EffectsFactoryHalInterface.h>
-#include <media/audiohal/StreamHalInterface.h>
-
-#include "AudioFlinger.h"
-#include "Threads.h"
-
 #include <mediautils/SchedulingPolicyService.h>
 #include <mediautils/ServiceUtilities.h>
+#include <powermanager/PowerManager.h>
+#include <private/android_filesystem_config.h>
+#include <private/media/AudioTrackShared.h>
+#include <system/audio_effects/effect_aec.h>
+#include <system/audio_effects/effect_downmix.h>
+#include <system/audio_effects/effect_ns.h>
+#include <system/audio_effects/effect_spatializer.h>
+#include <utils/Log.h>
+#include <utils/Trace.h>
 
-#ifdef ADD_BATTERY_DATA
-#include <media/IMediaPlayerService.h>
-#include <media/IMediaDeathNotifier.h>
-#endif
-
-#ifdef DEBUG_CPU_USAGE
-#include <audio_utils/Statistics.h>
-#include <cpustats/ThreadCpuUsage.h>
-#endif
-
-#include <fastpath/AutoPark.h>
-
+#include <fcntl.h>
+#include <linux/futex.h>
+#include <math.h>
+#include <memory>
 #include <pthread.h>
-#include <afutils/DumpTryLock.h>
-#include <afutils/Permission.h>
-#include <afutils/TypedLogger.h>
+#include <sstream>
+#include <string>
+#include <sys/stat.h>
+#include <sys/syscall.h>
 
 // ----------------------------------------------------------------------------
 
@@ -127,6 +123,9 @@ namespace android {
 using audioflinger::SyncEvent;
 using media::IEffectClient;
 using content::AttributionSourceState;
+
+// Keep in sync with java definition in media/java/android/media/AudioRecord.java
+static constexpr int32_t kMaxSharedAudioHistoryMs = 5000;
 
 // retry counts for buffer fill timeout
 // 50 * ~20msecs = 1 second
@@ -244,7 +243,83 @@ static int sFastTrackMultiplier = kFastTrackMultiplier;
 // and that all "fast" AudioRecord clients read from.  In either case, the size can be small.
 static const size_t kRecordThreadReadOnlyHeapSize = 0xD000;
 
+static const nsecs_t kDefaultStandbyTimeInNsecs = seconds(3);
+
+static nsecs_t getStandbyTimeInNanos() {
+    static nsecs_t standbyTimeInNanos = []() {
+        const int ms = property_get_int32("ro.audio.flinger_standbytime_ms",
+                    kDefaultStandbyTimeInNsecs / NANOS_PER_MILLISECOND);
+        ALOGI("%s: Using %d ms as standby time", __func__, ms);
+        return milliseconds(ms);
+    }();
+    return standbyTimeInNanos;
+}
+
+// Set kEnableExtendedChannels to true to enable greater than stereo output
+// for the MixerThread and device sink.  Number of channels allowed is
+// FCC_2 <= channels <= FCC_LIMIT.
+constexpr bool kEnableExtendedChannels = true;
+
+// Returns true if channel mask is permitted for the PCM sink in the MixerThread
+/* static */
+bool IAfThreadBase::isValidPcmSinkChannelMask(audio_channel_mask_t channelMask) {
+    switch (audio_channel_mask_get_representation(channelMask)) {
+    case AUDIO_CHANNEL_REPRESENTATION_POSITION: {
+        // Haptic channel mask is only applicable for channel position mask.
+        const uint32_t channelCount = audio_channel_count_from_out_mask(
+                static_cast<audio_channel_mask_t>(channelMask & ~AUDIO_CHANNEL_HAPTIC_ALL));
+        const uint32_t maxChannelCount = kEnableExtendedChannels
+                ? FCC_LIMIT : FCC_2;
+        if (channelCount < FCC_2 // mono is not supported at this time
+                || channelCount > maxChannelCount) {
+            return false;
+        }
+        // check that channelMask is the "canonical" one we expect for the channelCount.
+        return audio_channel_position_mask_is_out_canonical(channelMask);
+        }
+    case AUDIO_CHANNEL_REPRESENTATION_INDEX:
+        if (kEnableExtendedChannels) {
+            const uint32_t channelCount = audio_channel_count_from_out_mask(channelMask);
+            if (channelCount >= FCC_2 // mono is not supported at this time
+                    && channelCount <= FCC_LIMIT) {
+                return true;
+            }
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+// Set kEnableExtendedPrecision to true to use extended precision in MixerThread
+constexpr bool kEnableExtendedPrecision = true;
+
+// Returns true if format is permitted for the PCM sink in the MixerThread
+/* static */
+bool IAfThreadBase::isValidPcmSinkFormat(audio_format_t format) {
+    switch (format) {
+    case AUDIO_FORMAT_PCM_16_BIT:
+        return true;
+    case AUDIO_FORMAT_PCM_FLOAT:
+    case AUDIO_FORMAT_PCM_24_BIT_PACKED:
+    case AUDIO_FORMAT_PCM_32_BIT:
+    case AUDIO_FORMAT_PCM_8_24_BIT:
+        return kEnableExtendedPrecision;
+    default:
+        return false;
+    }
+}
+
 // ----------------------------------------------------------------------------
+
+// formatToString() needs to be exact for MediaMetrics purposes.
+// Do not use media/TypeConverter.h toString().
+/* static */
+std::string IAfThreadBase::formatToString(audio_format_t format) {
+    std::string result;
+    FormatConverter::toString(format, result);
+    return result;
+}
 
 // TODO: move all toString helpers to audio.h
 // under  #ifdef __cplusplus #endif
@@ -989,12 +1064,14 @@ void ThreadBase::dumpBase_l(int fd, const Vector<String16>& /* args */)
     dprintf(fd, "  Standby: %s\n", mStandby ? "yes" : "no");
     dprintf(fd, "  Sample rate: %u Hz\n", mSampleRate);
     dprintf(fd, "  HAL frame count: %zu\n", mFrameCount);
-    dprintf(fd, "  HAL format: 0x%x (%s)\n", mHALFormat, formatToString(mHALFormat).c_str());
+    dprintf(fd, "  HAL format: 0x%x (%s)\n", mHALFormat,
+            IAfThreadBase::formatToString(mHALFormat).c_str());
     dprintf(fd, "  HAL buffer size: %zu bytes\n", mBufferSize);
     dprintf(fd, "  Channel count: %u\n", mChannelCount);
     dprintf(fd, "  Channel mask: 0x%08x (%s)\n", mChannelMask,
             channelMaskToString(mChannelMask, mType != RECORD).string());
-    dprintf(fd, "  Processing format: 0x%x (%s)\n", mFormat, formatToString(mFormat).c_str());
+    dprintf(fd, "  Processing format: 0x%x (%s)\n", mFormat,
+            IAfThreadBase::formatToString(mFormat).c_str());
     dprintf(fd, "  Processing frame size: %zu bytes\n", mFrameSize);
     dprintf(fd, "  Pending config events:");
     size_t numConfig = mConfigEvents.size();
@@ -2042,12 +2119,12 @@ PlaybackThread::PlaybackThread(const sp<IAfThreadCallback>& afThreadCallback,
                                              audio_config_base_t *mixerConfig)
     :   ThreadBase(afThreadCallback, id, type, systemReady, true /* isOut */),
         mNormalFrameCount(0), mSinkBuffer(NULL),
-        mMixerBufferEnabled(AudioFlinger::kEnableExtendedPrecision || type == SPATIALIZER),
+        mMixerBufferEnabled(kEnableExtendedPrecision || type == SPATIALIZER),
         mMixerBuffer(NULL),
         mMixerBufferSize(0),
         mMixerBufferFormat(AUDIO_FORMAT_INVALID),
         mMixerBufferValid(false),
-        mEffectBufferEnabled(AudioFlinger::kEnableExtendedPrecision || type == SPATIALIZER),
+        mEffectBufferEnabled(kEnableExtendedPrecision || type == SPATIALIZER),
         mEffectBuffer(NULL),
         mEffectBufferSize(0),
         mEffectBufferFormat(AUDIO_FORMAT_INVALID),
@@ -2062,7 +2139,7 @@ PlaybackThread::PlaybackThread(const sp<IAfThreadCallback>& afThreadCallback,
         mNumWrites(0), mNumDelayedWrites(0), mInWrite(false),
         mMixerStatus(MIXER_IDLE),
         mMixerStatusIgnoringFastTracks(MIXER_IDLE),
-        mStandbyDelayNs(AudioFlinger::mStandbyTimeInNsecs),
+        mStandbyDelayNs(getStandbyTimeInNanos()),
         mBytesRemaining(0),
         mCurrentWriteLength(0),
         mUseAsyncWrite(false),
@@ -2816,7 +2893,7 @@ NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mLock
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.
             mLock.unlock();
-            const os::HapticScale intensity = AudioFlinger::onExternalVibrationStart(
+            const os::HapticScale intensity = afutils::onExternalVibrationStart(
                     track->getExternalVibration());
             std::optional<media::AudioVibratorInfo> vibratorInfo;
             {
@@ -3030,7 +3107,7 @@ void PlaybackThread::readOutputParameters_l()
     if (!audio_is_output_channel(mChannelMask)) {
         LOG_ALWAYS_FATAL("HAL channel mask %#x not valid for output", mChannelMask);
     }
-    if (hasMixer() && !AudioFlinger::isValidPcmSinkChannelMask(mChannelMask)) {
+    if (hasMixer() && !isValidPcmSinkChannelMask(mChannelMask)) {
         LOG_ALWAYS_FATAL("HAL channel mask %#x not supported for mixed output",
                 mChannelMask);
     }
@@ -3053,7 +3130,7 @@ void PlaybackThread::readOutputParameters_l()
     if (!audio_is_valid_format(mFormat)) {
         LOG_ALWAYS_FATAL("HAL format %#x not valid for output", mFormat);
     }
-    if (hasMixer() && !AudioFlinger::isValidPcmSinkFormat(mFormat)) {
+    if (hasMixer() && !isValidPcmSinkFormat(mFormat)) {
         LOG_FATAL("HAL format %#x not supported for mixed output",
                 mFormat);
     }
@@ -3199,7 +3276,7 @@ void PlaybackThread::readOutputParameters_l()
     audio_output_flags_t flags = mOutput->flags;
     mediametrics::LogItem item(mThreadMetrics.getMetricsId()); // TODO: method in ThreadMetrics?
     item.set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_READPARAMETERS)
-        .set(AMEDIAMETRICS_PROP_ENCODING, formatToString(mFormat).c_str())
+        .set(AMEDIAMETRICS_PROP_ENCODING, IAfThreadBase::formatToString(mFormat).c_str())
         .set(AMEDIAMETRICS_PROP_SAMPLERATE, (int32_t)mSampleRate)
         .set(AMEDIAMETRICS_PROP_CHANNELMASK, (int32_t)mChannelMask)
         .set(AMEDIAMETRICS_PROP_CHANNELCOUNT, (int32_t)mChannelCount)
@@ -3210,7 +3287,7 @@ void PlaybackThread::readOutputParameters_l()
         .set(AMEDIAMETRICS_PROP_PREFIX_HAPTIC AMEDIAMETRICS_PROP_CHANNELCOUNT,
                 (int32_t)mHapticChannelCount)
         .set(AMEDIAMETRICS_PROP_PREFIX_HAL    AMEDIAMETRICS_PROP_ENCODING,
-                formatToString(mHALFormat).c_str())
+                IAfThreadBase::formatToString(mHALFormat).c_str())
         .set(AMEDIAMETRICS_PROP_PREFIX_HAL    AMEDIAMETRICS_PROP_FRAMECOUNT,
                 (int32_t)mFrameCount) // sic - added HAL
         ;
@@ -3535,7 +3612,7 @@ void PlaybackThread::cacheParameters_l()
     mActiveSleepTimeUs = activeSleepTimeUs();
     mIdleSleepTimeUs = idleSleepTimeUs();
 
-    mStandbyDelayNs = AudioFlinger::mStandbyTimeInNsecs;
+    mStandbyDelayNs = getStandbyTimeInNanos();
 
     // make sure standby delay is not too short when connected to an A2DP sink to avoid
     // truncating audio when going to standby.
@@ -4633,7 +4710,7 @@ NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mLock
             mLock.unlock();
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.
-            AudioFlinger::onExternalVibrationStop(track->getExternalVibration());
+            afutils::onExternalVibrationStop(track->getExternalVibration());
             mLock.lock();
 
             // When the track is stop, set the haptic intensity as MUTE
@@ -6182,7 +6259,7 @@ bool MixerThread::checkForNewParameter_l(const String8& keyValuePair,
         reconfig = true;
     }
     if (param.getInt(String8(AudioParameter::keyFormat), value) == NO_ERROR) {
-        if (!AudioFlinger::isValidPcmSinkFormat(static_cast<audio_format_t>(value))) {
+        if (!isValidPcmSinkFormat(static_cast<audio_format_t>(value))) {
             status = BAD_VALUE;
         } else {
             // no need to save value, since it's constant
@@ -6190,7 +6267,7 @@ bool MixerThread::checkForNewParameter_l(const String8& keyValuePair,
         }
     }
     if (param.getInt(String8(AudioParameter::keyChannels), value) == NO_ERROR) {
-        if (!AudioFlinger::isValidPcmSinkChannelMask(static_cast<audio_channel_mask_t>(value))) {
+        if (!isValidPcmSinkChannelMask(static_cast<audio_channel_mask_t>(value))) {
             status = BAD_VALUE;
         } else {
             // no need to save value, since it's constant
@@ -8658,7 +8735,7 @@ sp<IAfRecordTrack> RecordThread::createRecordTrack_l(
             goto Exit;
         }
         if (maxSharedAudioHistoryMs < 0
-                || maxSharedAudioHistoryMs > AudioFlinger::kMaxSharedAudioHistoryMs) {
+                || maxSharedAudioHistoryMs > kMaxSharedAudioHistoryMs) {
             lStatus = BAD_VALUE;
             goto Exit;
         }
@@ -9482,7 +9559,7 @@ void RecordThread::readInputParameters_l()
     audio_input_flags_t flags = mInput->flags;
     mediametrics::LogItem item(mThreadMetrics.getMetricsId());
     item.set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_READPARAMETERS)
-        .set(AMEDIAMETRICS_PROP_ENCODING, formatToString(mFormat).c_str())
+        .set(AMEDIAMETRICS_PROP_ENCODING, IAfThreadBase::formatToString(mFormat).c_str())
         .set(AMEDIAMETRICS_PROP_FLAGS, toString(flags).c_str())
         .set(AMEDIAMETRICS_PROP_SAMPLERATE, (int32_t)mSampleRate)
         .set(AMEDIAMETRICS_PROP_CHANNELMASK, (int32_t)mChannelMask)
@@ -10221,7 +10298,7 @@ void MmapThread::readHalParameters_l()
     // TODO: make a readHalParameters call?
     mediametrics::LogItem item(mThreadMetrics.getMetricsId());
     item.set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_READPARAMETERS)
-        .set(AMEDIAMETRICS_PROP_ENCODING, formatToString(mFormat).c_str())
+        .set(AMEDIAMETRICS_PROP_ENCODING, IAfThreadBase::formatToString(mFormat).c_str())
         .set(AMEDIAMETRICS_PROP_SAMPLERATE, (int32_t)mSampleRate)
         .set(AMEDIAMETRICS_PROP_CHANNELMASK, (int32_t)mChannelMask)
         .set(AMEDIAMETRICS_PROP_CHANNELCOUNT, (int32_t)mChannelCount)
@@ -10234,7 +10311,7 @@ void MmapThread::readHalParameters_l()
                 (int32_t)mHapticChannelCount)
         */
         .set(AMEDIAMETRICS_PROP_PREFIX_HAL    AMEDIAMETRICS_PROP_ENCODING,
-                formatToString(mHALFormat).c_str())
+                IAfThreadBase::formatToString(mHALFormat).c_str())
         .set(AMEDIAMETRICS_PROP_PREFIX_HAL    AMEDIAMETRICS_PROP_FRAMECOUNT,
                 (int32_t)mFrameCount) // sic - added HAL
         .record();

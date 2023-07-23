@@ -15,149 +15,37 @@
 ** limitations under the License.
 */
 
-#ifndef ANDROID_AUDIO_FLINGER_H
-#define ANDROID_AUDIO_FLINGER_H
+#pragma once
 
-#include "Configuration.h"
-#include <atomic>
-#include <mutex>
-#include <chrono>
-#include <deque>
-#include <map>
-#include <numeric>
-#include <optional>
-#include <set>
-#include <string>
-#include <vector>
-#include <stdint.h>
-#include <sys/types.h>
-#include <limits.h>
-
-#include <android/media/BnAudioTrack.h>
-#include <android/media/IAudioFlingerClient.h>
-#include <android/media/IAudioTrackCallback.h>
-#include <android/os/BnExternalVibrationController.h>
-#include <android/content/AttributionSourceState.h>
-
-
-#include <android-base/macros.h>
-#include <cutils/atomic.h>
-#include <cutils/compiler.h>
-
-#include <cutils/properties.h>
-#include <media/IAudioFlinger.h>
-#include <media/AudioSystem.h>
-#include <media/AudioTrack.h>
-#include <media/MmapStreamInterface.h>
-#include <media/MmapStreamCallback.h>
-
-#include <utils/Errors.h>
-#include <utils/threads.h>
-#include <utils/SortedVector.h>
-#include <utils/TypeHelpers.h>
-#include <utils/Vector.h>
-
-#include <binder/AppOpsManager.h>
-#include <binder/BinderService.h>
-#include <binder/IAppOpsCallback.h>
-#include <binder/MemoryDealer.h>
-
-#include <system/audio.h>
-#include <system/audio_policy.h>
-
-#include <media/audiohal/EffectBufferHalInterface.h>
-#include <media/audiohal/StreamHalInterface.h>
-#include <media/AudioBufferProvider.h>
-#include <media/AudioContainers.h>
-#include <media/AudioDeviceTypeAddr.h>
-#include <media/AudioMixer.h>
-#include <media/DeviceDescriptorBase.h>
-#include <media/ExtendedAudioBufferProvider.h>
-#include <media/VolumeShaper.h>
-#include <mediautils/BatteryNotifier.h>
-#include <mediautils/ServiceUtilities.h>
-#include <mediautils/SharedMemoryAllocator.h>
-#include <mediautils/Synchronization.h>
-#include <mediautils/ThreadSnapshot.h>
-
-#include <afutils/AllocatorFactory.h>
-#include <afutils/AudioWatchdog.h>
-#include <afutils/NBAIO_Tee.h>
-
-#include <audio_utils/clock.h>
-#include <audio_utils/FdToString.h>
-#include <audio_utils/LinearMap.h>
-#include <audio_utils/MelAggregator.h>
-#include <audio_utils/MelProcessor.h>
-#include <audio_utils/SimpleLog.h>
-#include <audio_utils/TimestampVerifier.h>
-
-#include <sounddose/SoundDoseManager.h>
-#include <timing/MonotonicFrameCounter.h>
-#include <timing/SyncEvent.h>
-#include <timing/SynchronizedRecordState.h>
-
-#include <datapath/AudioHwDevice.h>
-#include <datapath/AudioStreamIn.h>
-#include <datapath/AudioStreamOut.h>
-#include <datapath/SpdifStreamOut.h>
-#include <datapath/ThreadMetrics.h>
-#include <datapath/TrackMetrics.h>
-#include <datapath/VolumeInterface.h>
-#include <fastpath/FastCapture.h>
-#include <fastpath/FastMixer.h>
-#include <media/nbaio/NBAIO.h>
-
-#include <android/os/IPowerManager.h>
-
-#include <media/nblog/NBLog.h>
-#include <private/media/AudioEffectShared.h>
-#include <private/media/AudioTrackShared.h>
-
-#include <vibrator/ExternalVibration.h>
-#include <vibrator/ExternalVibrationUtils.h>
-
-#include "android/media/BnAudioRecord.h"
-#include "android/media/BnEffect.h"
-
+// Classes and interfaces directly used.
 #include "Client.h"
-#include "ResamplerBufferProvider.h"
-
-// include AudioFlinger component interfaces
-#include "IAfPatchPanel.h"  // this should be listed before other IAf* interfaces.
+#include "DeviceEffectManager.h"
 #include "IAfEffect.h"
+#include "IAfPatchPanel.h"
 #include "IAfThread.h"
 #include "IAfTrack.h"
-
-// Classes that depend on IAf* interfaces but are not cross-dependent.
-#include "PatchCommandThread.h"
-#include "DeviceEffectManager.h"
 #include "MelReporter.h"
+#include "PatchCommandThread.h"
+
+// External classes
+#include <audio_utils/FdToString.h>
+#include <audio_utils/SimpleLog.h>
+#include <media/IAudioFlinger.h>
+#include <media/MediaMetricsItem.h>
+#include <media/audiohal/DevicesFactoryHalInterface.h>
+#include <mediautils/ServiceUtilities.h>
+#include <mediautils/Synchronization.h>
+
+// not needed with the includes above, added to prevent transitive include dependency.
+#include <utils/KeyedVector.h>
+#include <utils/String16.h>
+#include <atomic>
+#include <functional>
+#include <map>
+#include <optional>
+#include <set>
 
 namespace android {
-
-class AudioMixer;
-class AudioBuffer;
-class AudioResampler;
-class DeviceHalInterface;
-class DevicesFactoryHalCallback;
-class DevicesFactoryHalInterface;
-class EffectsFactoryHalInterface;
-class FastMixer;
-class IAudioManager;
-class PassthruBufferProvider;
-class ServerProxy;
-
-// ----------------------------------------------------------------------------
-
-static const nsecs_t kDefaultStandbyTimeInNsecs = seconds(3);
-
-using android::content::AttributionSourceState;
-
-struct stream_type_t {
-    float volume = 1.f;
-    bool mute = false;
-};
 
 class AudioFlinger
     : public AudioFlingerServerAdapter::Delegate  // IAudioFlinger client interface
@@ -472,6 +360,10 @@ private:
     sp<EffectsFactoryHalInterface> getEffectsFactory();
 
 public:
+    // TODO(b/292281786): Remove this when Oboeservice can get access to
+    // openMmapStream through an IAudioFlinger handle directly.
+    static inline std::atomic<AudioFlinger*> gAudioFlinger = nullptr;
+
     status_t openMmapStream(MmapStreamInterface::stream_direction_t direction,
                             const audio_attributes_t *attr,
                             audio_config_base_t *config,
@@ -481,11 +373,6 @@ public:
                             const sp<MmapStreamCallback>& callback,
                             sp<MmapStreamInterface>& interface,
                             audio_port_handle_t *handle);
-
-    static os::HapticScale onExternalVibrationStart(
-        const sp<os::ExternalVibration>& externalVibration);
-    static void onExternalVibrationStop(const sp<os::ExternalVibration>& externalVibration);
-
 private:
     // FIXME The 400 is temporarily too high until a leak of writers in media.log is fixed.
     static const size_t kLogMemorySize = 400 * 1024;
@@ -507,69 +394,6 @@ private:
 
     AudioHwDevice*          findSuitableHwDev_l(audio_module_handle_t module,
                                                 audio_devices_t deviceType);
-
-    // Set kEnableExtendedChannels to true to enable greater than stereo output
-    // for the MixerThread and device sink.  Number of channels allowed is
-    // FCC_2 <= channels <= AudioMixer::MAX_NUM_CHANNELS.
-    static const bool kEnableExtendedChannels = true;
-
-public:
-    // Remove this when Oboeservice is updated to obtain handle directly.
-    static inline std::atomic<AudioFlinger*> gAudioFlinger = nullptr;
-
-    // Returns true if channel mask is permitted for the PCM sink in the MixerThread
-    static inline bool isValidPcmSinkChannelMask(audio_channel_mask_t channelMask) {
-        switch (audio_channel_mask_get_representation(channelMask)) {
-        case AUDIO_CHANNEL_REPRESENTATION_POSITION: {
-            // Haptic channel mask is only applicable for channel position mask.
-            const uint32_t channelCount = audio_channel_count_from_out_mask(
-                    static_cast<audio_channel_mask_t>(channelMask & ~AUDIO_CHANNEL_HAPTIC_ALL));
-            const uint32_t maxChannelCount = kEnableExtendedChannels
-                    ? AudioMixer::MAX_NUM_CHANNELS : FCC_2;
-            if (channelCount < FCC_2 // mono is not supported at this time
-                    || channelCount > maxChannelCount) {
-                return false;
-            }
-            // check that channelMask is the "canonical" one we expect for the channelCount.
-            return audio_channel_position_mask_is_out_canonical(channelMask);
-            }
-        case AUDIO_CHANNEL_REPRESENTATION_INDEX:
-            if (kEnableExtendedChannels) {
-                const uint32_t channelCount = audio_channel_count_from_out_mask(channelMask);
-                if (channelCount >= FCC_2 // mono is not supported at this time
-                        && channelCount <= AudioMixer::MAX_NUM_CHANNELS) {
-                    return true;
-                }
-            }
-            return false;
-        default:
-            return false;
-        }
-    }
-
-    // Set kEnableExtendedPrecision to true to use extended precision in MixerThread
-    static const bool kEnableExtendedPrecision = true;
-
-    // Returns true if format is permitted for the PCM sink in the MixerThread
-    static inline bool isValidPcmSinkFormat(audio_format_t format) {
-        switch (format) {
-        case AUDIO_FORMAT_PCM_16_BIT:
-            return true;
-        case AUDIO_FORMAT_PCM_FLOAT:
-        case AUDIO_FORMAT_PCM_24_BIT_PACKED:
-        case AUDIO_FORMAT_PCM_32_BIT:
-        case AUDIO_FORMAT_PCM_8_24_BIT:
-            return kEnableExtendedPrecision;
-        default:
-            return false;
-        }
-    }
-
-    // standby delay for MIXER and DUPLICATING playback threads is read from property
-    // ro.audio.flinger_standbytime_ms or defaults to kDefaultStandbyTimeInNsecs
-    static nsecs_t          mStandbyTimeInNsecs;
-
-private:
 
     // incremented by 2 when screen state changes, bit 0 == 1 means "off"
     // AudioFlinger::setParameters() updates with mLock.
@@ -872,11 +696,6 @@ private:
 
     static inline constexpr const char *mMetricsId = AMEDIAMETRICS_KEY_AUDIO_FLINGER;
 
-public:
-    // Keep in sync with java definition in media/java/android/media/AudioRecord.java
-    static constexpr int32_t kMaxSharedAudioHistoryMs = 5000;
-private:
-
     std::map<media::audio::common::AudioMMapPolicyType,
              std::vector<media::audio::common::AudioMMapPolicyInfo>> mPolicyInfos;
     int32_t mAAudioBurstsPerBuffer = 0;
@@ -889,14 +708,6 @@ private:
     std::atomic_bool mBluetoothLatencyModesEnabled;
 };
 
-std::string formatToString(audio_format_t format);
-std::string inputFlagsToString(audio_input_flags_t flags);
-std::string outputFlagsToString(audio_output_flags_t flags);
-std::string devicesToString(audio_devices_t devices);
-const char *sourceToString(audio_source_t source);
-
 // ----------------------------------------------------------------------------
 
 } // namespace android
-
-#endif // ANDROID_AUDIO_FLINGER_H

@@ -15,7 +15,6 @@
 ** limitations under the License.
 */
 
-
 #define LOG_TAG "AudioFlinger"
 //#define LOG_NDEBUG 0
 
@@ -23,73 +22,44 @@
 #define AUDIO_ARRAYS_STATIC_CHECK 1
 
 #include "Configuration.h"
-#include <dirent.h>
-#include <math.h>
-#include <signal.h>
-#include <string>
-#include <sys/time.h>
-#include <sys/resource.h>
-#include <thread>
-
-#include <android-base/stringprintf.h>
-#include <android/media/IAudioPolicyService.h>
-#include <android/os/IExternalVibratorService.h>
-#include <binder/IPCThreadState.h>
-#include <binder/IServiceManager.h>
-#include <utils/Log.h>
-#include <utils/Trace.h>
-#include <binder/Parcel.h>
-#include <media/audiohal/AudioHalVersionInfo.h>
-#include <media/audiohal/DeviceHalInterface.h>
-#include <media/audiohal/DevicesFactoryHalInterface.h>
-#include <media/audiohal/EffectsFactoryHalInterface.h>
-#include <media/AudioParameter.h>
-#include <media/MediaMetricsItem.h>
-#include <media/TypeConverter.h>
-#include <mediautils/TimeCheck.h>
-#include <memunreachable/memunreachable.h>
-#include <utils/String16.h>
-#include <utils/threads.h>
-
-#include <cutils/atomic.h>
-#include <cutils/properties.h>
-
-#include <system/audio.h>
-#include <audiomanager/IAudioManager.h>
-
 #include "AudioFlinger.h"
 #include "EffectConfiguration.h"
+
+//#define BUFLOG_NDEBUG 0
+#include <afutils/BufLog.h>
+#include <afutils/DumpTryLock.h>
+#include <afutils/Permission.h>
 #include <afutils/PropertyUtils.h>
-
-#include <media/AudioResamplerPublic.h>
-
-#include <system/audio_effects/effect_visualizer.h>
-#include <system/audio_effects/effect_ns.h>
-#include <system/audio_effects/effect_aec.h>
-#include <system/audio_effects/effect_hapticgenerator.h>
-#include <system/audio_effects/effect_spatializer.h>
-
-#include <audio_utils/primitives.h>
-
-#include <powermanager/PowerManager.h>
-
-#include <media/IMediaLogService.h>
+#include <afutils/TypedLogger.h>
+#include <android-base/stringprintf.h>
+#include <android/media/IAudioPolicyService.h>
+#include <audiomanager/IAudioManager.h>
+#include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
+#include <binder/Parcel.h>
+#include <cutils/properties.h>
 #include <media/AidlConversion.h>
+#include <media/AudioParameter.h>
 #include <media/AudioValidator.h>
-#include <media/nbaio/Pipe.h>
-#include <media/nbaio/PipeReader.h>
+#include <media/IMediaLogService.h>
+#include <media/MediaMetricsItem.h>
+#include <media/TypeConverter.h>
 #include <mediautils/BatteryNotifier.h>
 #include <mediautils/MemoryLeakTrackUtil.h>
 #include <mediautils/MethodStatistics.h>
 #include <mediautils/ServiceUtilities.h>
 #include <mediautils/TimeCheck.h>
-#include <private/android_filesystem_config.h>
+#include <memunreachable/memunreachable.h>
+// required for effect matching
+#include <system/audio_effects/effect_aec.h>
+#include <system/audio_effects/effect_ns.h>
+#include <system/audio_effects/effect_spatializer.h>
+#include <system/audio_effects/effect_visualizer.h>
+#include <utils/Log.h>
 
-//#define BUFLOG_NDEBUG 0
-#include <afutils/DumpTryLock.h>
-#include <afutils/BufLog.h>
-#include <afutils/Permission.h>
-#include <afutils/TypedLogger.h>
+// not needed with the includes above, added to prevent transitive include dependency.
+#include <chrono>
+#include <thread>
 
 // ----------------------------------------------------------------------------
 
@@ -126,8 +96,6 @@ static constexpr char kNoEffectsFactory[] = "Effects Factory is absent\n";
 
 static constexpr char kAudioServiceName[] = "audio";
 
-nsecs_t AudioFlinger::mStandbyTimeInNsecs = kDefaultStandbyTimeInNsecs;
-
 // In order to avoid invalidating offloaded tracks each time a Visualizer is turned on and off
 // we define a minimum time during which a global effect is considered enabled.
 static const nsecs_t kMinGlobalEffectEnabletimeNs = seconds(7200);
@@ -146,21 +114,6 @@ static void sMediaLogInit()
     if (sMediaLogServiceAsBinder != 0) {
         sMediaLogService = interface_cast<IMediaLogService>(sMediaLogServiceAsBinder);
     }
-}
-
-// Keep a strong reference to external vibrator service
-static sp<os::IExternalVibratorService> sExternalVibratorService;
-
-static sp<os::IExternalVibratorService> getExternalVibratorService() {
-    if (sExternalVibratorService == 0) {
-        sp<IBinder> binder = defaultServiceManager()->getService(
-            String16("external_vibrator_service"));
-        if (binder != 0) {
-            sExternalVibratorService =
-                interface_cast<os::IExternalVibratorService>(binder);
-        }
-    }
-    return sExternalVibratorService;
 }
 
 // Creates association between Binder code to name for IAudioFlinger.
@@ -271,14 +224,6 @@ class DevicesFactoryHalCallbackImpl : public DevicesFactoryHalCallback {
 
 // ----------------------------------------------------------------------------
 
-std::string formatToString(audio_format_t format) {
-    std::string result;
-    FormatConverter::toString(format, result);
-    return result;
-}
-
-// ----------------------------------------------------------------------------
-
 void AudioFlinger::instantiate() {
     sp<IServiceManager> sm(defaultServiceManager());
     sm->addService(String16(IAudioFlinger::DEFAULT_SERVICE_NAME),
@@ -357,20 +302,6 @@ AudioFlinger::AudioFlinger()
 void AudioFlinger::onFirstRef()
 {
     Mutex::Autolock _l(mLock);
-
-    /* TODO: move all this work into an Init() function */
-    char val_str[PROPERTY_VALUE_MAX] = { 0 };
-    if (property_get("ro.audio.flinger_standbytime_ms", val_str, NULL) >= 0) {
-        uint32_t int_val;
-        if (1 == sscanf(val_str, "%u", &int_val)) {
-            mStandbyTimeInNsecs = milliseconds(int_val);
-            ALOGI("Using %u mSec as standby time.", int_val);
-        } else {
-            mStandbyTimeInNsecs = kDefaultStandbyTimeInNsecs;
-            ALOGI("Using default %u mSec as standby time.",
-                    (uint32_t)(mStandbyTimeInNsecs / 1000000));
-        }
-    }
 
     mMode = AUDIO_MODE_NORMAL;
 
@@ -554,7 +485,7 @@ status_t MmapStreamInterface::openMmapStream(MmapStreamInterface::stream_directi
                                              sp<MmapStreamInterface>& interface,
                                              audio_port_handle_t *handle)
 {
-    // TODO: Use ServiceManager to get IAudioFlinger instead of by atomic pointer.
+    // TODO(b/292281786): Use ServiceManager to get IAudioFlinger instead of by atomic pointer.
     // This allows moving oboeservice (AAudio) to a separate process in the future.
     sp<AudioFlinger> af = AudioFlinger::gAudioFlinger.load();  // either nullptr or singleton AF.
     status_t ret = NO_INIT;
@@ -675,34 +606,6 @@ status_t AudioFlinger::openMmapStream(MmapStreamInterface::stream_direction_t di
     return ret;
 }
 
-/* static */
-os::HapticScale AudioFlinger::onExternalVibrationStart(
-        const sp<os::ExternalVibration>& externalVibration) {
-    sp<os::IExternalVibratorService> evs = getExternalVibratorService();
-    if (evs != nullptr) {
-        int32_t ret;
-        binder::Status status = evs->onExternalVibrationStart(*externalVibration, &ret);
-        if (status.isOk()) {
-            ALOGD("%s, start external vibration with intensity as %d", __func__, ret);
-            return os::ExternalVibration::externalVibrationScaleToHapticScale(ret);
-        }
-    }
-    ALOGD("%s, start external vibration with intensity as MUTE due to %s",
-            __func__,
-            evs == nullptr ? "external vibration service not found"
-                           : "error when querying intensity");
-    return os::HapticScale::MUTE;
-}
-
-/* static */
-void AudioFlinger::onExternalVibrationStop(const sp<os::ExternalVibration>& externalVibration) {
-    sp<os::IExternalVibratorService> evs = getExternalVibratorService();
-    if (evs != 0) {
-        ALOGD("%s, stopping external vibration", __func__);
-        evs->onExternalVibrationStop(*externalVibration);
-    }
-}
-
 status_t AudioFlinger::addEffectToHal(
         const struct audio_port_config *device, const sp<EffectHalInterface>& effect) {
     AutoMutex lock(mHardwareLock);
@@ -803,10 +706,7 @@ void AudioFlinger::dumpInternals(int fd, const Vector<String16>& args __unused)
     String8 result;
     hardware_call_state hardwareStatus = mHardwareStatus;
 
-    snprintf(buffer, SIZE, "Hardware status: %d\n"
-                           "Standby Time mSec: %u\n",
-                            hardwareStatus,
-                            (uint32_t)(mStandbyTimeInNsecs / 1000000));
+    snprintf(buffer, SIZE, "Hardware status: %d\n", hardwareStatus);
     result.append(buffer);
     write(fd, result.string(), result.size());
 
@@ -2951,28 +2851,6 @@ sp<IAfThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t module,
     }
 
     mHardwareStatus = AUDIO_HW_OUTPUT_OPEN;
-
-    // FOR TESTING ONLY:
-    // This if statement allows overriding the audio policy settings
-    // and forcing a specific format or channel mask to the HAL/Sink device for testing.
-    if (!(flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT))) {
-        // Check only for Normal Mixing mode
-        if (kEnableExtendedPrecision) {
-            // Specify format (uncomment one below to choose)
-            //halConfig->format = AUDIO_FORMAT_PCM_FLOAT;
-            //halConfig->format = AUDIO_FORMAT_PCM_24_BIT_PACKED;
-            //halConfig->format = AUDIO_FORMAT_PCM_32_BIT;
-            //halConfig->format = AUDIO_FORMAT_PCM_8_24_BIT;
-            // ALOGV("openOutput_l() upgrading format to %#08x", halConfig->format);
-        }
-        if (kEnableExtendedChannels) {
-            // Specify channel mask (uncomment one below to choose)
-            //halConfig->channel_mask = audio_channel_out_mask_from_count(4);  // for USB 4ch
-            //halConfig->channel_mask = audio_channel_mask_from_representation_and_bits(
-            //        AUDIO_CHANNEL_REPRESENTATION_INDEX, (1 << 4) - 1);  // another 4ch example
-        }
-    }
-
     AudioStreamOut *outputStream = NULL;
     status_t status = outHwDev->openOutputStream(
             &outputStream,
@@ -3010,8 +2888,8 @@ sp<IAfThreadBase> AudioFlinger::openOutput_l(audio_module_handle_t module,
                 ALOGV("openOutput_l() created offload output: ID %d thread %p",
                       *output, thread.get());
             } else if ((flags & AUDIO_OUTPUT_FLAG_DIRECT)
-                    || !isValidPcmSinkFormat(halConfig->format)
-                    || !isValidPcmSinkChannelMask(halConfig->channel_mask)) {
+                    || !IAfThreadBase::isValidPcmSinkFormat(halConfig->format)
+                    || !IAfThreadBase::isValidPcmSinkChannelMask(halConfig->channel_mask)) {
                 thread = IAfPlaybackThread::createDirectOutputThread(this, outputStream, *output,
                         mSystemReady, halConfig->offload_info);
                 ALOGV("openOutput_l() created direct output: ID %d thread %p",
