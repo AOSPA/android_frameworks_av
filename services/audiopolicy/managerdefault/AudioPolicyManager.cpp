@@ -1395,7 +1395,8 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         if (outputDevices.size() == 1) {
             info = getPreferredMixerAttributesInfo(
                     outputDevices.itemAt(0)->getId(),
-                    mEngine->getProductStrategyForAttributes(*resultAttr));
+                    mEngine->getProductStrategyForAttributes(*resultAttr),
+                    true /*activeBitPerfectPreferred*/);
             // Only use preferred mixer if the uid matches or the preferred mixer is bit-perfect
             // and it is currently active.
             if (info != nullptr && info->getUid() != uid &&
@@ -1421,10 +1422,15 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         AudioProfileVector profiles;
         status_t ret = getProfilesForDevices(outputDevices, profiles, *flags, false /*isInput*/);
         if (ret == NO_ERROR && !profiles.empty()) {
-            config->channel_mask = profiles[0]->getChannels().empty() ? config->channel_mask
-                    : *profiles[0]->getChannels().begin();
-            config->sample_rate = profiles[0]->getSampleRates().empty() ? config->sample_rate
-                    : *profiles[0]->getSampleRates().begin();
+            const auto channels = profiles[0]->getChannels();
+            if (!channels.empty() && (channels.find(config->channel_mask) == channels.end())) {
+                config->channel_mask = *channels.begin();
+            }
+            const auto sampleRates = profiles[0]->getSampleRates();
+            if (!sampleRates.empty() &&
+                    (sampleRates.find(config->sample_rate) == sampleRates.end())) {
+                config->sample_rate = *sampleRates.begin();
+            }
             config->format = profiles[0]->getFormat();
         }
         return INVALID_OPERATION;
@@ -2367,6 +2373,26 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
                 return DEAD_OBJECT;
             }
             info->increaseActiveClient();
+            if (info->getActiveClientCount() == 1 &&
+                (info->getFlags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) != AUDIO_OUTPUT_FLAG_NONE) {
+                // If it is first bit-perfect client, reroute all clients that will be routed to
+                // the bit-perfect sink so that it is guaranteed only bit-perfect stream is active.
+                PortHandleVector clientsToInvalidate;
+                for (size_t i = 0; i < mOutputs.size(); i++) {
+                    if (mOutputs[i] == outputDesc ||
+                        !mOutputs[i]->devices().filter(outputDesc->devices()).isEmpty()) {
+                        continue;
+                    }
+                    for (const auto& c : mOutputs[i]->getClientIterable()) {
+                        clientsToInvalidate.push_back(c->portId());
+                    }
+                }
+                if (!clientsToInvalidate.empty()) {
+                    ALOGD("%s Invalidate clients due to first bit-perfect client started",
+                          __func__);
+                    mpClientInterface->invalidateTracks(clientsToInvalidate);
+                }
+            }
         }
     }
 
@@ -2977,10 +3003,15 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
         status_t ret = getProfilesForDevices(
                 DeviceVector(device), profiles, flags, true /*isInput*/);
         if (ret == NO_ERROR && !profiles.empty()) {
-            config->channel_mask = profiles[0]->getChannels().empty() ? config->channel_mask
-                    : *profiles[0]->getChannels().begin();
-            config->sample_rate = profiles[0]->getSampleRates().empty() ? config->sample_rate
-                    : *profiles[0]->getSampleRates().begin();
+            const auto channels = profiles[0]->getChannels();
+            if (!channels.empty() && (channels.find(config->channel_mask) == channels.end())) {
+                config->channel_mask = *channels.begin();
+            }
+            const auto sampleRates = profiles[0]->getSampleRates();
+            if (!sampleRates.empty() &&
+                    (sampleRates.find(config->sample_rate) == sampleRates.end())) {
+                config->sample_rate = *sampleRates.begin();
+            }
             config->format = profiles[0]->getFormat();
         }
         goto error;
@@ -4835,16 +4866,24 @@ status_t AudioPolicyManager::setPreferredMixerAttributes(
 }
 
 sp<PreferredMixerAttributesInfo> AudioPolicyManager::getPreferredMixerAttributesInfo(
-        audio_port_handle_t devicePortId, product_strategy_t strategy) {
+        audio_port_handle_t devicePortId,
+        product_strategy_t strategy,
+        bool activeBitPerfectPreferred) {
     auto it = mPreferredMixerAttrInfos.find(devicePortId);
     if (it == mPreferredMixerAttrInfos.end()) {
         return nullptr;
     }
-    auto mixerAttrInfoIt = it->second.find(strategy);
-    if (mixerAttrInfoIt == it->second.end()) {
-        return nullptr;
+    if (activeBitPerfectPreferred) {
+        for (auto [strategy, info] : it->second) {
+            if ((info->getFlags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) != AUDIO_OUTPUT_FLAG_NONE
+                && info->getActiveClientCount() != 0) {
+                return info;
+            }
+        }
     }
-    return mixerAttrInfoIt->second;
+    auto strategyMatchedMixerAttrInfoIt = it->second.find(strategy);
+    return strategyMatchedMixerAttrInfoIt == it->second.end()
+            ? nullptr : strategyMatchedMixerAttrInfoIt->second;
 }
 
 status_t AudioPolicyManager::getPreferredMixerAttributes(

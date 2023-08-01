@@ -61,12 +61,11 @@ namespace android {
 namespace effect {
 
 EffectHalAidl::EffectHalAidl(const std::shared_ptr<IFactory>& factory,
-                             const std::shared_ptr<IEffect>& effect, uint64_t effectId,
+                             const std::shared_ptr<IEffect>& effect,
                              int32_t sessionId, int32_t ioId, const Descriptor& desc,
                              bool isProxyEffect)
     : mFactory(factory),
       mEffect(effect),
-      mEffectId(effectId),
       mSessionId(sessionId),
       mIoId(ioId),
       mDesc(desc),
@@ -76,8 +75,11 @@ EffectHalAidl::EffectHalAidl(const std::shared_ptr<IFactory>& factory,
 
 EffectHalAidl::~EffectHalAidl() {
     if (mEffect) {
-        mIsProxyEffect ? std::static_pointer_cast<EffectProxy>(mEffect)->destroy()
-                       : mFactory->destroyEffect(mEffect);
+        if (mIsProxyEffect) {
+            std::static_pointer_cast<EffectProxy>(mEffect)->destroy();
+        } else if (mFactory) {
+            mFactory->destroyEffect(mEffect);
+        }
     }
 }
 
@@ -167,6 +169,9 @@ status_t EffectHalAidl::process() {
     auto inputQ = mConversion->getInputMQ();
     auto outputQ = mConversion->getOutputMQ();
     auto efGroup = mConversion->getEventFlagGroup();
+    if (mConversion->isBypassing()) {
+        return OK;
+    }
     if (!statusQ || !statusQ->isValid() || !inputQ || !inputQ->isValid() || !outputQ ||
         !outputQ->isValid() || !efGroup) {
         ALOGE("%s invalid FMQ [Status %d I %d O %d] efGroup %p", __func__,
