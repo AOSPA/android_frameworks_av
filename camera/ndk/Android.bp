@@ -113,7 +113,6 @@ cc_library_shared {
 cc_library_shared {
     name: "libcamera2ndk_vendor",
     vendor: true,
-    sdclang: false,
     srcs: [
         "ndk_vendor/impl/ACameraDevice.cpp",
         "ndk_vendor/impl/ACameraManager.cpp",
