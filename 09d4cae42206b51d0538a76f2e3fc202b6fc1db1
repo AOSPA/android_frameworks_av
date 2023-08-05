@@ -16,6 +16,24 @@
       "message": "whitespace",
       "revId": "09d4cae42206b51d0538a76f2e3fc202b6fc1db1",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "3af8ae05_f025e8da",
+        "filename": "services/camera/libcameraservice/CameraService.cpp",
+        "patchSetId": 4
+      },
+      "lineNbr": 1378,
+      "author": {
+        "id": 1000737
+      },
+      "writtenOn": "2023-08-05T17:34:03Z",
+      "side": 1,
+      "message": "Done",
+      "parentUuid": "95379064_6094d915",
+      "revId": "09d4cae42206b51d0538a76f2e3fc202b6fc1db1",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
