@@ -74,6 +74,7 @@
 #include <media/DeviceDescriptorBase.h>
 #include <media/ExtendedAudioBufferProvider.h>
 #include <media/VolumeShaper.h>
+#include <mediautils/BatteryNotifier.h>
 #include <mediautils/ServiceUtilities.h>
 #include <mediautils/SharedMemoryAllocator.h>
 #include <mediautils/Synchronization.h>
@@ -117,6 +118,13 @@
 #include "android/media/BnAudioRecord.h"
 #include "android/media/BnEffect.h"
 
+#include "Client.h"
+#include "ResamplerBufferProvider.h"
+
+// include AudioFlinger component interfaces
+#include "IAfEffect.h"
+#include "IAfTrack.h"
+
 namespace android {
 
 class AudioMixer;
@@ -129,7 +137,6 @@ class EffectsFactoryHalInterface;
 class FastMixer;
 class IAudioManager;
 class PassthruBufferProvider;
-class RecordBufferConverter;
 class ServerProxy;
 
 // ----------------------------------------------------------------------------
@@ -143,6 +150,7 @@ using android::content::AttributionSourceState;
 class AudioFlinger : public AudioFlingerServerAdapter::Delegate
 {
     friend class sp<AudioFlinger>;
+    friend class Client; // removeClient_l();
 public:
     static void instantiate() ANDROID_API;
 
@@ -391,7 +399,7 @@ public:
                                         audio_session_t triggerSession,
                                         audio_session_t listenerSession,
                                         const audioflinger::SyncEventCallback& callBack,
-                                        const wp<RefBase>& cookie);
+                                        const wp<IAfTrackBase>& cookie);
 
     bool        btNrecIsOff() const { return mBtNrecIsOff.load(); }
 
@@ -478,32 +486,21 @@ private:
 
     // Internal dump utilities.
     static const int kDumpLockTimeoutNs = 1 * NANOS_PER_SECOND;
+public:
+    // TODO(b/288339104) extract to afutils
     static bool dumpTryLock(Mutex& mutex);
+private:
     void dumpPermissionDenial(int fd, const Vector<String16>& args);
     void dumpClients(int fd, const Vector<String16>& args);
     void dumpInternals(int fd, const Vector<String16>& args);
 
     SimpleLog mThreadLog{16}; // 16 Thread history limit
 
+public:
+    // TODO(b/288339104)
     class ThreadBase;
+private:
     void dumpToThreadLog_l(const sp<ThreadBase> &thread);
-
-    // --- Client ---
-    class Client : public RefBase {
-      public:
-        Client(const sp<AudioFlinger>& audioFlinger, pid_t pid);
-        virtual             ~Client();
-        AllocatorFactory::ClientAllocator& allocator();
-        pid_t               pid() const { return mPid; }
-        sp<AudioFlinger>    audioFlinger() const { return mAudioFlinger; }
-
-    private:
-        DISALLOW_COPY_AND_ASSIGN(Client);
-
-        const sp<AudioFlinger>    mAudioFlinger;
-        const pid_t         mPid;
-        AllocatorFactory::ClientAllocator mClientAllocator;
-    };
 
     // --- Notification Client ---
     class NotificationClient : public IBinder::DeathRecipient {
@@ -563,8 +560,8 @@ private:
     // Requests media.log to start merging log buffers
     void requestLogMerge();
 
-    class TrackHandle;
-    class RecordHandle;
+    // TODO(b/288339104) replace these forward declaration classes with interfaces.
+public:
     class RecordThread;
     class PlaybackThread;
     class MixerThread;
@@ -573,21 +570,18 @@ private:
     class DuplicatingThread;
     class AsyncCallbackThread;
     class BitPerfectThread;
-    class Track;
-    class RecordTrack;
-    class EffectBase;
-    class EffectModule;
-    class EffectHandle;
-    class EffectChain;
-    class DeviceEffectProxy;
+private:
     class DeviceEffectManager;
+    // TODO(b/288339104) these should be separate files
+public:
     class PatchPanel;
     class DeviceEffectManagerCallback;
-
+private:
     struct AudioStreamIn;
     struct TeePatch;
+public:
     using TeePatches = std::vector<TeePatch>;
-
+private:
 
     struct  stream_type_t {
         stream_type_t()
@@ -599,16 +593,6 @@ private:
         bool        mute;
     };
 
-    // Abstraction for the Audio Source for the RecordThread (HAL or PassthruPatchRecord).
-    struct Source
-    {
-        virtual ~Source() = default;
-        // The following methods have the same signatures as in StreamHalInterface.
-        virtual status_t read(void *buffer, size_t bytes, size_t *read) = 0;
-        virtual status_t getCapturePosition(int64_t *frames, int64_t *time) = 0;
-        virtual status_t standby() = 0;
-    };
-
     // --- PlaybackThread ---
 
 #include "Threads.h"
@@ -616,8 +600,6 @@ private:
 #include "PatchPanel.h"
 
 #include "PatchCommandThread.h"
-
-#include "Effects.h"
 
 #include "DeviceEffectManager.h"
 
@@ -642,69 +624,6 @@ private:
         }
         return io;
     }
-
-    // server side of the client's IAudioTrack
-    class TrackHandle : public android::media::BnAudioTrack {
-    public:
-        explicit            TrackHandle(const sp<PlaybackThread::Track>& track);
-        virtual             ~TrackHandle();
-
-        binder::Status getCblk(std::optional<media::SharedFileRegion>* _aidl_return) override;
-        binder::Status start(int32_t* _aidl_return) override;
-        binder::Status stop() override;
-        binder::Status flush() override;
-        binder::Status pause() override;
-        binder::Status attachAuxEffect(int32_t effectId, int32_t* _aidl_return) override;
-        binder::Status setParameters(const std::string& keyValuePairs,
-                                     int32_t* _aidl_return) override;
-        binder::Status selectPresentation(int32_t presentationId, int32_t programId,
-                                          int32_t* _aidl_return) override;
-        binder::Status getTimestamp(media::AudioTimestampInternal* timestamp,
-                                    int32_t* _aidl_return) override;
-        binder::Status signal() override;
-        binder::Status applyVolumeShaper(const media::VolumeShaperConfiguration& configuration,
-                                         const media::VolumeShaperOperation& operation,
-                                         int32_t* _aidl_return) override;
-        binder::Status getVolumeShaperState(
-                int32_t id,
-                std::optional<media::VolumeShaperState>* _aidl_return) override;
-        binder::Status getDualMonoMode(
-                media::audio::common::AudioDualMonoMode* _aidl_return) override;
-        binder::Status setDualMonoMode(
-                media::audio::common::AudioDualMonoMode mode) override;
-        binder::Status getAudioDescriptionMixLevel(float* _aidl_return) override;
-        binder::Status setAudioDescriptionMixLevel(float leveldB) override;
-        binder::Status getPlaybackRateParameters(
-                media::audio::common::AudioPlaybackRate* _aidl_return) override;
-        binder::Status setPlaybackRateParameters(
-                const media::audio::common::AudioPlaybackRate& playbackRate) override;
-
-    private:
-        const sp<PlaybackThread::Track> mTrack;
-    };
-
-    // server side of the client's IAudioRecord
-    class RecordHandle : public android::media::BnAudioRecord {
-    public:
-        explicit RecordHandle(const sp<RecordThread::RecordTrack>& recordTrack);
-        virtual             ~RecordHandle();
-        virtual binder::Status    start(int /*AudioSystem::sync_event_t*/ event,
-                int /*audio_session_t*/ triggerSession);
-        virtual binder::Status   stop();
-        virtual binder::Status   getActiveMicrophones(
-                std::vector<media::MicrophoneInfoFw>* activeMicrophones);
-        virtual binder::Status   setPreferredMicrophoneDirection(
-                int /*audio_microphone_direction_t*/ direction);
-        virtual binder::Status   setPreferredMicrophoneFieldDimension(float zoom);
-        virtual binder::Status   shareAudioHistory(const std::string& sharedAudioPackageName,
-                                                   int64_t sharedAudioStartMs);
-
-    private:
-        const sp<RecordThread::RecordTrack> mRecordTrack;
-
-        // for use from destructor
-        void                stop_nonvirtual();
-    };
 
     // Mmap stream control interface implementation. Each MmapThreadHandle controls one
     // MmapPlaybackThread or MmapCaptureThread instance.
@@ -784,10 +703,16 @@ private:
               status_t moveEffectChain_l(audio_session_t sessionId,
                                      PlaybackThread *srcThread,
                                      PlaybackThread *dstThread);
+              status_t moveEffectChain_l(audio_session_t sessionId,
+                                         RecordThread *srcThread,
+                                         RecordThread *dstThread);
 
+public:
+    // TODO(b/288339104) cluster together
               status_t moveAuxEffectToIo(int EffectId,
                                          const sp<PlaybackThread>& dstThread,
                                          sp<PlaybackThread> *srcThread);
+private:
 
               // return thread associated with primary hardware device, or NULL
               PlaybackThread *primaryPlaybackThread_l() const;
@@ -801,14 +726,17 @@ private:
               ThreadBase *hapticPlaybackThread_l() const;
 
               void updateSecondaryOutputsForTrack_l(
-                      PlaybackThread::Track* track,
+                      IAfTrack* track,
                       PlaybackThread* thread,
                       const std::vector<audio_io_handle_t>& secondaryOutputs) const;
 
 
                 void        removeClient_l(pid_t pid);
                 void        removeNotificationClient(pid_t pid);
+public:
+    // TODO(b/288339104) cluster together
                 bool isNonOffloadableGlobalEffectEnabled_l();
+private:
                 void onNonOffloadableGlobalEffectEnable();
                 bool isSessionAcquired_l(audio_session_t audioSession);
 
@@ -819,17 +747,22 @@ private:
                 // return ALREADY_EXISTS if a chain with the same session already exists in
                 // mOrphanEffectChains. Note that this should never happen as there is only one
                 // chain for a given session and it is attached to only one thread at a time.
-                status_t        putOrphanEffectChain_l(const sp<EffectChain>& chain);
+                status_t putOrphanEffectChain_l(const sp<IAfEffectChain>& chain);
                 // Get an effect chain for the specified session in mOrphanEffectChains and remove
                 // it if found. Returns 0 if not found (this is the most common case).
-                sp<EffectChain> getOrphanEffectChain_l(audio_session_t session);
+                sp<IAfEffectChain> getOrphanEffectChain_l(audio_session_t session);
                 // Called when the last effect handle on an effect instance is removed. If this
                 // effect belongs to an effect chain in mOrphanEffectChains, the chain is updated
                 // and removed from mOrphanEffectChains if it does not contain any effect.
                 // Return true if the effect was found in mOrphanEffectChains, false otherwise.
-                bool            updateOrphanEffectChains(const sp<EffectModule>& effect);
+public:
+// TODO(b/288339104) suggest better grouping
+                bool updateOrphanEffectChains(const sp<IAfEffectModule>& effect);
+private:
+                std::vector< sp<IAfEffectModule> > purgeStaleEffects_l();
 
-                std::vector< sp<EffectModule> > purgeStaleEffects_l();
+                std::vector< sp<IAfEffectModule> > purgeOrphanEffectChains_l();
+                bool updateOrphanEffectChains_l(const sp<IAfEffectModule>& effect);
 
                 void broadcastParametersToRecordThreads_l(const String8& keyValuePairs);
                 void updateOutDevicesForRecordThreads_l(const DeviceDescriptorBaseVector& devices);
@@ -861,8 +794,8 @@ private:
     };
 
     struct TeePatch {
-        sp<RecordThread::PatchRecord> patchRecord;
-        sp<PlaybackThread::PatchTrack> patchTrack;
+        sp<IAfPatchRecord> patchRecord;
+        sp<IAfPatchTrack> patchTrack;
     };
 
     // for mAudioSessionRefs only
@@ -875,11 +808,16 @@ private:
         int         mCnt;
     };
 
+public:
+    // TODO(b/288339104) access by getter,
     mutable     Mutex                               mLock;
                 // protects mClients and mNotificationClients.
                 // must be locked after mLock and ThreadBase::mLock if both must be locked
                 // avoids acquiring AudioFlinger::mLock from inside thread loop.
+
+    // TODO(b/288339104) access by getter,
     mutable     Mutex                               mClientLock;
+private:
                 // protected by mClientLock
                 DefaultKeyedVector< pid_t, wp<Client> >     mClients;   // see ~Client()
 
@@ -958,7 +896,7 @@ private:
                 std::list<sp<audioflinger::SyncEvent>> mPendingSyncEvents;
 
                 // Effect chains without a valid thread
-                DefaultKeyedVector< audio_session_t , sp<EffectChain> > mOrphanEffectChains;
+                DefaultKeyedVector<audio_session_t, sp<IAfEffectChain>> mOrphanEffectChains;
 
                 // list of sessions for which a valid HW A/V sync ID was retrieved from the HAL
                 DefaultKeyedVector< audio_session_t , audio_hw_sync_t >mHwAvSyncIds;
@@ -985,9 +923,9 @@ private:
                                       size_t rejectedKVPSize, const String8& rejectedKVPs,
                                       uid_t callingUid);
 
+public:
     sp<IAudioManager> getOrCreateAudioManager();
 
-public:
     // These methods read variables atomically without mLock,
     // though the variables are updated with mLock.
     bool    isLowRamDevice() const { return mIsLowRamDevice; }
@@ -1004,7 +942,10 @@ private:
 
     // protected by mLock
     PatchPanel mPatchPanel;
+public:
+    // TODO(b/288339104) access by getter.
     sp<EffectsFactoryHalInterface> mEffectsFactoryHal;
+private:
 
     const sp<PatchCommandThread> mPatchCommandThread;
     sp<DeviceEffectManager> mDeviceEffectManager;
