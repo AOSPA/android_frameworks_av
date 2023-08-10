@@ -19,7 +19,7 @@
     #error This header file should only be included from AudioFlinger.h
 #endif
 
-
+public: // TODO(b/288339104) extract out of AudioFlinger class
 // PatchPanel is concealed within AudioFlinger, their lifetimes are the same.
 class PatchPanel {
 public:
@@ -216,9 +216,9 @@ public:
         // the objects are created by createConnections() and released by clearConnections()
         // playback thread is created if no existing playback thread can be used
         // connects playback thread output to sink device
-        Endpoint<PlaybackThread, PlaybackThread::PatchTrack> mPlayback;
+        Endpoint<PlaybackThread, IAfPatchTrack> mPlayback;
         // connects source device to record thread input
-        Endpoint<RecordThread, RecordThread::PatchRecord> mRecord;
+        Endpoint<RecordThread, IAfPatchRecord> mRecord;
 
         wp<ThreadBase> mThread;
         bool mIsEndpointPatch;
@@ -234,7 +234,38 @@ private:
             audio_module_handle_t module, audio_patch_handle_t handle,
             const struct audio_patch *patch);
     void removeSoftwarePatchFromInsertedModules(audio_patch_handle_t handle);
-    void erasePatch(audio_patch_handle_t handle);
+    /**
+     * erase the patch referred by its handle.
+     * @param handle of the patch to be erased
+     * @param reuseExistingHalPatch if set, do not trig the callback of listeners, listener
+     * would receive instead a onUpdateAudioPatch when the patch will be recreated.
+     * It prevents for example DeviceEffectManager to spuriously remove / add a device on an already
+     * opened input / output mix.
+     */
+    void erasePatch(audio_patch_handle_t handle, bool reuseExistingHalPatch = false);
+
+    /**
+     * Returns true if the old and new patches passed as arguments describe the same
+     * connections between the first sink and the first source
+     * @param oldPatch previous patch
+     * @param newPatch new patch
+     * @return true if the route is unchanged between the old and new patch, false otherwise
+     */
+    inline bool patchesHaveSameRoute(
+            const struct audio_patch &newPatch, const struct audio_patch &oldPatch) const {
+        return (newPatch.sources[0].type == AUDIO_PORT_TYPE_DEVICE &&
+                oldPatch.sources[0].type == AUDIO_PORT_TYPE_DEVICE &&
+                newPatch.sources[0].id == oldPatch.sources[0].id &&
+                newPatch.sinks[0].type == AUDIO_PORT_TYPE_MIX &&
+                oldPatch.sinks[0].type == AUDIO_PORT_TYPE_MIX &&
+                newPatch.sinks[0].ext.mix.handle == oldPatch.sinks[0].ext.mix.handle) ||
+                (newPatch.sinks[0].type == AUDIO_PORT_TYPE_DEVICE &&
+                oldPatch.sinks[0].type == AUDIO_PORT_TYPE_DEVICE &&
+                newPatch.sinks[0].id == oldPatch.sinks[0].id &&
+                newPatch.sources[0].type == AUDIO_PORT_TYPE_MIX &&
+                oldPatch.sources[0].type == AUDIO_PORT_TYPE_MIX &&
+                newPatch.sources[0].ext.mix.handle == oldPatch.sources[0].ext.mix.handle);
+    }
 
     AudioFlinger &mAudioFlinger;
     std::map<audio_patch_handle_t, Patch> mPatches;
@@ -265,3 +296,5 @@ private:
     };
     std::map<audio_module_handle_t, ModuleConnections> mInsertedModules;
 };
+
+private:

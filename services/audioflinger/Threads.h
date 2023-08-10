@@ -19,11 +19,13 @@
     #error This header file should only be included from AudioFlinger.h
 #endif
 
+public: // TODO(b/288339104) extract out of AudioFlinger class
 class ThreadBase : public Thread {
+    // TODO(b/288339104) remove friends
+    friend class RecordTrack;
+    friend class Track;
+    friend class TrackBase;
 public:
-
-#include "TrackBase.h"
-
     enum type_t {
         MIXER,              // Thread class is MixerThread
         DIRECT,             // Thread class is DirectOutputThread
@@ -409,8 +411,8 @@ public:
 
     virtual     sp<StreamHalInterface> stream() const = 0;
 
-                sp<EffectHandle> createEffect_l(
-                                    const sp<AudioFlinger::Client>& client,
+                sp<IAfEffectHandle> createEffect_l(
+                                    const sp<Client>& client,
                                     const sp<media::IEffectClient>& effectClient,
                                     int32_t priority,
                                     audio_session_t sessionId,
@@ -436,37 +438,37 @@ public:
                 };
 
                 // get effect chain corresponding to session Id.
-                sp<EffectChain> getEffectChain(audio_session_t sessionId);
+                sp<IAfEffectChain> getEffectChain(audio_session_t sessionId);
                 // same as getEffectChain() but must be called with ThreadBase mutex locked
-                sp<EffectChain> getEffectChain_l(audio_session_t sessionId) const;
+                sp<IAfEffectChain> getEffectChain_l(audio_session_t sessionId) const;
                 std::vector<int> getEffectIds_l(audio_session_t sessionId);
                 // add an effect chain to the chain list (mEffectChains)
-    virtual     status_t addEffectChain_l(const sp<EffectChain>& chain) = 0;
+    virtual     status_t addEffectChain_l(const sp<IAfEffectChain>& chain) = 0;
                 // remove an effect chain from the chain list (mEffectChains)
-    virtual     size_t removeEffectChain_l(const sp<EffectChain>& chain) = 0;
+    virtual     size_t removeEffectChain_l(const sp<IAfEffectChain>& chain) = 0;
                 // lock all effect chains Mutexes. Must be called before releasing the
                 // ThreadBase mutex before processing the mixer and effects. This guarantees the
                 // integrity of the chains during the process.
                 // Also sets the parameter 'effectChains' to current value of mEffectChains.
-                void lockEffectChains_l(Vector< sp<EffectChain> >& effectChains);
+                void lockEffectChains_l(Vector<sp<IAfEffectChain>>& effectChains);
                 // unlock effect chains after process
-                void unlockEffectChains(const Vector< sp<EffectChain> >& effectChains);
+                void unlockEffectChains(const Vector<sp<IAfEffectChain>>& effectChains);
                 // get a copy of mEffectChains vector
-                Vector< sp<EffectChain> > getEffectChains_l() const { return mEffectChains; };
+                Vector<sp<IAfEffectChain>> getEffectChains_l() const { return mEffectChains; };
                 // set audio mode to all effect chains
                 void setMode(audio_mode_t mode);
                 // get effect module with corresponding ID on specified audio session
-                sp<AudioFlinger::EffectModule> getEffect(audio_session_t sessionId, int effectId);
-                sp<AudioFlinger::EffectModule> getEffect_l(audio_session_t sessionId, int effectId);
+                sp<IAfEffectModule> getEffect(audio_session_t sessionId, int effectId);
+                sp<IAfEffectModule> getEffect_l(audio_session_t sessionId, int effectId);
                 // add and effect module. Also creates the effect chain is none exists for
                 // the effects audio session. Only called in a context of moving an effect
                 // from one thread to another
-                status_t addEffect_l(const sp< EffectModule>& effect);
+                status_t addEffect_l(const sp<IAfEffectModule>& effect);
                 // remove and effect module. Also removes the effect chain is this was the last
                 // effect
-                void removeEffect_l(const sp< EffectModule>& effect, bool release = false);
+                void removeEffect_l(const sp<IAfEffectModule>& effect, bool release = false);
                 // disconnect an effect handle from module and destroy module if last handle
-                void disconnectEffectHandle(EffectHandle *handle, bool unpinIfLast);
+                void disconnectEffectHandle(IAfEffectHandle *handle, bool unpinIfLast);
                 // detach all tracks connected to an auxiliary effect
     virtual     void detachAuxEffect_l(int effectId __unused) {}
                 // returns a combination of:
@@ -487,7 +489,7 @@ public:
                         result = EFFECT_SESSION;
                     }
                     for (size_t i = 0; i < tracks.size(); ++i) {
-                        const sp<TrackBase>& track = tracks[i];
+                        const sp<IAfTrackBase>& track = tracks[i];
                         if (sessionId == track->sessionId()
                                 && !track->isInvalid()       // not yet removed from tracks.
                                 && !track->isTerminated()) {
@@ -552,7 +554,7 @@ public:
 
     mutable     Mutex                   mLock;
 
-                void onEffectEnable(const sp<EffectModule>& effect);
+                void onEffectEnable(const sp<IAfEffectModule>& effect);
                 void onEffectDisable();
 
                 // invalidateTracksForAudioSession_l must be called with holding mLock.
@@ -567,7 +569,7 @@ public:
                 void invalidateTracksForAudioSession_l(audio_session_t sessionId,
                                                        const T& tracks) const {
                     for (size_t i = 0; i < tracks.size(); ++i) {
-                        const sp<TrackBase>& track = tracks[i];
+                        const sp<IAfTrackBase>& track = tracks[i];
                         if (sessionId == track->sessionId()) {
                             track->invalidate();
                         }
@@ -607,7 +609,7 @@ protected:
                                                       bool suspend,
                                                       audio_session_t sessionId);
                 // check if some effects must be suspended when an effect chain is added
-                void checkSuspendOnAddEffectChain_l(const sp<EffectChain>& chain);
+                void checkSuspendOnAddEffectChain_l(const sp<IAfEffectChain>& chain);
 
                 // sends the metadata of the active tracks to the HAL
                 struct MetadataUpdate {
@@ -627,8 +629,10 @@ protected:
                                     ExtendedTimestamp *timestamp __unused) const {
                                 return INVALID_OPERATION;
                             }
-
+public:
+// TODO(b/288339104) organize with publics
                 product_strategy_t getStrategyForStream(audio_stream_type_t stream) const;
+protected:
 
     virtual     void        onHalLatencyModesChanged_l() {}
 
@@ -680,7 +684,7 @@ protected:
                 audio_source_t          mAudioSource;
 
                 const audio_io_handle_t mId;
-                Vector< sp<EffectChain> > mEffectChains;
+                Vector<sp<IAfEffectChain>> mEffectChains;
 
                 static const int        kThreadNameLength = 16; // prctl(PR_SET_NAME) limit
                 char                    mThreadName[kThreadNameLength]; // guaranteed NUL-terminated
@@ -826,8 +830,6 @@ protected:
                         return wakeLockUids; // moved by underlying SharedBuffer
                     }
 
-                    std::map<uid_t, std::pair<ssize_t /* previous */, ssize_t /* current */>>
-                                        mBatteryCounter;
                     SortedVector<sp<T>> mActiveTracks;
                     int                 mActiveTracksGeneration;
                     int                 mLastActiveTracksGeneration;
@@ -860,9 +862,10 @@ class VolumeInterface {
 // --- PlaybackThread ---
 class PlaybackThread : public ThreadBase, public StreamOutHalInterfaceCallback,
                        public VolumeInterface, public StreamOutHalInterfaceEventCallback {
+    // TODO(b/288339104) remove friends
+    friend class OutputTrack;
+    friend class Track;
 public:
-
-#include "PlaybackTracks.h"
 
     enum mixer_state {
         MIXER_IDLE,             // no active tracks
@@ -912,14 +915,14 @@ protected:
     virtual     void        threadLoop_drain();
     virtual     void        threadLoop_standby();
     virtual     void        threadLoop_exit();
-    virtual     void        threadLoop_removeTracks(const Vector< sp<Track> >& tracksToRemove);
+    virtual     void        threadLoop_removeTracks(const Vector<sp<IAfTrack>>& tracksToRemove);
 
                 // prepareTracks_l reads and writes mActiveTracks, and returns
                 // the pending set of tracks to remove via Vector 'tracksToRemove'.  The caller
                 // is responsible for clearing or destroying this Vector later on, when it
                 // is safe to do so. That will drop the final ref count and destroy the tracks.
-    virtual     mixer_state prepareTracks_l(Vector< sp<Track> > *tracksToRemove) = 0;
-                void        removeTracks_l(const Vector< sp<Track> >& tracksToRemove);
+    virtual     mixer_state prepareTracks_l(Vector<sp<IAfTrack>>* tracksToRemove) = 0;
+                void        removeTracks_l(const Vector<sp<IAfTrack>>& tracksToRemove);
                 status_t    handleVoipVolume_l(float *volume);
 
     // StreamOutHalInterfaceCallback implementation
@@ -976,8 +979,8 @@ public:
 
                 void        setVolumeForOutput_l(float left, float right) const override;
 
-                sp<Track>   createTrack_l(
-                                const sp<AudioFlinger::Client>& client,
+                sp<IAfTrack>   createTrack_l(
+                                const sp<Client>& client,
                                 audio_stream_type_t streamType,
                                 const audio_attributes_t& attr,
                                 uint32_t *sampleRate,
@@ -1021,18 +1024,18 @@ public:
                                             audio_port_handle_t portId = AUDIO_PORT_HANDLE_NONE);
                 status_t    getRenderPosition(uint32_t *halFrames, uint32_t *dspFrames);
                 // Consider also removing and passing an explicit mMainBuffer initialization
-                // parameter to AF::PlaybackThread::Track::Track().
+                // parameter to AF::IAfTrack::Track().
                 float *sinkBuffer() const {
                     return reinterpret_cast<float *>(mSinkBuffer); };
 
     virtual     void detachAuxEffect_l(int effectId);
-                status_t attachAuxEffect(const sp<AudioFlinger::PlaybackThread::Track>& track,
+                status_t attachAuxEffect(const sp<IAfTrack>& track,
                         int EffectId);
-                status_t attachAuxEffect_l(const sp<AudioFlinger::PlaybackThread::Track>& track,
+                status_t attachAuxEffect_l(const sp<IAfTrack>& track,
                         int EffectId);
 
-                virtual status_t addEffectChain_l(const sp<EffectChain>& chain);
-                virtual size_t removeEffectChain_l(const sp<EffectChain>& chain);
+                virtual status_t addEffectChain_l(const sp<IAfEffectChain>& chain);
+                virtual size_t removeEffectChain_l(const sp<IAfEffectChain>& chain);
                         uint32_t hasAudioSession_l(audio_session_t sessionId) const override {
                             return ThreadBase::hasAudioSession_l(sessionId, mTracks);
                         }
@@ -1058,8 +1061,8 @@ public:
 
     virtual     status_t    getTimestamp_l(AudioTimestamp& timestamp);
 
-                void        addPatchTrack(const sp<PatchTrack>& track);
-                void        deletePatchTrack(const sp<PatchTrack>& track);
+                void        addPatchTrack(const sp<IAfPatchTrack>& track);
+                void        deletePatchTrack(const sp<IAfPatchTrack>& track);
 
     virtual     void        toAudioPortConfig(struct audio_port_config *config);
 
@@ -1096,7 +1099,7 @@ public:
                     mDownStreamPatch = *patch;
                 }
 
-                PlaybackThread::Track* getTrackById_l(audio_port_handle_t trackId);
+                IAfTrack* getTrackById_l(audio_port_handle_t trackId);
 
                 bool hasMixer() const {
                     return mType == MIXER || mType == DUPLICATING || mType == SPATIALIZER;
@@ -1259,7 +1262,7 @@ private:
                 }
 
 protected:
-    ActiveTracks<Track>     mActiveTracks;
+    ActiveTracks<IAfTrack> mActiveTracks;
 
     // Time to sleep between cycles when:
     virtual uint32_t        activeSleepTimeUs() const;      // mixer state MIXER_TRACKS_ENABLED
@@ -1304,9 +1307,9 @@ private:
 
     DISALLOW_COPY_AND_ASSIGN(PlaybackThread);
 
-    status_t    addTrack_l(const sp<Track>& track);
-    bool        destroyTrack_l(const sp<Track>& track);
-    void        removeTrack_l(const sp<Track>& track);
+    status_t    addTrack_l(const sp<IAfTrack>& track);
+    bool        destroyTrack_l(const sp<IAfTrack>& track);
+    void        removeTrack_l(const sp<IAfTrack>& track);
 
     void        readOutputParameters_l();
     MetadataUpdate          updateMetadata_l() final;
@@ -1364,7 +1367,7 @@ private:
         SortedVector<sp<T>> mTracks; // wrapped SortedVector.
     };
 
-    Tracks<Track>                   mTracks;
+    Tracks<IAfTrack>                   mTracks;
 
     stream_type_t                   mStreamTypes[AUDIO_STREAM_CNT];
     AudioStreamOut                  *mOutput;
@@ -1425,7 +1428,7 @@ private:
 
     Mutex                                    mAudioTrackCbLock;
     // Record of IAudioTrackCallback
-    std::map<sp<Track>, sp<media::IAudioTrackCallback>> mAudioTrackCallbacks;
+    std::map<sp<IAfTrack>, sp<media::IAudioTrackCallback>> mAudioTrackCallbacks;
 
 private:
     // The HAL output sink is treated as non-blocking, but current implementation is blocking
@@ -1534,7 +1537,7 @@ public:
                                     audio_channel_mask_t channelMask, audio_format_t format,
                                     audio_session_t sessionId, uid_t uid) const override;
 protected:
-    virtual     mixer_state prepareTracks_l(Vector< sp<Track> > *tracksToRemove);
+    virtual     mixer_state prepareTracks_l(Vector<sp<IAfTrack>>* tracksToRemove);
     virtual     uint32_t    idleSleepTimeUs() const;
     virtual     uint32_t    suspendSleepTimeUs() const;
     virtual     void        cacheParameters_l();
@@ -1666,7 +1669,7 @@ protected:
                 void        dumpInternals_l(int fd, const Vector<String16>& args) override;
 
     // threadLoop snippets
-    virtual     mixer_state prepareTracks_l(Vector< sp<Track> > *tracksToRemove);
+    virtual     mixer_state prepareTracks_l(Vector<sp<IAfTrack>>* tracksToRemove);
     virtual     void        threadLoop_mix();
     virtual     void        threadLoop_sleepTime();
     virtual     void        threadLoop_exit();
@@ -1682,13 +1685,13 @@ protected:
     DirectOutputThread(const sp<AudioFlinger>& audioFlinger, AudioStreamOut* output,
                        audio_io_handle_t id, ThreadBase::type_t type, bool systemReady,
                        const audio_offload_info_t& offloadInfo);
-    void processVolume_l(Track *track, bool lastTrack);
+    void processVolume_l(IAfTrack *track, bool lastTrack);
     bool isTunerStream() const { return (mOffloadInfo.content_id > 0); }
 
     // prepareTracks_l() tells threadLoop_mix() the name of the single active track
-    sp<Track>               mActiveTrack;
+    sp<IAfTrack>               mActiveTrack;
 
-    wp<Track>               mPreviousTrack;         // used to detect track switch
+    wp<IAfTrack>               mPreviousTrack;         // used to detect track switch
 
     // This must be initialized for initial condition of mMasterBalance = 0 (disabled).
     float                   mMasterBalanceLeft = 1.f;
@@ -1733,7 +1736,7 @@ public:
 
 protected:
     // threadLoop snippets
-    virtual     mixer_state prepareTracks_l(Vector< sp<Track> > *tracksToRemove);
+    virtual     mixer_state prepareTracks_l(Vector<sp<IAfTrack>>* tracksToRemove);
     virtual     void        threadLoop_exit();
 
     virtual     bool        waitingAsyncCallback();
@@ -1820,8 +1823,8 @@ protected:
 private:
 
                 uint32_t    mWaitTimeMs;
-    SortedVector < sp<OutputTrack> >  outputTracks;
-    SortedVector < sp<OutputTrack> >  mOutputTracks;
+    SortedVector <sp<IAfOutputTrack>>  outputTracks;
+    SortedVector <sp<IAfOutputTrack>>  mOutputTracks;
 public:
     virtual     bool        hasFastMixer() const { return false; }
                 status_t    threadloop_getHalTimestamp_l(
@@ -1866,61 +1869,18 @@ private:
             // Do not request a specific mode by default
             audio_latency_mode_t mRequestedLatencyMode = AUDIO_LATENCY_MODE_FREE;
 
-            sp<EffectHandle> mFinalDownMixer;
+            sp<IAfEffectHandle> mFinalDownMixer;
 };
 
 // record thread
 class RecordThread : public ThreadBase
 {
+    // TODO(b/288339104) remove friends
+    friend class PassthruPatchRecord;
+    friend class RecordTrack;
+    friend class ResamplerBufferProvider;
 public:
 
-    class RecordTrack;
-
-    /* The ResamplerBufferProvider is used to retrieve recorded input data from the
-     * RecordThread.  It maintains local state on the relative position of the read
-     * position of the RecordTrack compared with the RecordThread.
-     */
-    class ResamplerBufferProvider : public AudioBufferProvider
-    {
-    public:
-        explicit ResamplerBufferProvider(RecordTrack* recordTrack) :
-            mRecordTrack(recordTrack),
-            mRsmpInUnrel(0), mRsmpInFront(0) { }
-        virtual ~ResamplerBufferProvider() { }
-
-        // called to set the ResamplerBufferProvider to head of the RecordThread data buffer,
-        // skipping any previous data read from the hal.
-        virtual void reset();
-
-        /* Synchronizes RecordTrack position with the RecordThread.
-         * Calculates available frames and handle overruns if the RecordThread
-         * has advanced faster than the ResamplerBufferProvider has retrieved data.
-         * TODO: why not do this for every getNextBuffer?
-         *
-         * Parameters
-         * framesAvailable:  pointer to optional output size_t to store record track
-         *                   frames available.
-         *      hasOverrun:  pointer to optional boolean, returns true if track has overrun.
-         */
-
-        virtual void sync(size_t *framesAvailable = NULL, bool *hasOverrun = NULL);
-
-        // AudioBufferProvider interface
-        virtual status_t    getNextBuffer(AudioBufferProvider::Buffer* buffer);
-        virtual void        releaseBuffer(AudioBufferProvider::Buffer* buffer);
-
-                int32_t     getFront() const { return mRsmpInFront; }
-                void        setFront(int32_t front) { mRsmpInFront = front; }
-    private:
-        RecordTrack * const mRecordTrack;
-        size_t              mRsmpInUnrel;   // unreleased frames remaining from
-                                            // most recent getNextBuffer
-                                            // for debug only
-        int32_t             mRsmpInFront;   // next available frame
-                                            // rolling counter that is never cleared
-    };
-
-#include "RecordTracks.h"
 
             RecordThread(const sp<AudioFlinger>& audioFlinger,
                     AudioStreamIn *input,
@@ -1930,8 +1890,8 @@ public:
             virtual     ~RecordThread();
 
     // no addTrack_l ?
-    void        destroyTrack_l(const sp<RecordTrack>& track);
-    void        removeTrack_l(const sp<RecordTrack>& track);
+    void        destroyTrack_l(const sp<IAfRecordTrack>& track);
+    void        removeTrack_l(const sp<IAfRecordTrack>& track);
 
     // Thread virtuals
     virtual bool        threadLoop();
@@ -1946,8 +1906,8 @@ public:
 
     virtual sp<IMemory> pipeMemory() const { return mPipeMemory; }
 
-            sp<AudioFlinger::RecordThread::RecordTrack>  createRecordTrack_l(
-                    const sp<AudioFlinger::Client>& client,
+            sp<IAfRecordTrack> createRecordTrack_l(
+                    const sp<Client>& client,
                     const audio_attributes_t& attr,
                     uint32_t *pSampleRate,
                     audio_format_t format,
@@ -1963,13 +1923,13 @@ public:
                     audio_port_handle_t portId,
                     int32_t maxSharedAudioHistoryMs);
 
-            status_t    start(RecordTrack* recordTrack,
+            status_t start(IAfRecordTrack* recordTrack,
                               AudioSystem::sync_event_t event,
                               audio_session_t triggerSession);
 
             // ask the thread to stop the specified track, and
             // return true if the caller should then do it's part of the stopping process
-            bool        stop(RecordTrack* recordTrack);
+            bool stop(IAfRecordTrack* recordTrack);
 
             AudioStreamIn* clearInput();
             virtual sp<StreamHalInterface> stream() const;
@@ -1987,14 +1947,14 @@ public:
             void        updateOutDevices(const DeviceDescriptorBaseVector& outDevices) override;
             void        resizeInputBuffer_l(int32_t maxSharedAudioHistoryMs) override;
 
-            void        addPatchTrack(const sp<PatchRecord>& record);
-            void        deletePatchTrack(const sp<PatchRecord>& record);
+            void        addPatchTrack(const sp<IAfPatchRecord>& record);
+            void        deletePatchTrack(const sp<IAfPatchRecord>& record);
 
             void        readInputParameters_l();
     virtual uint32_t    getInputFramesLost();
 
-    virtual status_t addEffectChain_l(const sp<EffectChain>& chain);
-    virtual size_t removeEffectChain_l(const sp<EffectChain>& chain);
+    virtual status_t addEffectChain_l(const sp<IAfEffectChain>& chain);
+    virtual size_t removeEffectChain_l(const sp<IAfEffectChain>& chain);
             uint32_t hasAudioSession_l(audio_session_t sessionId) const override {
                          return ThreadBase::hasAudioSession_l(sessionId, mTracks);
                      }
@@ -2074,10 +2034,10 @@ private:
 
             AudioStreamIn                       *mInput;
             Source                              *mSource;
-            SortedVector < sp<RecordTrack> >    mTracks;
+            SortedVector <sp<IAfRecordTrack>>    mTracks;
             // mActiveTracks has dual roles:  it indicates the current active track(s), and
             // is used together with mStartStopCond to indicate start()/stop() progress
-            ActiveTracks<RecordTrack>           mActiveTracks;
+            ActiveTracks<IAfRecordTrack>           mActiveTracks;
 
             Condition                           mStartStopCond;
 
@@ -2147,9 +2107,6 @@ private:
 class MmapThread : public ThreadBase
 {
  public:
-
-#include "MmapTracks.h"
-
     MmapThread(const sp<AudioFlinger>& audioFlinger, audio_io_handle_t id,
                AudioHwDevice *hwDev, const sp<StreamHalInterface>& stream, bool systemReady,
                bool isOut);
@@ -2202,8 +2159,8 @@ class MmapThread : public ThreadBase
     virtual     void        toAudioPortConfig(struct audio_port_config *config);
 
     virtual     sp<StreamHalInterface> stream() const { return mHalStream; }
-    virtual     status_t    addEffectChain_l(const sp<EffectChain>& chain);
-    virtual     size_t      removeEffectChain_l(const sp<EffectChain>& chain);
+    virtual     status_t    addEffectChain_l(const sp<IAfEffectChain>& chain);
+    virtual     size_t      removeEffectChain_l(const sp<IAfEffectChain>& chain);
     virtual     status_t    checkEffectCompatibility_l(const effect_descriptor_t *desc,
                                                                audio_session_t sessionId);
 
@@ -2266,7 +2223,7 @@ class MmapThread : public ThreadBase
                 sp<StreamHalInterface>  mHalStream;
                 sp<DeviceHalInterface>  mHalDevice;
                 AudioHwDevice* const    mAudioHwDev;
-                ActiveTracks<MmapTrack> mActiveTracks;
+                ActiveTracks<IAfMmapTrack> mActiveTracks;
                 float                   mHalVolFloat;
                 std::map<audio_port_handle_t, bool> mClientSilencedStates;
 
@@ -2371,7 +2328,7 @@ public:
                      audio_io_handle_t id, bool systemReady);
 
 protected:
-    mixer_state prepareTracks_l(Vector<sp<Track>> *tracksToRemove) override;
+    mixer_state prepareTracks_l(Vector<sp<IAfTrack>>* tracksToRemove) override;
     void threadLoop_mix() override;
 
 private:
@@ -2379,3 +2336,5 @@ private:
     float mVolumeLeft = 0.f;
     float mVolumeRight = 0.f;
 };
+
+private:
