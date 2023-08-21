@@ -2473,6 +2473,12 @@ status_t StagefrightRecorder::stop() {
                     (long long)stopTimeUs, source->isVideo() ? "Video" : "Audio");
         }
     }
+    /* compress recording stop */
+    if (mAudioSourceNode != NULL && mEnabledCompressAudioRecording) {
+        if (OK != mAudioSourceNode->setStopTimeUs(stopTimeUs)) {
+            ALOGW("Failed to set stopTime %lld us for compress audio source", (long long)stopTimeUs);
+        }
+    }
 
     if (mVideoEncoderSource != NULL) {
         mVideoEncoderSource->notifyPerformanceMode();
