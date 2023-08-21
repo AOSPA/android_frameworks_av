@@ -120,7 +120,7 @@ static const int64_t kMax32BitFileSize = 0x00ffffffffLL; // 4GB
 // To collect the encoder usage for the battery app
 static void addBatteryData(uint32_t params) {
     sp<IBinder> binder =
-        defaultServiceManager()->getService(String16("media.player"));
+        defaultServiceManager()->waitForService(String16("media.player"));
     sp<IMediaPlayerService> service = interface_cast<IMediaPlayerService>(binder);
     CHECK(service.get() != NULL);
 
@@ -1267,10 +1267,6 @@ status_t StagefrightRecorder::start() {
         case OUTPUT_FORMAT_MPEG_4:
         case OUTPUT_FORMAT_WEBM:
         {
-            bool isMPEG4 = true;
-            if (mOutputFormat == OUTPUT_FORMAT_WEBM) {
-                isMPEG4 = false;
-            }
             sp<MetaData> meta = new MetaData;
             setupMPEG4orWEBMMetaData(&meta);
             status = mWriter->start(meta.get());
