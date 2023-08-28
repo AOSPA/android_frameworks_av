@@ -15,6 +15,17 @@
 ** limitations under the License.
 */
 
+#pragma once
+
+#include "DeviceEffectManager.h"
+#include "IAfEffect.h"
+
+#include <android-base/macros.h>  // DISALLOW_COPY_AND_ASSIGN
+#include <mediautils/Synchronization.h>
+#include <private/media/AudioEffectShared.h>
+
+#include <map>  // avoid transitive dependency
+
 namespace android {
 
 //--- Audio Effect Management
@@ -382,8 +393,7 @@ private:
 // it also provide it's own input buffer used by the track as accumulation buffer.
 class EffectChain : public IAfEffectChain {
 public:
-    EffectChain(const wp<AudioFlinger::ThreadBase>& wThread, audio_session_t sessionId);
-    ~EffectChain() override;
+    EffectChain(const sp<IAfThreadBase>& thread, audio_session_t sessionId);
 
     void process_l() final;
 
@@ -479,12 +489,7 @@ public:
     bool isBitPerfectCompatible() const final;
 
     // isCompatibleWithThread_l() must be called with thread->mLock held
-    // TODO(b/288339104) type
-    bool isCompatibleWithThread_l(const sp<Thread>& thread) const final {
-        return isCompatibleWithThread_l(sp<AudioFlinger::ThreadBase>::cast(thread));
-    }
-
-    bool isCompatibleWithThread_l(const sp<AudioFlinger::ThreadBase>& thread) const;
+    bool isCompatibleWithThread_l(const sp<IAfThreadBase>& thread) const final;
 
     bool containsHapticGeneratingEffect_l() final;
 
@@ -492,8 +497,7 @@ public:
 
     sp<EffectCallbackInterface> effectCallback() const final { return mEffectCallback; }
 
-    // TODO(b/288339104) type
-    wp<Thread> thread() const final { return mEffectCallback->thread(); }
+    wp<IAfThreadBase> thread() const final { return mEffectCallback->thread(); }
 
     bool isFirstEffect(int id) const final {
         return !mEffects.isEmpty() && id == mEffects[0]->id();
@@ -507,12 +511,7 @@ public:
         return mEffects[index];
     }
 
-    // TODO(b/288339104) type
-    void setThread(const sp<Thread>& thread) final {
-        setThread(sp<AudioFlinger::ThreadBase>::cast(thread));
-    }
-
-    void setThread(const sp<AudioFlinger::ThreadBase>& thread);
+    void setThread(const sp<IAfThreadBase>& thread) final;
 
 private:
 
@@ -527,16 +526,11 @@ private:
         // Note: ctors taking a weak pointer to their owner must not promote it
         // during construction (but may keep a reference for later promotion).
         EffectCallback(const wp<EffectChain>& owner,
-                       const wp<AudioFlinger::ThreadBase>& thread)
+                const sp<IAfThreadBase>& thread)  // we take a sp<> but store a wp<>.
             : mChain(owner)
-            , mThread(thread)
-            , mAudioFlinger(*AudioFlinger::gAudioFlinger) {
-            sp<AudioFlinger::ThreadBase> base = thread.promote();
-            if (base != nullptr) {
-                mThreadType = base->type();
-            } else {
-                mThreadType = AudioFlinger::ThreadBase::MIXER;  // assure a consistent value.
-            }
+            , mThread(thread) {
+            mThreadType = thread->type();
+            mAfThreadCallback = thread->afThreadCallback();
         }
 
         status_t createEffectHal(const effect_uuid_t *pEffectUuid,
@@ -577,21 +571,22 @@ private:
         wp<IAfEffectChain> chain() const final { return mChain; }
 
         bool isAudioPolicyReady() const final {
-            return mAudioFlinger.isAudioPolicyReady();
+            return mAfThreadCallback->isAudioPolicyReady();
         }
 
-        wp<AudioFlinger::ThreadBase> thread() const { return mThread.load(); }
+        wp<IAfThreadBase> thread() const { return mThread.load(); }
 
-        void setThread(const sp<AudioFlinger::ThreadBase>& thread) {
+        void setThread(const sp<IAfThreadBase>& thread) {
             mThread = thread;
             mThreadType = thread->type();
+            mAfThreadCallback = thread->afThreadCallback();
         }
 
     private:
         const wp<IAfEffectChain> mChain;
-        mediautils::atomic_wp<AudioFlinger::ThreadBase> mThread;
-        AudioFlinger &mAudioFlinger;  // implementation detail: outer instance always exists.
-        AudioFlinger::ThreadBase::type_t mThreadType;
+        mediautils::atomic_wp<IAfThreadBase> mThread;
+        sp<IAfThreadCallback> mAfThreadCallback;
+        IAfThreadBase::type_t mThreadType;
     };
 
     DISALLOW_COPY_AND_ASSIGN(EffectChain);
@@ -657,7 +652,7 @@ private:
 class DeviceEffectProxy : public IAfDeviceEffectProxy, public EffectBase {
 public:
     DeviceEffectProxy(const AudioDeviceTypeAddr& device,
-                const sp<AudioFlinger::DeviceEffectManagerCallback>& callback,
+            const sp<DeviceEffectManagerCallback>& callback,
                 effect_descriptor_t *desc, int id, bool notifyFramesProcessed)
             : EffectBase(callback, desc, id, AUDIO_SESSION_DEVICE, false),
                 mDevice(device), mManagerCallback(callback),
@@ -667,31 +662,14 @@ public:
     status_t setEnabled(bool enabled, bool fromHandle) final;
     sp<IAfDeviceEffectProxy> asDeviceEffectProxy() final { return this; }
 
-    // TODO(b/288339104) type
-    status_t init(const /* std::map<audio_patch_handle_t,
-            PatchPanel::Patch>& */ void * patches) final {
-        return init(*reinterpret_cast<const std::map<
-                audio_patch_handle_t, AudioFlinger::PatchPanel::Patch> *>(patches));
-    }
-    // TODO(b/288339104) type
+    status_t init(const std::map<audio_patch_handle_t,
+            IAfPatchPanel::Patch>& patches) final;
+
     status_t onCreatePatch(audio_patch_handle_t patchHandle,
-            /* const PatchPanel::Patch& */ const void * patch) final {
-        return onCreatePatch(patchHandle,
-                *reinterpret_cast<const AudioFlinger::PatchPanel::Patch *>(patch));
-    }
-    // TODO(b/288339104) type
-    status_t onUpdatePatch(audio_patch_handle_t oldPatchHandle, audio_patch_handle_t newPatchHandle,
-            /* const PatchPanel::Patch& */ const void * patch) final {
-        return onUpdatePatch(oldPatchHandle, newPatchHandle,
-                *reinterpret_cast<const AudioFlinger::PatchPanel::Patch *>(patch));
-    }
-
-    status_t init(const std::map<audio_patch_handle_t, AudioFlinger::PatchPanel::Patch>& patches);
-    status_t onCreatePatch(
-            audio_patch_handle_t patchHandle, const AudioFlinger::PatchPanel::Patch& patch);
+            const IAfPatchPanel::Patch& patch) final;
 
     status_t onUpdatePatch(audio_patch_handle_t oldPatchHandle, audio_patch_handle_t newPatchHandle,
-            const AudioFlinger::PatchPanel::Patch& patch);
+           const IAfPatchPanel::Patch& patch) final;
 
     void onReleasePatch(audio_patch_handle_t patchHandle) final;
 
@@ -720,7 +698,7 @@ private:
         // Note: ctors taking a weak pointer to their owner must not promote it
         // during construction (but may keep a reference for later promotion).
         ProxyCallback(const wp<DeviceEffectProxy>& owner,
-                const sp<AudioFlinger::DeviceEffectManagerCallback>& callback)
+                const sp<DeviceEffectManagerCallback>& callback)
             : mProxy(owner), mManagerCallback(callback) {}
 
         status_t createEffectHal(const effect_uuid_t *pEffectUuid,
@@ -771,14 +749,14 @@ private:
 
     private:
         const wp<DeviceEffectProxy> mProxy;
-        const sp<AudioFlinger::DeviceEffectManagerCallback> mManagerCallback;
+        const sp<DeviceEffectManagerCallback> mManagerCallback;
     };
 
-    status_t checkPort(const AudioFlinger::PatchPanel::Patch& patch,
+    status_t checkPort(const IAfPatchPanel::Patch& patch,
             const struct audio_port_config *port, sp<IAfEffectHandle> *handle);
 
     const AudioDeviceTypeAddr mDevice;
-    const sp<AudioFlinger::DeviceEffectManagerCallback> mManagerCallback;
+    const sp<DeviceEffectManagerCallback> mManagerCallback;
     const sp<ProxyCallback> mMyCallback;
 
     mutable Mutex mProxyLock;

@@ -15,6 +15,7 @@
  */
 
 #include <algorithm>
+#include <cstddef>
 #include <iterator>
 #include <memory>
 #define LOG_TAG "EffectProxy"
@@ -92,11 +93,13 @@ ndk::ScopedAStatus EffectProxy::setOffloadParam(const effect_offload_param_t* of
     }
 
     mActiveSubIdx = std::distance(mSubEffects.begin(), itor);
-    ALOGV("%s: active %soffload sub-effect %zu descriptor: %s", __func__,
+    ALOGI("%s: active %soffload sub-effect %zu descriptor: %s", __func__,
           offload->isOffload ? "" : "non-", mActiveSubIdx,
           ::android::audio::utils::toString(mSubEffects[mActiveSubIdx].descriptor.common.id.uuid)
                   .c_str());
-    return ndk::ScopedAStatus::ok();
+    return runWithAllSubEffects([&](std::shared_ptr<IEffect>& effect) {
+        return effect->setParameter(Parameter::make<Parameter::offload>(offload->isOffload));
+    });
 }
 
 // EffectProxy go over sub-effects and call IEffect interfaces
@@ -134,8 +137,8 @@ ndk::ScopedAStatus EffectProxy::close() {
 }
 
 ndk::ScopedAStatus EffectProxy::getDescriptor(Descriptor* desc) {
-    desc->common = mDescriptorCommon;
-    desc->capability = mSubEffects[mActiveSubIdx].descriptor.capability;
+    *desc = mSubEffects[mActiveSubIdx].descriptor;
+    desc->common.id.uuid = desc->common.id.proxy.value();
     return ndk::ScopedAStatus::ok();
 }
 
@@ -165,6 +168,12 @@ Descriptor::Common EffectProxy::buildDescriptorCommon(
         if (desc.common.flags.hwAcceleratorMode == Flags::HardwareAccelerator::TUNNEL) {
             common.flags.hwAcceleratorMode = Flags::HardwareAccelerator::TUNNEL;
         }
+
+        // initial flag values before we know which sub-effect to active (with setOffloadParam)
+        // same as HIDL EffectProxy flags
+        common.flags.type = Flags::Type::INSERT;
+        common.flags.insert = Flags::Insert::LAST;
+        common.flags.volume = Flags::Volume::NONE;
 
         // set indication if any sub-effect indication was set
         common.flags.offloadIndication |= desc.common.flags.offloadIndication;

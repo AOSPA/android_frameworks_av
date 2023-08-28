@@ -20,6 +20,7 @@
 #include <aidl/android/hardware/drm/IDrmPlugin.h>
 #include <aidl/android/hardware/security/keymint/BnRemotelyProvisionedComponent.h>
 #include <aidl/android/hardware/security/keymint/RpcHardwareInfo.h>
+#include <cppbor.h>
 
 namespace android::mediadrm {
 
@@ -34,7 +35,7 @@ using ::ndk::ScopedAStatus;
 class DrmRemotelyProvisionedComponent : public BnRemotelyProvisionedComponent {
   public:
     DrmRemotelyProvisionedComponent(std::shared_ptr<IDrmPlugin> drm, std::string drmVendor,
-                                    std::string drmDesc);
+                                    std::string drmDesc, std::vector<uint8_t> bcc);
     ScopedAStatus getHardwareInfo(RpcHardwareInfo* info) override;
 
     ScopedAStatus generateEcdsaP256KeyPair(bool testMode, MacedPublicKey* macedPublicKey,
@@ -52,9 +53,13 @@ class DrmRemotelyProvisionedComponent : public BnRemotelyProvisionedComponent {
                                                std::vector<uint8_t>* csr) override;
 
   private:
+    ScopedAStatus getVerifiedDeviceInfo(cppbor::Map& deviceInfoMap);
+    ScopedAStatus getDeviceInfo(std::vector<uint8_t>* deviceInfo);
+
     std::shared_ptr<IDrmPlugin> mDrm;
     std::string mDrmVendor;
     std::string mDrmDesc;
+    std::vector<uint8_t> mBcc;
 };
 }  // namespace android::mediadrm
 

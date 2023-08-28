@@ -19,10 +19,25 @@
 #define LOG_TAG "AudioFlinger"
 //#define LOG_NDEBUG 0
 
-#include <algorithm>
+#include "Effects.h"
 
-#include "Configuration.h"
-#include <utils/Log.h>
+#include "Client.h"
+#include "EffectConfiguration.h"
+
+#include <afutils/DumpTryLock.h>
+#include <audio_utils/channels.h>
+#include <audio_utils/primitives.h>
+#include <media/AudioCommonTypes.h>
+#include <media/AudioContainers.h>
+#include <media/AudioDeviceTypeAddr.h>
+#include <media/AudioEffect.h>
+#include <media/ShmemCompat.h>
+#include <media/TypeConverter.h>
+#include <media/audiohal/EffectHalInterface.h>
+#include <media/audiohal/EffectsFactoryHalInterface.h>
+#include <mediautils/MethodStatistics.h>
+#include <mediautils/ServiceUtilities.h>
+#include <mediautils/TimeCheck.h>
 #include <system/audio_effects/effect_aec.h>
 #include <system/audio_effects/effect_downmix.h>
 #include <system/audio_effects/effect_dynamicsprocessing.h>
@@ -30,22 +45,9 @@
 #include <system/audio_effects/effect_ns.h>
 #include <system/audio_effects/effect_spatializer.h>
 #include <system/audio_effects/effect_visualizer.h>
-#include <audio_utils/channels.h>
-#include <audio_utils/primitives.h>
-#include <media/AudioCommonTypes.h>
-#include <media/AudioContainers.h>
-#include <media/AudioEffect.h>
-#include <media/AudioDeviceTypeAddr.h>
-#include <media/ShmemCompat.h>
-#include <media/audiohal/EffectHalInterface.h>
-#include <media/audiohal/EffectsFactoryHalInterface.h>
-#include <mediautils/MethodStatistics.h>
-#include <mediautils/ServiceUtilities.h>
-#include <mediautils/TimeCheck.h>
+#include <utils/Log.h>
 
-#include "AudioFlinger.h"
-#include "EffectConfiguration.h"
-#include "Effects.h"
+#include <algorithm>
 
 // ----------------------------------------------------------------------------
 
@@ -507,7 +509,7 @@ NO_THREAD_SAFETY_ANALYSIS // conditional try lock
 
     result.appendFormat("\tEffect ID %d:\n", mId);
 
-    bool locked = AudioFlinger::dumpTryLock(mLock);
+    const bool locked = afutils::dumpTryLock(mLock);
     // failed to lock - AudioFlinger is probably deadlocked
     if (!locked) {
         result.append("\t\tCould not lock Fx mutex:\n");
@@ -1623,7 +1625,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
     EffectBase::dump(fd, args);
 
     String8 result;
-    bool locked = AudioFlinger::dumpTryLock(mLock);
+    const bool locked = afutils::dumpTryLock(mLock);
 
     result.append("\t\tStatus Engine:\n");
     result.appendFormat("\t\t%03d    %p\n",
@@ -1639,7 +1641,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             mConfig.inputCfg.samplingRate,
             mConfig.inputCfg.channels,
             mConfig.inputCfg.format,
-            formatToString((audio_format_t)mConfig.inputCfg.format).c_str());
+            toString(static_cast<audio_format_t>(mConfig.inputCfg.format)).c_str());
 
     result.append("\t\t- Output configuration:\n");
     result.append("\t\t\tBuffer     Frames  Smp rate Channels Format\n");
@@ -1649,7 +1651,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             mConfig.outputCfg.samplingRate,
             mConfig.outputCfg.channels,
             mConfig.outputCfg.format,
-            formatToString((audio_format_t)mConfig.outputCfg.format).c_str());
+            toString(static_cast<audio_format_t>(mConfig.outputCfg.format)).c_str());
 
     result.appendFormat("\t\t- HAL buffers:\n"
             "\t\t\tIn(%s) InConversion(%s) Out(%s) OutConversion(%s)\n",
@@ -1888,7 +1890,7 @@ void EffectHandle::disconnect(bool unpinIfLast)
         }
         mCblkMemory.clear();    // free the shared memory before releasing the heap it belongs to
         // Client destructor must run with AudioFlinger client mutex locked
-        Mutex::Autolock _l2(mClient->audioFlinger()->mClientLock);
+        Mutex::Autolock _l2(mClient->afClientCallback()->clientMutex());
         mClient.clear();
     }
 }
@@ -2097,7 +2099,7 @@ void EffectHandle::framesProcessed(int32_t frames) const
 void EffectHandle::dumpToBuffer(char* buffer, size_t size) const
 NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
 {
-    bool locked = mCblk != NULL && AudioFlinger::dumpTryLock(mCblk->lock);
+    const bool locked = mCblk != nullptr && afutils::dumpTryLock(mCblk->lock);
 
     snprintf(buffer, size, "\t\t\t%5d    %5d  %3s    %3s  %5u  %5u\n",
             (mClient == 0) ? getpid() : mClient->pid(),
@@ -2118,34 +2120,25 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
 
 /* static */
 sp<IAfEffectChain> IAfEffectChain::create(
-        const wp<Thread /*ThreadBase*/>& wThread,  // TODO(b/288339104) update type
+        const sp<IAfThreadBase>& thread,
         audio_session_t sessionId)
 {
-    // TODO(b/288339104) no weak pointer cast.
-    return sp<EffectChain>::make(sp<AudioFlinger::ThreadBase>::cast(wThread.promote()), sessionId);
+    return sp<EffectChain>::make(thread, sessionId);
 }
 
-EffectChain::EffectChain(const wp<AudioFlinger::ThreadBase>& thread,
+EffectChain::EffectChain(const sp<IAfThreadBase>& thread,
                                        audio_session_t sessionId)
     : mSessionId(sessionId), mActiveTrackCnt(0), mTrackCnt(0), mTailBufferCount(0),
       mVolumeCtrlIdx(-1), mLeftVolume(UINT_MAX), mRightVolume(UINT_MAX),
       mNewLeftVolume(UINT_MAX), mNewRightVolume(UINT_MAX),
       mEffectCallback(new EffectCallback(wp<EffectChain>(this), thread))
 {
-    sp<AudioFlinger::ThreadBase> p = thread.promote();
-    if (p == nullptr) {
-        return;
-    }
-    mStrategy = p->getStrategyForStream(AUDIO_STREAM_MUSIC);
-    mMaxTailBuffers = ((kProcessTailDurationMs * p->sampleRate()) / 1000) /
-                                    p->frameCount();
+    mStrategy = thread->getStrategyForStream(AUDIO_STREAM_MUSIC);
+    mMaxTailBuffers = ((kProcessTailDurationMs * thread->sampleRate()) / 1000) /
+                                    thread->frameCount();
 }
 
-EffectChain::~EffectChain()
-{
-}
-
-// getEffectFromDesc_l() must be called with AudioFlinger::ThreadBase::mLock held
+// getEffectFromDesc_l() must be called with IAfThreadBase::mutex() held
 sp<IAfEffectModule> EffectChain::getEffectFromDesc_l(
         effect_descriptor_t *descriptor) const
 {
@@ -2159,7 +2152,7 @@ sp<IAfEffectModule> EffectChain::getEffectFromDesc_l(
     return 0;
 }
 
-// getEffectFromId_l() must be called with AudioFlinger::ThreadBase::mLock held
+// getEffectFromId_l() must be called with IAfThreadBase::mutex() held
 sp<IAfEffectModule> EffectChain::getEffectFromId_l(int id) const
 {
     size_t size = mEffects.size();
@@ -2173,7 +2166,7 @@ sp<IAfEffectModule> EffectChain::getEffectFromId_l(int id) const
     return 0;
 }
 
-// getEffectFromType_l() must be called with AudioFlinger::ThreadBase::mLock held
+// getEffectFromType_l() must be called with IAfThreadBase::mutex() held
 sp<IAfEffectModule> EffectChain::getEffectFromType_l(
         const effect_uuid_t *type) const
 {
@@ -2268,7 +2261,7 @@ void EffectChain::process_l()
     }
 }
 
-// createEffect_l() must be called with AudioFlinger::ThreadBase::mLock held
+// createEffect_l() must be called with IAfThreadBase::mutex() held
 status_t EffectChain::createEffect_l(sp<IAfEffectModule>& effect,
                                                    effect_descriptor_t *desc,
                                                    int id,
@@ -2287,13 +2280,13 @@ status_t EffectChain::createEffect_l(sp<IAfEffectModule>& effect,
     return lStatus;
 }
 
-// addEffect_l() must be called with AudioFlinger::ThreadBase::mLock held
+// addEffect_l() must be called with IAfThreadBase::mutex() held
 status_t EffectChain::addEffect_l(const sp<IAfEffectModule>& effect)
 {
     Mutex::Autolock _l(mLock);
     return addEffect_ll(effect);
 }
-// addEffect_l() must be called with AudioFlinger::ThreadBase::mLock and EffectChain::mLock held
+// addEffect_l() must be called with IAfThreadBase::mLock and EffectChain::mutex() held
 status_t EffectChain::addEffect_ll(const sp<IAfEffectModule>& effect)
 {
     effect->setCallback(mEffectCallback);
@@ -2447,7 +2440,7 @@ ssize_t EffectChain::getInsertIndex(const effect_descriptor_t& desc) {
     return idx_insert;
 }
 
-// removeEffect_l() must be called with AudioFlinger::ThreadBase::mLock held
+// removeEffect_l() must be called with IAfThreadBase::mutex() held
 size_t EffectChain::removeEffect_l(const sp<IAfEffectModule>& effect,
                                                  bool release)
 {
@@ -2495,7 +2488,7 @@ size_t EffectChain::removeEffect_l(const sp<IAfEffectModule>& effect,
     return mEffects.size();
 }
 
-// setDevices_l() must be called with AudioFlinger::ThreadBase::mLock held
+// setDevices_l() must be called with IAfThreadBase::mutex() held
 void EffectChain::setDevices_l(const AudioDeviceTypeAddrVector &devices)
 {
     size_t size = mEffects.size();
@@ -2504,7 +2497,7 @@ void EffectChain::setDevices_l(const AudioDeviceTypeAddrVector &devices)
     }
 }
 
-// setInputDevice_l() must be called with AudioFlinger::ThreadBase::mLock held
+// setInputDevice_l() must be called with IAfThreadBase::mutex() held
 void EffectChain::setInputDevice_l(const AudioDeviceTypeAddr &device)
 {
     size_t size = mEffects.size();
@@ -2513,7 +2506,7 @@ void EffectChain::setInputDevice_l(const AudioDeviceTypeAddr &device)
     }
 }
 
-// setMode_l() must be called with AudioFlinger::ThreadBase::mLock held
+// setMode_l() must be called with IAfThreadBase::mutex() held
 void EffectChain::setMode_l(audio_mode_t mode)
 {
     size_t size = mEffects.size();
@@ -2522,7 +2515,7 @@ void EffectChain::setMode_l(audio_mode_t mode)
     }
 }
 
-// setAudioSource_l() must be called with AudioFlinger::ThreadBase::mLock held
+// setAudioSource_l() must be called with IAfThreadBase::mutex() held
 void EffectChain::setAudioSource_l(audio_source_t source)
 {
     size_t size = mEffects.size();
@@ -2538,7 +2531,7 @@ bool EffectChain::hasVolumeControlEnabled_l() const {
     return false;
 }
 
-// setVolume_l() must be called with AudioFlinger::ThreadBase::mLock or EffectChain::mLock held
+// setVolume_l() must be called with IAfThreadBase::mLock or EffectChain::mLock held
 bool EffectChain::setVolume_l(uint32_t *left, uint32_t *right, bool force)
 {
     uint32_t newLeft = *left;
@@ -2605,7 +2598,7 @@ bool EffectChain::setVolume_l(uint32_t *left, uint32_t *right, bool force)
     return hasControl;
 }
 
-// resetVolume_l() must be called with AudioFlinger::ThreadBase::mLock or EffectChain::mLock held
+// resetVolume_l() must be called with IAfThreadBase::mutex() or EffectChain::mLock held
 void EffectChain::resetVolume_l()
 {
     if ((mLeftVolume != UINT_MAX) && (mRightVolume != UINT_MAX)) {
@@ -2616,7 +2609,7 @@ void EffectChain::resetVolume_l()
 }
 
 // containsHapticGeneratingEffect_l must be called with
-// AudioFlinger::ThreadBase::mLock or EffectChain::mLock held
+// IAfThreadBase::mutex() or EffectChain::mLock held
 bool EffectChain::containsHapticGeneratingEffect_l()
 {
     for (size_t i = 0; i < mEffects.size(); ++i) {
@@ -2655,7 +2648,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
     result.appendFormat("    %zu effects for session %d\n", numEffects, mSessionId);
 
     if (numEffects) {
-        bool locked = AudioFlinger::dumpTryLock(mLock);
+        const bool locked = afutils::dumpTryLock(mLock);
         // failed to lock - AudioFlinger is probably deadlocked
         if (!locked) {
             result.append("\tCould not lock mutex:\n");
@@ -2685,7 +2678,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
     }
 }
 
-// must be called with AudioFlinger::ThreadBase::mLock held
+// must be called with IAfThreadBase::mutex() held
 void EffectChain::setEffectSuspended_l(
         const effect_uuid_t *type, bool suspend)
 {
@@ -2741,7 +2734,7 @@ void EffectChain::setEffectSuspended_l(
     }
 }
 
-// must be called with AudioFlinger::ThreadBase::mLock held
+// must be called with IAfThreadBase::mutex() held
 void EffectChain::setEffectSuspendedAll_l(bool suspend)
 {
     sp<SuspendedEffectDesc> desc;
@@ -2897,7 +2890,7 @@ bool EffectChain::isNonOffloadableEnabled_l() const
     return false;
 }
 
-void EffectChain::setThread(const sp<AudioFlinger::ThreadBase>& thread)
+void EffectChain::setThread(const sp<IAfThreadBase>& thread)
 {
     Mutex::Autolock _l(mLock);
     mEffectCallback->setThread(thread);
@@ -2964,7 +2957,7 @@ bool EffectChain::isBitPerfectCompatible() const {
 }
 
 // isCompatibleWithThread_l() must be called with thread->mLock held
-bool EffectChain::isCompatibleWithThread_l(const sp<AudioFlinger::ThreadBase>& thread) const
+bool EffectChain::isCompatibleWithThread_l(const sp<IAfThreadBase>& thread) const
 {
     Mutex::Autolock _l(mLock);
     for (size_t i = 0; i < mEffects.size(); i++) {
@@ -2991,18 +2984,18 @@ status_t EffectChain::EffectCallback::createEffectHal(
 bool EffectChain::EffectCallback::updateOrphanEffectChains(
         const sp<IAfEffectBase>& effect) {
     // in EffectChain context, an EffectBase is always from an EffectModule so static cast is safe
-    return mAudioFlinger.updateOrphanEffectChains(effect->asEffectModule());
+    return mAfThreadCallback->updateOrphanEffectChains(effect->asEffectModule());
 }
 
 status_t EffectChain::EffectCallback::allocateHalBuffer(
         size_t size, sp<EffectBufferHalInterface>* buffer) {
-    return mAudioFlinger.mEffectsFactoryHal->allocateBuffer(size, buffer);
+    return mAfThreadCallback->getEffectsFactoryHal()->allocateBuffer(size, buffer);
 }
 
 status_t EffectChain::EffectCallback::addEffectToHal(
         const sp<EffectHalInterface>& effect) {
     status_t result = NO_INIT;
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return result;
     }
@@ -3018,7 +3011,7 @@ status_t EffectChain::EffectCallback::addEffectToHal(
 status_t EffectChain::EffectCallback::removeEffectFromHal(
         const sp<EffectHalInterface>& effect) {
     status_t result = NO_INIT;
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return result;
     }
@@ -3032,7 +3025,7 @@ status_t EffectChain::EffectCallback::removeEffectFromHal(
 }
 
 audio_io_handle_t EffectChain::EffectCallback::io() const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return AUDIO_IO_HANDLE_NONE;
     }
@@ -3040,7 +3033,7 @@ audio_io_handle_t EffectChain::EffectCallback::io() const {
 }
 
 bool EffectChain::EffectCallback::isOutput() const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return true;
     }
@@ -3048,19 +3041,19 @@ bool EffectChain::EffectCallback::isOutput() const {
 }
 
 bool EffectChain::EffectCallback::isOffload() const {
-    return mThreadType == AudioFlinger::ThreadBase::OFFLOAD;
+    return mThreadType == IAfThreadBase::OFFLOAD;
 }
 
 bool EffectChain::EffectCallback::isOffloadOrDirect() const {
-    return mThreadType == AudioFlinger::ThreadBase::OFFLOAD
-            || mThreadType == AudioFlinger::ThreadBase::DIRECT;
+    return mThreadType == IAfThreadBase::OFFLOAD
+            || mThreadType == IAfThreadBase::DIRECT;
 }
 
 bool EffectChain::EffectCallback::isOffloadOrMmap() const {
     switch (mThreadType) {
-    case AudioFlinger::ThreadBase::OFFLOAD:
-    case AudioFlinger::ThreadBase::MMAP_PLAYBACK:
-    case AudioFlinger::ThreadBase::MMAP_CAPTURE:
+    case IAfThreadBase::OFFLOAD:
+    case IAfThreadBase::MMAP_PLAYBACK:
+    case IAfThreadBase::MMAP_CAPTURE:
         return true;
     default:
         return false;
@@ -3068,11 +3061,11 @@ bool EffectChain::EffectCallback::isOffloadOrMmap() const {
 }
 
 bool EffectChain::EffectCallback::isSpatializer() const {
-    return mThreadType == AudioFlinger::ThreadBase::SPATIALIZER;
+    return mThreadType == IAfThreadBase::SPATIALIZER;
 }
 
 uint32_t EffectChain::EffectCallback::sampleRate() const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return 0;
     }
@@ -3080,7 +3073,7 @@ uint32_t EffectChain::EffectCallback::sampleRate() const {
 }
 
 audio_channel_mask_t EffectChain::EffectCallback::inChannelMask(int id) const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return AUDIO_CHANNEL_NONE;
     }
@@ -3089,7 +3082,7 @@ audio_channel_mask_t EffectChain::EffectCallback::inChannelMask(int id) const {
         return AUDIO_CHANNEL_NONE;
     }
 
-    if (mThreadType == AudioFlinger::ThreadBase::SPATIALIZER) {
+    if (mThreadType == IAfThreadBase::SPATIALIZER) {
         if (c->sessionId() == AUDIO_SESSION_OUTPUT_STAGE) {
             if (c->isFirstEffect(id)) {
                 return t->mixerChannelMask();
@@ -3098,7 +3091,7 @@ audio_channel_mask_t EffectChain::EffectCallback::inChannelMask(int id) const {
             }
         } else if (!audio_is_global_session(c->sessionId())) {
             if ((t->hasAudioSession_l(c->sessionId())
-                    & AudioFlinger::ThreadBase::SPATIALIZED_SESSION) != 0) {
+                    & IAfThreadBase::SPATIALIZED_SESSION) != 0) {
                 return t->mixerChannelMask();
             } else {
                 return t->channelMask();
@@ -3116,7 +3109,7 @@ uint32_t EffectChain::EffectCallback::inChannelCount(int id) const {
 }
 
 audio_channel_mask_t EffectChain::EffectCallback::outChannelMask() const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return AUDIO_CHANNEL_NONE;
     }
@@ -3125,10 +3118,10 @@ audio_channel_mask_t EffectChain::EffectCallback::outChannelMask() const {
         return AUDIO_CHANNEL_NONE;
     }
 
-    if (mThreadType == AudioFlinger::ThreadBase::SPATIALIZER) {
+    if (mThreadType == IAfThreadBase::SPATIALIZER) {
         if (!audio_is_global_session(c->sessionId())) {
             if ((t->hasAudioSession_l(c->sessionId())
-                    & AudioFlinger::ThreadBase::SPATIALIZED_SESSION) != 0) {
+                    & IAfThreadBase::SPATIALIZED_SESSION) != 0) {
                 return t->mixerChannelMask();
             } else {
                 return t->channelMask();
@@ -3146,7 +3139,7 @@ uint32_t EffectChain::EffectCallback::outChannelCount() const {
 }
 
 audio_channel_mask_t EffectChain::EffectCallback::hapticChannelMask() const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return AUDIO_CHANNEL_NONE;
     }
@@ -3154,7 +3147,7 @@ audio_channel_mask_t EffectChain::EffectCallback::hapticChannelMask() const {
 }
 
 size_t EffectChain::EffectCallback::frameCount() const {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return 0;
     }
@@ -3164,7 +3157,7 @@ size_t EffectChain::EffectCallback::frameCount() const {
 uint32_t EffectChain::EffectCallback::latency() const
 NO_THREAD_SAFETY_ANALYSIS  // latency_l() access
 {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return 0;
     }
@@ -3175,7 +3168,7 @@ NO_THREAD_SAFETY_ANALYSIS  // latency_l() access
 void EffectChain::EffectCallback::setVolumeForOutput(float left, float right) const
 NO_THREAD_SAFETY_ANALYSIS  // setVolumeForOutput_l() access
 {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return;
     }
@@ -3184,7 +3177,7 @@ NO_THREAD_SAFETY_ANALYSIS  // setVolumeForOutput_l() access
 
 void EffectChain::EffectCallback::checkSuspendOnEffectEnabled(
         const sp<IAfEffectBase>& effect, bool enabled, bool threadLocked) {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return;
     }
@@ -3199,7 +3192,7 @@ void EffectChain::EffectCallback::checkSuspendOnEffectEnabled(
 }
 
 void EffectChain::EffectCallback::onEffectEnable(const sp<IAfEffectBase>& effect) {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return;
     }
@@ -3210,7 +3203,7 @@ void EffectChain::EffectCallback::onEffectEnable(const sp<IAfEffectBase>& effect
 void EffectChain::EffectCallback::onEffectDisable(const sp<IAfEffectBase>& effect) {
     checkSuspendOnEffectEnabled(effect, false, false /*threadLocked*/);
 
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return;
     }
@@ -3219,7 +3212,7 @@ void EffectChain::EffectCallback::onEffectDisable(const sp<IAfEffectBase>& effec
 
 bool EffectChain::EffectCallback::disconnectEffectHandle(IAfEffectHandle *handle,
                                                       bool unpinIfLast) {
-    sp<AudioFlinger::ThreadBase> t = thread().promote();
+    const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
         return false;
     }
@@ -3259,11 +3252,11 @@ int32_t EffectChain::EffectCallback::activeTrackCnt() const {
 /* static */
 sp<IAfDeviceEffectProxy> IAfDeviceEffectProxy::create(
         const AudioDeviceTypeAddr& device,
-        const sp</* DeviceEffectManagerCallback */ RefBase>& callback,  // TODO(b/288339104) type
+        const sp<DeviceEffectManagerCallback>& callback,
         effect_descriptor_t *desc, int id, bool notifyFramesProcessed)
 {
     return sp<DeviceEffectProxy>::make(device,
-            sp<AudioFlinger::DeviceEffectManagerCallback>::cast(callback),
+            callback,
             desc, id, notifyFramesProcessed);
 }
 
@@ -3289,7 +3282,7 @@ status_t DeviceEffectProxy::setEnabled(bool enabled, bool fromHandle)
 }
 
 status_t DeviceEffectProxy::init(
-        const std::map <audio_patch_handle_t, AudioFlinger::PatchPanel::Patch>& patches) {
+        const std::map <audio_patch_handle_t, IAfPatchPanel::Patch>& patches) {
 //For all audio patches
 //If src or sink device match
 //If the effect is HW accelerated
@@ -3313,7 +3306,7 @@ status_t DeviceEffectProxy::init(
 
 status_t DeviceEffectProxy::onUpdatePatch(audio_patch_handle_t oldPatchHandle,
         audio_patch_handle_t newPatchHandle,
-        const AudioFlinger::PatchPanel::Patch& patch __unused) {
+        const IAfPatchPanel::Patch& /* patch */) {
     status_t status = NAME_NOT_FOUND;
     ALOGV("%s", __func__);
     Mutex::Autolock _l(mProxyLock);
@@ -3329,7 +3322,7 @@ status_t DeviceEffectProxy::onUpdatePatch(audio_patch_handle_t oldPatchHandle,
 }
 
 status_t DeviceEffectProxy::onCreatePatch(
-        audio_patch_handle_t patchHandle, const AudioFlinger::PatchPanel::Patch& patch) {
+        audio_patch_handle_t patchHandle, const IAfPatchPanel::Patch& patch) {
     status_t status = NAME_NOT_FOUND;
     sp<IAfEffectHandle> handle;
     // only consider source[0] as this is the only "true" source of a patch
@@ -3352,7 +3345,7 @@ status_t DeviceEffectProxy::onCreatePatch(
     return status;
 }
 
-status_t DeviceEffectProxy::checkPort(const AudioFlinger::PatchPanel::Patch& patch,
+status_t DeviceEffectProxy::checkPort(const IAfPatchPanel::Patch& patch,
         const struct audio_port_config *port, sp<IAfEffectHandle> *handle) {
 
     ALOGV("%s type %d device type %d address %s device ID %d patch.isSoftware() %d",
@@ -3401,7 +3394,7 @@ status_t DeviceEffectProxy::checkPort(const AudioFlinger::PatchPanel::Patch& pat
             mDevicePort.id = AUDIO_PORT_HANDLE_NONE;
         }
     } else if (patch.isSoftware() || patch.thread().promote() != nullptr) {
-        sp <AudioFlinger::ThreadBase> thread;
+        sp<IAfThreadBase> thread;
         if (audio_port_config_has_input_direction(port)) {
             if (patch.isSoftware()) {
                 thread = patch.mRecord.thread();
@@ -3531,7 +3524,7 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
     const Vector<String16> args;
     EffectBase::dump(fd, args);
 
-    const bool locked = AudioFlinger::dumpTryLock(mProxyLock);
+    const bool locked = afutils::dumpTryLock(mProxyLock);
     if (!locked) {
         String8 result("DeviceEffectProxy may be deadlocked\n");
         write(fd, result.string(), result.size());

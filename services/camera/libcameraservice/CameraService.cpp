@@ -2117,6 +2117,9 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const std::str
         if (err != OK) {
             ALOGE("%s: Could not initialize client from HAL.", __FUNCTION__);
             // Errors could be from the HAL module open call or from AppOpsManager
+            mServiceLock.unlock();
+            client->disconnect();
+            mServiceLock.lock();
             switch(err) {
                 case BAD_VALUE:
                     return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT,
@@ -2659,6 +2662,11 @@ Status CameraService::notifySystemEvent(int32_t eventId,
         }
         case ICameraService::EVENT_USB_DEVICE_ATTACHED:
         case ICameraService::EVENT_USB_DEVICE_DETACHED: {
+            if (args.size() != 1) {
+                return Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT,
+                    "USB Device Event requires 1 argument");
+            }
+
             // Notify CameraProviderManager for lazy HALs
             mCameraProviderManager->notifyUsbDeviceEvent(eventId,
                                                         std::to_string(args[0]));
@@ -5885,6 +5893,8 @@ status_t CameraService::printHelp(int out) {
         "  clear-stream-use-case-override clear the stream use case override\n"
         "  set-zoom-override <-1/0/1> enable or disable zoom override\n"
         "      Valid values -1: do not override, 0: override to OFF, 1: override to ZOOM\n"
+        "  set-watchdog <VALUE> enables or disables the camera service watchdog\n"
+        "      Valid values 0=disable, 1=enable\n"
         "  watch <start|stop|dump|print|clear> manages tag monitoring in connected clients\n"
         "  help print this message\n");
 }

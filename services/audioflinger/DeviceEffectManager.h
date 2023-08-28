@@ -15,26 +15,41 @@
 ** limitations under the License.
 */
 
-#ifndef INCLUDING_FROM_AUDIOFLINGER_H
-    #error This header file should only be included from AudioFlinger.h
-#endif
+#pragma once
+
+#include "IAfEffect.h"
+#include "PatchCommandThread.h"
+
+#include <utils/Mutex.h>  // avoid transitive dependency
+
+namespace android {
+
+class IAfDeviceEffectManagerCallback : public virtual RefBase {
+public:
+    virtual bool isAudioPolicyReady() const = 0;
+    virtual audio_unique_id_t nextUniqueId(audio_unique_id_use_t use) = 0;
+    virtual const sp<PatchCommandThread>& getPatchCommandThread() = 0;
+    virtual status_t addEffectToHal(
+            const struct audio_port_config* device, const sp<EffectHalInterface>& effect) = 0;
+    virtual status_t removeEffectFromHal(
+            const struct audio_port_config* device, const sp<EffectHalInterface>& effect) = 0;
+};
+
+class DeviceEffectManagerCallback;
 
 // DeviceEffectManager is concealed within AudioFlinger, their lifetimes are the same.
 class DeviceEffectManager : public PatchCommandThread::PatchCommandListener {
 public:
-    explicit DeviceEffectManager(AudioFlinger& audioFlinger)
-        : mAudioFlinger(audioFlinger),
-          mMyCallback(new DeviceEffectManagerCallback(*this)) {}
+    explicit DeviceEffectManager(
+            const sp<IAfDeviceEffectManagerCallback>& afDeviceEffectManagerCallback);
 
-    void onFirstRef() override {
-        mAudioFlinger.mPatchCommandThread->addListener(this);
-    }
+    void onFirstRef() override;
 
     sp<IAfEffectHandle> createEffect_l(effect_descriptor_t *descriptor,
                 const AudioDeviceTypeAddr& device,
                 const sp<Client>& client,
                 const sp<media::IEffectClient>& effectClient,
-                const std::map<audio_patch_handle_t, PatchPanel::Patch>& patches,
+                const std::map<audio_patch_handle_t, IAfPatchPanel::Patch>& patches,
                 int *enabled,
                 status_t *status,
                 bool probe,
@@ -45,37 +60,32 @@ public:
            int32_t sessionId, int32_t deviceId,
            sp<EffectHalInterface> *effect);
     status_t addEffectToHal(const struct audio_port_config *device,
-            const sp<EffectHalInterface>& effect) {
-        return mAudioFlinger.addEffectToHal(device, effect);
-    };
+            const sp<EffectHalInterface>& effect);
     status_t removeEffectFromHal(const struct audio_port_config *device,
-            const sp<EffectHalInterface>& effect) {
-        return mAudioFlinger.removeEffectFromHal(device, effect);
-    };
+            const sp<EffectHalInterface>& effect);
 
-    AudioFlinger& audioFlinger() const { return mAudioFlinger; }
+    const auto& afDeviceEffectManagerCallback() const { return mAfDeviceEffectManagerCallback; }
 
     void dump(int fd);
 
     // PatchCommandThread::PatchCommandListener implementation
 
     void onCreateAudioPatch(audio_patch_handle_t handle,
-                            const PatchPanel::Patch& patch) override;
-    void onReleaseAudioPatch(audio_patch_handle_t handle) override;
+            const IAfPatchPanel::Patch& patch) final;
+    void onReleaseAudioPatch(audio_patch_handle_t handle) final;
     void onUpdateAudioPatch(audio_patch_handle_t oldHandle,
                             audio_patch_handle_t newHandle,
-                            const PatchPanel::Patch& patch) override;
+                            const IAfPatchPanel::Patch& patch) final;
 
 private:
     status_t checkEffectCompatibility(const effect_descriptor_t *desc);
 
     Mutex mLock;
-    AudioFlinger &mAudioFlinger;
+    const sp<IAfDeviceEffectManagerCallback> mAfDeviceEffectManagerCallback;
     const sp<DeviceEffectManagerCallback> mMyCallback;
     std::map<AudioDeviceTypeAddr, std::vector<sp<IAfDeviceEffectProxy>>> mDeviceEffects;
 };
 
-public: // TODO(b/288339104) extract inner class.
 class DeviceEffectManagerCallback : public EffectCallbackInterface {
 public:
     explicit DeviceEffectManagerCallback(DeviceEffectManager& manager)
@@ -132,11 +142,9 @@ public:
 
     wp<IAfEffectChain> chain() const override { return nullptr; }
 
-    bool isAudioPolicyReady() const override {
-        return mManager.audioFlinger().isAudioPolicyReady();
-    }
+    bool isAudioPolicyReady() const final;
 
-    int newEffectId() { return mManager.audioFlinger().nextUniqueId(AUDIO_UNIQUE_ID_USE_EFFECT); }
+    int newEffectId() const;
 
     status_t addEffectToHal(const struct audio_port_config *device,
             const sp<EffectHalInterface>& effect) {
@@ -149,4 +157,5 @@ public:
 private:
     DeviceEffectManager& mManager;
 };
-private:
+
+}  // namespace android

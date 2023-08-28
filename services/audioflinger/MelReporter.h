@@ -15,15 +15,26 @@
 ** limitations under the License.
 */
 
-#ifndef INCLUDING_FROM_AUDIOFLINGER_H
-    #error This header file should only be included from AudioFlinger.h
-#endif
+#pragma once
+
+#include "IAfPatchPanel.h"
+#include "PatchCommandThread.h"
+
+#include <sounddose/SoundDoseManager.h>
 
 #include <mutex>
-#include <sounddose/SoundDoseManager.h>
 #include <unordered_map>
 
+namespace android {
+
 constexpr static int kMaxTimestampDeltaInSec = 120;
+
+class IAfMelReporterCallback : public virtual RefBase {
+public:
+    virtual Mutex& mutex() const = 0;
+    virtual const sp<PatchCommandThread>& getPatchCommandThread() = 0;
+    virtual sp<IAfThreadBase> checkOutputThread_l(audio_io_handle_t ioHandle) const = 0;
+};
 
 /**
  * Class for listening to new patches and starting the MEL computation. MelReporter is
@@ -31,8 +42,8 @@ constexpr static int kMaxTimestampDeltaInSec = 120;
  */
 class MelReporter : public PatchCommandThread::PatchCommandListener {
 public:
-    explicit MelReporter(AudioFlinger& audioFlinger)
-        : mAudioFlinger(audioFlinger),
+    explicit MelReporter(const sp<IAfMelReporterCallback>& afMelReporterCallback)
+        : mAfMelReporterCallback(afMelReporterCallback),
           mSoundDoseManager(sp<SoundDoseManager>::make()) {}
 
     void onFirstRef() override;
@@ -67,11 +78,11 @@ public:
 
     // PatchCommandListener methods
     void onCreateAudioPatch(audio_patch_handle_t handle,
-                            const PatchPanel::Patch& patch) override;
-    void onReleaseAudioPatch(audio_patch_handle_t handle) override;
+        const IAfPatchPanel::Patch& patch) final;
+    void onReleaseAudioPatch(audio_patch_handle_t handle) final;
     void onUpdateAudioPatch(audio_patch_handle_t oldHandle,
                             audio_patch_handle_t newHandle,
-                            const PatchPanel::Patch& patch) override;
+                            const IAfPatchPanel::Patch& patch) final;
 
     /**
      * The new metadata can determine whether we should compute MEL for the given thread.
@@ -103,7 +114,7 @@ private:
 
     bool useHalSoundDoseInterface_l() REQUIRES(mLock);
 
-    AudioFlinger& mAudioFlinger;  // does not own the object
+    const sp<IAfMelReporterCallback> mAfMelReporterCallback;
 
     sp<SoundDoseManager> mSoundDoseManager;
 
@@ -112,9 +123,9 @@ private:
      * Locking order AudioFlinger::mLock -> PatchCommandThread::mLock -> MelReporter::mLock.
      */
     std::mutex mLock;
-    std::unordered_map<audio_patch_handle_t, ActiveMelPatch>
-        mActiveMelPatches GUARDED_BY(AudioFlinger::MelReporter::mLock);
-    std::unordered_map<audio_port_handle_t, int>
-        mActiveDevices GUARDED_BY(AudioFlinger::MelReporter::mLock);
-    bool mUseHalSoundDoseInterface GUARDED_BY(AudioFlinger::MelReporter::mLock) = false;
+    std::unordered_map<audio_patch_handle_t, ActiveMelPatch> mActiveMelPatches GUARDED_BY(mLock);
+    std::unordered_map<audio_port_handle_t, int> mActiveDevices GUARDED_BY(mLock);
+    bool mUseHalSoundDoseInterface GUARDED_BY(mLock) = false;
 };
+
+}  // namespace android

@@ -17,12 +17,16 @@
 
 #pragma once
 
+#include "TrackBase.h"
+
+#include <android/content/AttributionSourceState.h>
+
 namespace android {
 
 // playback track
 class MmapTrack : public TrackBase, public IAfMmapTrack {
 public:
-                MmapTrack(AudioFlinger::ThreadBase* thread,
+    MmapTrack(IAfThreadBase* thread,
                             const audio_attributes_t& attr,
                             uint32_t sampleRate,
                             audio_format_t format,
@@ -60,10 +64,8 @@ public:
      */
     void processMuteEvent_l(const sp<IAudioManager>& audioManager,
                             mute_state_t muteState)
-                            REQUIRES(AudioFlinger::MmapPlaybackThread::mLock) final;
+                            /* REQUIRES(MmapPlaybackThread::mLock) */ final;
 private:
-    friend class MmapThread;
-
     DISALLOW_COPY_AND_ASSIGN(MmapTrack);
 
     // AudioBufferProvider interface
@@ -82,9 +84,9 @@ private:
     // TODO: replace PersistableBundle with own struct
     // access these two variables only when holding player thread lock.
     std::unique_ptr<os::PersistableBundle> mMuteEventExtras
-            GUARDED_BY(AudioFlinger::MmapPlaybackThread::mLock);
+            /* GUARDED_BY(MmapPlaybackThread::mLock) */;
     mute_state_t mMuteState
-            GUARDED_BY(AudioFlinger::MmapPlaybackThread::mLock);
+            /* GUARDED_BY(MmapPlaybackThread::mLock) */;
 };  // end of Track
 
 } // namespace android

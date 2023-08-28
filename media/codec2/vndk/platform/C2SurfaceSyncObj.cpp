@@ -171,14 +171,19 @@ int C2SyncVariables::unlock() {
         return 0;
     }
 
-    // not sure why we need to spin for unlock as here we know already we have a waiter who
-    // we need to wake up.
+    // We don't need to spin for unlock as here we know already we have a waiter who we need to
+    // wake up. This code was here in case someone just happened to lock this lock (uncontested)
+    // before we would wake up other waiters to avoid a syscall. It is unsure if this ever gets
+    // exercised or if this is the behavior we want. (Note that if this code is removed, the same
+    // situation is still handled in lock() by the woken up waiter that realizes that the lock is
+    // now taken.)
     for (int i = 0; i < kSpinNumForUnlock; i++) {
         // here we seem to check if someone relocked this lock, and if they relocked uncontested,
-        // we up it to contested.
+        // we up it to contested (since there are other waiters.)
         if (mLock.load() != FUTEX_UNLOCKED) {
             uint32_t old = FUTEX_LOCKED_UNCONTENDED;
             mLock.compare_exchange_strong(old, FUTEX_LOCKED_CONTENDED);
+            // this is always true here so we return immediately
             if (old) {
                 // if the lock was unlocked (again) we are done (?)
                 return 0;
@@ -187,7 +192,7 @@ int C2SyncVariables::unlock() {
         sched_yield();
     }
 
-    // wake up on waiter
+    // wake up one waiter
     (void)syscall(__NR_futex, &mLock, FUTEX_WAKE, 1, NULL, NULL, 0);
     return 0;
 }

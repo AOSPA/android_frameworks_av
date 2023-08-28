@@ -16,13 +16,28 @@
 
 #pragma once
 
+#include "IAfPatchPanel.h"  // full class Patch definition needed
+
+#include <android/media/AudioVibratorInfo.h>
+#include <android/media/BnEffect.h>
+#include <android/media/BnEffectClient.h>
+#include <media/AudioCommonTypes.h>  // product_strategy_t
+#include <media/AudioDeviceTypeAddr.h>
+#include <media/audiohal/EffectHalInterface.h>
+#include <utils/RefBase.h>
+#include <vibrator/ExternalVibration.h>
+
 namespace android {
+
+class Client;
+class DeviceEffectManagerCallback;
 
 class IAfDeviceEffectProxy;
 class IAfEffectBase;
 class IAfEffectChain;
 class IAfEffectHandle;
 class IAfEffectModule;
+class IAfThreadBase;
 
 // Interface implemented by the EffectModule parent or owner (e.g an EffectChain) to abstract
 // interactions between the EffectModule and the reset of the audio framework.
@@ -190,7 +205,7 @@ class IAfEffectChain : public RefBase {
     // Most of these methods are accessed from AudioFlinger::Thread
 public:
     static sp<IAfEffectChain> create(
-            const wp<Thread /*ThreadBase*/>& wThread,  // TODO(b/288339104) type
+            const sp<IAfThreadBase>& thread,
             audio_session_t sessionId);
 
     // special key used for an entry in mSuspendedEffects keyed vector
@@ -279,8 +294,7 @@ public:
     virtual bool isBitPerfectCompatible() const = 0;
 
     // isCompatibleWithThread_l() must be called with thread->mLock held
-    //  TODO(b/288339104) type
-    virtual bool isCompatibleWithThread_l(const sp<Thread>& thread) const = 0;
+    virtual bool isCompatibleWithThread_l(const sp<IAfThreadBase>& thread) const = 0;
 
     virtual bool containsHapticGeneratingEffect_l() = 0;
 
@@ -288,8 +302,8 @@ public:
 
     virtual sp<EffectCallbackInterface> effectCallback() const = 0;
 
-    virtual wp<Thread> thread() const = 0;  // TODO(b/288339104) type
-    virtual void setThread(const sp<Thread>& thread) = 0;  // TODO(b/288339104) type
+    virtual wp<IAfThreadBase> thread() const = 0;
+    virtual void setThread(const sp<IAfThreadBase>& thread) = 0;
 
     virtual bool isFirstEffect(int id) const = 0;
 
@@ -335,25 +349,24 @@ private:
 
 class IAfDeviceEffectProxy : public virtual IAfEffectBase {
 public:
-    // TODO(b/288339104) type
     static sp<IAfDeviceEffectProxy> create(const AudioDeviceTypeAddr& device,
-                const sp</* DeviceEffectManagerCallback */ RefBase>& callback,
+                const sp<DeviceEffectManagerCallback>& callback,
                 effect_descriptor_t *desc, int id, bool notifyFramesProcessed);
 
     virtual status_t init(
-            const /* std::map<audio_patch_handle_t,
-            PatchPanel::Patch>& */ void * patches) = 0; // TODO(b/288339104) type
+            const std::map<audio_patch_handle_t,
+            IAfPatchPanel::Patch>& patches) = 0;
     virtual const AudioDeviceTypeAddr& device() const = 0;
 
     virtual status_t onCreatePatch(
             audio_patch_handle_t patchHandle,
-            /* const PatchPanel::Patch& */ const void * patch) = 0;
+            const IAfPatchPanel::Patch& patch) = 0;
     virtual status_t onUpdatePatch(audio_patch_handle_t oldPatchHandle,
             audio_patch_handle_t newPatchHandle,
-            /* const PatchPanel::Patch& */ const void * patch) = 0;
+            const IAfPatchPanel::Patch& patch) = 0;
     virtual void onReleasePatch(audio_patch_handle_t patchHandle) = 0;
 
-    virtual void dump2(int fd, int spaces) const = 0; // TODO(b/288339104) naming?
+    virtual void dump2(int fd, int spaces) const = 0; // TODO(b/291319101) naming?
 
 private:
     // used by DeviceEffectProxy
@@ -367,4 +380,4 @@ private:
     virtual status_t removeEffectFromHal(const sp<EffectHalInterface>& effect) = 0;
 };
 
-} // namespace android
+}  // namespace android
