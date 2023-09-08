@@ -77,6 +77,7 @@
 #include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/OMXClient.h>
 #include <media/stagefright/PersistentSurface.h>
+#include <media/stagefright/RenderedFrameInfo.h>
 #include <media/stagefright/SurfaceUtils.h>
 #include <nativeloader/dlext_namespaces.h>
 #include <private/android_filesystem_config.h>
@@ -91,6 +92,7 @@ using aidl::android::media::BnResourceManagerClient;
 using aidl::android::media::IResourceManagerClient;
 using aidl::android::media::IResourceManagerService;
 using aidl::android::media::ClientInfoParcel;
+using server_configurable_flags::GetServerConfigurableFlag;
 using FreezeEvent = VideoRenderQualityTracker::FreezeEvent;
 using JudderEvent = VideoRenderQualityTracker::JudderEvent;
 
@@ -208,6 +210,7 @@ static const char *kCodecShapingEnhanced = "android.media.mediacodec.shaped";
 // Render metrics
 static const char *kCodecPlaybackDurationSec = "android.media.mediacodec.playback-duration-sec";
 static const char *kCodecFirstRenderTimeUs = "android.media.mediacodec.first-render-time-us";
+static const char *kCodecLastRenderTimeUs = "android.media.mediacodec.last-render-time-us";
 static const char *kCodecFramesReleased = "android.media.mediacodec.frames-released";
 static const char *kCodecFramesRendered = "android.media.mediacodec.frames-rendered";
 static const char *kCodecFramesDropped = "android.media.mediacodec.frames-dropped";
@@ -279,6 +282,11 @@ static int64_t getId(const std::shared_ptr<IResourceManagerClient> &client) {
 
 static bool isResourceError(status_t err) {
     return (err == NO_MEMORY);
+}
+
+static bool areRenderMetricsEnabled() {
+    std::string v = GetServerConfigurableFlag("media_native", "render_metrics_enabled", "false");
+    return v == "true";
 }
 
 static const int kMaxRetry = 2;
@@ -409,7 +417,7 @@ private:
         std::scoped_lock lock{mLock};
         // Unregistering from DeathRecipient notification.
         if (mService != nullptr) {
-            AIBinder_unlinkToDeath(mService->asBinder().get(), mDeathRecipient.get(), this);
+            AIBinder_unlinkToDeath(mService->asBinder().get(), mDeathRecipient.get(), mCookie);
             mService = nullptr;
         }
     }
@@ -449,13 +457,15 @@ private:
     std::shared_ptr<IResourceManagerClient> mClient;
     ::ndk::ScopedAIBinder_DeathRecipient mDeathRecipient;
     std::shared_ptr<IResourceManagerService> mService;
+    BinderDiedContext* mCookie;
 };
 
 MediaCodec::ResourceManagerServiceProxy::ResourceManagerServiceProxy(
         pid_t pid, uid_t uid, const std::shared_ptr<IResourceManagerClient> &client) :
     mPid(pid), mUid(uid), mClient(client),
     mDeathRecipient(::ndk::ScopedAIBinder_DeathRecipient(
-            AIBinder_DeathRecipient_new(BinderDiedCallback))) {
+            AIBinder_DeathRecipient_new(BinderDiedCallback))),
+    mCookie(nullptr) {
     if (mUid == MediaCodec::kNoUid) {
         mUid = AIBinder_getCallingUid();
     }
@@ -513,9 +523,9 @@ std::shared_ptr<IResourceManagerService> MediaCodec::ResourceManagerServiceProxy
 
     // Create the context that is passed as cookie to the binder death notification.
     // The context gets deleted at BinderUnlinkedCallback.
-    BinderDiedContext* context = new BinderDiedContext{.mRMServiceProxy = weak_from_this()};
+    mCookie = new BinderDiedContext{.mRMServiceProxy = weak_from_this()};
     // Register for the callbacks by linking to death notification.
-    AIBinder_linkToDeath(mService->asBinder().get(), mDeathRecipient.get(), context);
+    AIBinder_linkToDeath(mService->asBinder().get(), mDeathRecipient.get(), mCookie);
 
     // If the RM was restarted, re-register all the resources.
     if (mBinderDied) {
@@ -882,7 +892,7 @@ public:
             const sp<AMessage> &outputFormat) override;
     virtual void onInputSurfaceDeclined(status_t err) override;
     virtual void onSignaledInputEOS(status_t err) override;
-    virtual void onOutputFramesRendered(const std::list<FrameRenderTracker::Info> &done) override;
+    virtual void onOutputFramesRendered(const std::list<RenderedFrameInfo> &done) override;
     virtual void onOutputBuffersChanged() override;
     virtual void onFirstTunnelFrameReady() override;
 private:
@@ -991,7 +1001,7 @@ void CodecCallback::onSignaledInputEOS(status_t err) {
     notify->post();
 }
 
-void CodecCallback::onOutputFramesRendered(const std::list<FrameRenderTracker::Info> &done) {
+void CodecCallback::onOutputFramesRendered(const std::list<RenderedFrameInfo> &done) {
     sp<AMessage> notify(mNotify->dup());
     notify->setInt32("what", kWhatOutputFramesRendered);
     if (MediaCodec::CreateFramesRenderedMessage(done, notify)) {
@@ -1157,9 +1167,10 @@ MediaCodec::MediaCodec(
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
       mIsSurfaceToDisplay(false),
+      mAreRenderMetricsEnabled(areRenderMetricsEnabled()),
       mVideoRenderQualityTracker(
               VideoRenderQualityTracker::Configuration::getFromServerConfigurableFlags(
-                      server_configurable_flags::GetServerConfigurableFlag)),
+                      GetServerConfigurableFlag)),
       mLatencyUnknown(0),
       mBytesEncoded(0),
       mEarliestEncodedPtsUs(INT64_MAX),
@@ -1299,6 +1310,7 @@ void MediaCodec::updateMediametrics() {
         const VideoRenderQualityMetrics &m = mVideoRenderQualityTracker.getMetrics();
         if (m.frameReleasedCount > 0) {
             mediametrics_setInt64(mMetricsHandle, kCodecFirstRenderTimeUs, m.firstRenderTimeUs);
+            mediametrics_setInt64(mMetricsHandle, kCodecLastRenderTimeUs, m.lastRenderTimeUs);
             mediametrics_setInt64(mMetricsHandle, kCodecFramesReleased, m.frameReleasedCount);
             mediametrics_setInt64(mMetricsHandle, kCodecFramesRendered, m.frameRenderedCount);
             mediametrics_setInt64(mMetricsHandle, kCodecFramesSkipped, m.frameSkippedCount);
@@ -6111,12 +6123,10 @@ status_t MediaCodec::handleLeftover(size_t index) {
     return onQueueInputBuffer(msg);
 }
 
-//static
-size_t MediaCodec::CreateFramesRenderedMessage(
-        const std::list<FrameRenderTracker::Info> &done, sp<AMessage> &msg) {
+template<typename T>
+static size_t CreateFramesRenderedMessageInternal(const std::list<T> &done, sp<AMessage> &msg) {
     size_t index = 0;
-    for (std::list<FrameRenderTracker::Info>::const_iterator it = done.cbegin();
-            it != done.cend(); ++it) {
+    for (typename std::list<T>::const_iterator it = done.cbegin(); it != done.cend(); ++it) {
         if (it->getRenderTimeNs() < 0) {
             continue; // dropped frame from tracking
         }
@@ -6125,6 +6135,18 @@ size_t MediaCodec::CreateFramesRenderedMessage(
         ++index;
     }
     return index;
+}
+
+//static
+size_t MediaCodec::CreateFramesRenderedMessage(
+        const std::list<RenderedFrameInfo> &done, sp<AMessage> &msg) {
+    return CreateFramesRenderedMessageInternal(done, msg);
+}
+
+//static
+size_t MediaCodec::CreateFramesRenderedMessage(
+        const std::list<FrameRenderTracker::Info> &done, sp<AMessage> &msg) {
+    return CreateFramesRenderedMessageInternal(done, msg);
 }
 
 status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
@@ -6202,7 +6224,7 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
 
         // If rendering to the screen, then schedule a time in the future to poll to see if this
         // frame was ever rendered to seed onFrameRendered callbacks.
-        if (mIsSurfaceToDisplay) {
+        if (mAreRenderMetricsEnabled && mIsSurfaceToDisplay) {
             if (mediaTimeUs != INT64_MIN) {
                 noRenderTime ? mVideoRenderQualityTracker.onFrameReleased(mediaTimeUs)
                              : mVideoRenderQualityTracker.onFrameReleased(mediaTimeUs,
