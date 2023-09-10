@@ -336,6 +336,7 @@ private:
     sp<MemoryDealer> makeMemoryDealer(size_t heapSize);
 
     std::deque<TrackedFrame> mTrackedFrames;
+    bool mAreRenderMetricsEnabled;
     bool mIsSurfaceToDisplay;
     bool mHasPresentFenceTimes;
 

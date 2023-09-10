@@ -68,6 +68,7 @@ using hardware::hidl_string;
 using hardware::hidl_vec;
 using hardware::fromHeap;
 using hardware::HidlMemory;
+using server_configurable_flags::GetServerConfigurableFlag;
 
 using namespace hardware::cas::V1_0;
 using namespace hardware::cas::native::V1_0;
@@ -87,6 +88,11 @@ const static size_t kDequeueTimeoutNs = 0;
 // This value is to monitor if decoding is paused then we can signal a new empty work to HAL
 // after app resume to foreground to notify HAL something
 const static uint64_t kPipelinePausedTimeoutMs = 500;
+
+static bool areRenderMetricsEnabled() {
+    std::string v = GetServerConfigurableFlag("media_native", "render_metrics_enabled", "false");
+    return v == "true";
+}
 
 }  // namespace
 
@@ -154,6 +160,7 @@ CCodecBufferChannel::CCodecBufferChannel(
       mCCodecCallback(callback),
       mFrameIndex(0u),
       mFirstValidFrameIndex(0u),
+      mAreRenderMetricsEnabled(areRenderMetricsEnabled()),
       mIsSurfaceToDisplay(false),
       mHasPresentFenceTimes(false),
       mRenderingDepth(3u),
@@ -182,8 +189,7 @@ CCodecBufferChannel::CCodecBufferChannel(
         Mutexed<BlockPools>::Locked pools(mBlockPools);
         pools->outputPoolId = C2BlockPool::BASIC_LINEAR;
     }
-    std::string value = server_configurable_flags::GetServerConfigurableFlag(
-            "media_native", "ccodec_rendering_depth", "3");
+    std::string value = GetServerConfigurableFlag("media_native", "ccodec_rendering_depth", "3");
     android::base::ParseInt(value, &mRenderingDepth);
     mOutputSurface.lock()->maxDequeueBuffers = kSmoothnessFactor + mRenderingDepth;
 }
@@ -1054,7 +1060,7 @@ status_t CCodecBufferChannel::renderOutputBuffer(
 
     int64_t mediaTimeUs = 0;
     (void)buffer->meta()->findInt64("timeUs", &mediaTimeUs);
-    if (mIsSurfaceToDisplay) {
+    if (mAreRenderMetricsEnabled && mIsSurfaceToDisplay) {
         trackReleasedFrame(qbo, mediaTimeUs, timestampNs);
         processRenderedFrames(qbo.frameTimestamps);
     } else {
