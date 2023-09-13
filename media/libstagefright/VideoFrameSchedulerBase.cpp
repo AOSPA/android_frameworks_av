@@ -405,8 +405,9 @@ nsecs_t VideoFrameSchedulerBase::schedule(nsecs_t renderTime) {
         nsecs_t edgeRemainder = 0;
         for (size_t i = 1; i <= N; i++) {
             offset +=
-                (renderTime + mTimeCorrection + videoPeriod * i - mVsyncTime) % mVsyncPeriod;
-            edgeRemainder += (videoPeriod * i) % mVsyncPeriod;
+                (renderTime + mTimeCorrection + videoPeriod * (nsecs_t)i - mVsyncTime)
+                    % mVsyncPeriod;
+            edgeRemainder += (videoPeriod * (nsecs_t)i) % mVsyncPeriod;
         }
         mTimeCorrection += mVsyncPeriod / 2 - offset / (nsecs_t)N;
         renderTime += mTimeCorrection;
