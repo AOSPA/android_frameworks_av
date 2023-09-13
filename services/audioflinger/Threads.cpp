@@ -1911,7 +1911,7 @@ void ThreadBase::toAudioPortConfig(struct audio_port_config* config)
     config->type = AUDIO_PORT_TYPE_MIX;
     config->ext.mix.handle = mId;
     config->sample_rate = mSampleRate;
-    config->format = mFormat;
+    config->format = mHALFormat;
     config->channel_mask = mChannelMask;
     config->config_mask = AUDIO_PORT_CONFIG_SAMPLE_RATE|AUDIO_PORT_CONFIG_CHANNEL_MASK|
                             AUDIO_PORT_CONFIG_FORMAT;
@@ -6542,12 +6542,11 @@ void DirectOutputThread::processVolume_l(IAfTrack* track, bool lastTrack)
     // Ensure volumeshaper state always advances even when muted.
     const sp<AudioTrackServerProxy> proxy = track->audioTrackServerProxy();
 
-    const size_t framesReleased = proxy->framesReleased();
     const int64_t frames = mTimestamp.mPosition[ExtendedTimestamp::LOCATION_KERNEL];
     const int64_t time = mTimestamp.mTimeNs[ExtendedTimestamp::LOCATION_KERNEL];
 
-    ALOGV("%s: Direct/Offload bufferConsumed:%zu  timestamp frames:%lld  time:%lld",
-            __func__, framesReleased, (long long)frames, (long long)time);
+    ALOGVV("%s: Direct/Offload bufferConsumed:%zu  timestamp frames:%lld  time:%lld",
+            __func__, proxy->framesReleased(), (long long)frames, (long long)time);
 
     const int64_t volumeShaperFrames =
             mMonotonicFrameCounter.updateAndGetMonotonicFrameCount(frames, time);
@@ -9606,6 +9605,7 @@ AudioStreamIn* RecordThread::clearInput()
     audio_utils::lock_guard _l(mutex());
     AudioStreamIn *input = mInput;
     mInput = NULL;
+    mInputSource.clear();
     return input;
 }
 
