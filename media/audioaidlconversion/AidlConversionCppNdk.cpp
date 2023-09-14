@@ -774,7 +774,7 @@ const detail::AudioFormatPairs& getAudioFormatPairs() {
                                          ::android::MEDIA_MIMETYPE_AUDIO_IEC60958)},
             {AUDIO_FORMAT_DRA, make_AudioFormatDescription(::android::MEDIA_MIMETYPE_AUDIO_DRA)},
             {// Note: not in the IANA registry.
-             VX_AUDIO_FORMAT_APTX_ADAPTIVE_QLEA,
+             AUDIO_FORMAT_APTX_ADAPTIVE_QLEA,
              make_AudioFormatDescription("audio/vnd.qcom.aptx.adaptive.r3")},
             {// Note: not in the IANA registry.
              AUDIO_FORMAT_APTX_ADAPTIVE_R4,
