@@ -1374,7 +1374,7 @@ void CameraService::finishConnectLocked(const sp<BasicClient>& client,
                     oomScoreOffset, systemNativeClient);
     auto evicted = mActiveClientManager.addAndEvict(clientDescriptor);
 
-#ifdef TARGET_USES_MIUI_CAMERA
+#ifdef USES_MIUI_CAMERA
     if (strcmp(String8(client->getPackageName()).string(), "com.android.camera") == 0) {
         evicted.clear();
     }
@@ -1489,7 +1489,7 @@ status_t CameraService::handleEvictionsLocked(const String8& cameraId, int clien
         // Find clients that would be evicted
         auto evicted = mActiveClientManager.wouldEvict(clientDescriptor);
 
-#ifdef TARGET_USES_MIUI_CAMERA
+#ifdef USES_MIUI_CAMERA
         if (strcmp(String8(packageName).string(), "com.android.camera") == 0) {
             evicted.clear();
         }
