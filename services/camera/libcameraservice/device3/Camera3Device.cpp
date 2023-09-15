@@ -65,6 +65,9 @@
 #ifdef USES_NOTHING_CAMERA
 #define TAG_NAME "com.nothing.device.package_name"
 #endif
+#ifdef USES_MIUI_CAMERA
+#define TAG_NAME "com.xiaomi.sessionparams.clientName"
+#endif
 
 // Convenience macro for transient errors
 #define CLOGE(fmt, ...) ALOGE("Camera %s: %s: " fmt, mId.string(), __FUNCTION__, \
