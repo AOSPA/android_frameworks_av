@@ -767,7 +767,7 @@ status_t AudioRecord::dump(int fd, const Vector<String16>& args __unused) const
                         mInput, mLatency, mSelectedDeviceId, mRoutedDeviceId);
     result.appendFormat("  mic direction(%d) mic field dimension(%f)",
                         mSelectedMicDirection, mSelectedMicFieldDimension);
-    ::write(fd, result.string(), result.size());
+    ::write(fd, result.c_str(), result.size());
     return NO_ERROR;
 }
 
@@ -1218,7 +1218,7 @@ String8 AudioRecord::getParameters(const String8& keys) {
     AutoMutex lock(mLock);
     return mInput != AUDIO_IO_HANDLE_NONE
                ? AudioSystem::getParameters(mInput, keys)
-               : String8::empty();
+               : String8();
 }
 
 // -------------------------------------------------------------------------
