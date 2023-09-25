@@ -557,9 +557,11 @@ binder::Status createSurfaceFromGbp(
         return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
     }
     bool foundInMaxRes = false;
-    if (overriddenSensorPixelModes.find(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION) !=
+    // If only max resolution sensor pixel mode was inferred to be used.
+    if ((overriddenSensorPixelModes.size() == 1) &&
+            overriddenSensorPixelModes.find(ANDROID_SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION) !=
             overriddenSensorPixelModes.end()) {
-        // we can use the default stream configuration map
+        // we use the max resolution stream configuration map
         foundInMaxRes = true;
     }
 
