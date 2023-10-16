@@ -16,6 +16,23 @@
       "message": "the topic tested and works fine on mi439.",
       "revId": "11d17a1c9e2f2427345c678b79ded48a50f01a44",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "ded6fa4d_76cf26ba",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000012
+      },
+      "writtenOn": "2023-10-16T12:44:17Z",
+      "side": 1,
+      "message": "remove conflicts",
+      "revId": "11d17a1c9e2f2427345c678b79ded48a50f01a44",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
