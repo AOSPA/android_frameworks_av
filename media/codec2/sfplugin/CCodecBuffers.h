@@ -81,6 +81,16 @@ public:
      */
     void handleImageData(const sp<Codec2Buffer> &buffer);
 
+    /**
+     * Get the first pixel format of a metric session.
+     */
+    virtual uint32_t getPixelFormatIfApplicable();
+
+    /**
+     * Reset the pixel format when a new metric session started.
+     */
+    virtual bool resetPixelFormatIfApplicable();
+
 protected:
     std::string mComponentName; ///< name of component for debugging
     std::string mChannelName; ///< name of channel for debugging
@@ -961,6 +971,10 @@ public:
 
     size_t numActiveSlots() const final;
 
+    uint32_t getPixelFormatIfApplicable() override;
+
+    bool resetPixelFormatIfApplicable() override;
+
     size_t numClientBuffers() const final;
 
 protected:
@@ -969,6 +983,7 @@ protected:
 private:
     FlexBuffersImpl mImpl;
     std::shared_ptr<LocalBufferPool> mLocalBufferPool;
+    uint32_t mPixelFormat;
 };
 
 class DummyInputBuffers : public InputBuffers {
@@ -1136,8 +1151,20 @@ public:
      */
     virtual std::function<sp<Codec2Buffer>()> getAlloc() = 0;
 
+    uint32_t getPixelFormatIfApplicable() override;
+
+    bool resetPixelFormatIfApplicable() override;
 private:
     FlexBuffersImpl mImpl;
+
+    uint32_t mPixelFormat;
+
+    /**
+     * extract pixel format from C2Buffer when register.
+     *
+     * \param buffer   The C2Buffer used to extract pixel format.
+     */
+    bool extractPixelFormatFromC2Buffer(const std::shared_ptr<C2Buffer> &buffer);
 };
 
 class LinearOutputBuffers : public FlexOutputBuffers {

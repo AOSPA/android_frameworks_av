@@ -275,7 +275,7 @@ class Camera3Device :
      * and defaults to NONE.
      */
     status_t setRotateAndCropAutoBehavior(
-            camera_metadata_enum_android_scaler_rotate_and_crop_t rotateAndCropValue);
+            camera_metadata_enum_android_scaler_rotate_and_crop_t rotateAndCropValue, bool fromHal);
 
     /**
      * Set the current behavior for the AUTOFRAMING control when in AUTO.
@@ -701,6 +701,15 @@ class Camera3Device :
      * Must be called with mLock and mInterfaceLock held.
      */
     status_t initializeCommonLocked();
+
+    /**
+     * Update capture request list so that each batch size honors the batch_size_max report from
+     * the HAL. Set the batch size to output stream for buffer operations.
+     *
+     * Must be called with mLock held.
+     */
+    virtual void applyMaxBatchSizeLocked(
+            RequestList* requestList, const sp<camera3::Camera3OutputStreamInterface>& stream) = 0;
 
     /**
      * Get the last request submitted to the hal by the request thread.

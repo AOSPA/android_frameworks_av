@@ -208,7 +208,20 @@ public:
 
     void setMetaMode(MetaMode mode);
 
+    /**
+     * get pixel format from output buffers.
+     *
+     * @return 0 if no valid pixel format found.
+     */
+    uint32_t getBuffersPixelFormat(bool isEncoder);
+
+    void resetBuffersPixelFormat(bool isEncoder);
+
 private:
+    uint32_t getInputBuffersPixelFormat();
+
+    uint32_t getOutputBuffersPixelFormat();
+
     class QueueGuard;
 
     /**
@@ -305,6 +318,7 @@ private:
     std::shared_ptr<C2BlockPool> mInputAllocator;
     QueueSync mQueueSync;
     std::vector<std::unique_ptr<C2Param>> mParamsToBeSet;
+    sp<AMessage> mOutputFormat;
 
     struct Input {
         Input();

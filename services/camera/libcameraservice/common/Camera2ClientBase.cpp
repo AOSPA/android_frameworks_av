@@ -362,7 +362,8 @@ void Camera2ClientBase<TClientBase>::notifyPhysicalCameraChange(const std::strin
             rotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_90;
         }
 
-        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode);
+        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode,
+                                                                   /*fromHal*/ true);
     }
 }
 
@@ -387,7 +388,7 @@ template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         int64_t requestCount, int64_t resultErrorCount, bool deviceError,
         const std::vector<hardware::CameraStreamStats>& streamStats,
-        const std::string& userTag, int videoStabilizationMode) {
+        const std::string& userTag, int videoStabilizationMode, bool usedUltraWide) {
     if (mDeviceActive) {
         status_t res = TClientBase::finishCameraStreamingOps();
         if (res != OK) {
@@ -396,7 +397,7 @@ void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         }
         mCameraServiceProxyWrapper->logIdle(TClientBase::mCameraIdStr,
                 requestCount, resultErrorCount, deviceError, userTag, videoStabilizationMode,
-                streamStats);
+                usedUltraWide, streamStats);
     }
     mDeviceActive = false;
 
