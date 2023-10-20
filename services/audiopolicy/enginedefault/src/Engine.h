@@ -82,6 +82,8 @@ private:
 
     DeviceVector getDevicesForProductStrategy(product_strategy_t strategy) const override;
 
+    sp<DeviceDescriptor> getIPDevice(const DeviceVector &availableDevices) const;
+
 private:
     template<typename T>
     status_t loadWithFallback(const T& configSource);
