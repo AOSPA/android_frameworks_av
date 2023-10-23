@@ -97,18 +97,12 @@ public:
             const sp<IDataSource>& dataSource, const char *mime = NULL);
     sp<IMemory> getFrameAtTime(int64_t timeUs, int option,
             int colorFormat, bool metaOnly = false);
-    sp<IMemory> getFrameAtTime(int64_t timeUs, int option,
-            bool metaOnly = false);
     sp<IMemory> getImageAtIndex(int index,
             int colorFormat, bool metaOnly = false, bool thumbnail = false);
-    sp<IMemory> getImageAtIndex(int index,
-            bool metaOnly = false, bool thumbnail = false);
     sp<IMemory> getImageRectAtIndex(
             int index, int colorFormat, int left, int top, int right, int bottom);
     sp<IMemory>  getFrameAtIndex(
             int index, int colorFormat, bool metaOnly = false);
-    sp<IMemory>  getFrameAtIndex(
-            int index, bool metaOnly = false);
     sp<IMemory> extractAlbumArt();
     const char* extractMetadata(int keyCode);
 

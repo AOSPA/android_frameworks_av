@@ -489,7 +489,7 @@ private:
                 CameraProviderManager *manager);
         ~ProviderInfo();
 
-        virtual IPCTransport getIPCTransport() = 0;
+        virtual IPCTransport getIPCTransport() const = 0;
 
         const std::string& getType() const;
 
@@ -683,6 +683,7 @@ private:
             SystemCameraKind getSystemCameraKind();
             status_t fixupMonochromeTags();
             status_t fixupTorchStrengthTags();
+            status_t fixupManualFlashStrengthControlTags();
             status_t addDynamicDepthTags(bool maxResolution = false);
             status_t deriveHeicTags(bool maxResolution = false);
             status_t deriveJpegRTags(bool maxResolution = false);
