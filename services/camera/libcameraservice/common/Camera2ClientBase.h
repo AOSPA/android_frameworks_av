@@ -97,7 +97,8 @@ public:
     void                  notifyIdleWithUserTag(int64_t requestCount, int64_t resultErrorCount,
                                      bool deviceError,
                                      const std::vector<hardware::CameraStreamStats>& streamStats,
-                                     const std::string& userTag, int videoStabilizationMode);
+                                     const std::string& userTag, int videoStabilizationMode,
+                                     bool usedUltraWide);
 
     int                   getCameraId() const;
     const sp<CameraDeviceBase>&
@@ -136,9 +137,6 @@ public:
     status_t      stopInjection() override;
 
 protected:
-
-    // Used for watchdog timeout to monitor disconnect
-    static const nsecs_t kBufferTimeDisconnectNs = 3000000000; // 3 sec.
 
     // The PID provided in the constructor call
     pid_t mInitialClientPid;

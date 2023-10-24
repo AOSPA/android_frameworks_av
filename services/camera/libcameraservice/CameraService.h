@@ -104,6 +104,9 @@ public:
     // Event log ID
     static const int SN_EVENT_LOG_ID = 0x534e4554;
 
+    // Keep this in sync with frameworks/base/core/java/android/os/UserHandle.java
+    static const userid_t USER_SYSTEM = 0;
+
     // Register camera service
     static void instantiate();
 
@@ -364,7 +367,7 @@ public:
         static bool isValidAudioRestriction(int32_t mode);
 
         // Override rotate-and-crop AUTO behavior
-        virtual status_t setRotateAndCropOverride(uint8_t rotateAndCrop) = 0;
+        virtual status_t setRotateAndCropOverride(uint8_t rotateAndCrop, bool fromHal = false) = 0;
 
         // Override autoframing AUTO behaviour
         virtual status_t setAutoframingOverride(uint8_t autoframingValue) = 0;
@@ -655,6 +658,9 @@ private:
 
     bool hasPermissionsForSystemCamera(const std::string& cameraId, int callingPid, int callingUid)
             const;
+
+    bool hasPermissionsForCameraHeadlessSystemUser(const std::string& cameraId, int callingPid,
+            int callingUid) const;
 
    /**
      * Typesafe version of device status, containing both the HAL-layer and the service interface-
@@ -996,15 +1002,13 @@ private:
      *
      * This returns the Camera Id to use in case inputCameraId was remapped to a
      * different Id for the given packageName. Otherwise, it returns the inputCameraId.
-     */
-    std::string resolveCameraId(const std::string& inputCameraId, const std::string& packageName);
-    /**
-     * Resolve the (potentially remapped) camera Id to use.
      *
-     * This returns the Camera Id to use in case inputCameraId was remapped to a
-     * different Id for the packageName of the client. Otherwise, it returns the inputCameraId.
+     * If the packageName is not provided, it will be inferred from the clientUid.
      */
-    std::string resolveCameraId(const std::string& inputCameraId);
+    std::string resolveCameraId(
+            const std::string& inputCameraId,
+            int clientUid,
+            const std::string& packageName = "");
 
     /**
      * Updates the state of mCameraIdRemapping, while disconnecting active clients as necessary.

@@ -198,7 +198,8 @@ public:
     virtual status_t      initialize(sp<CameraProviderManager> manager,
             const std::string& monitorTags) override;
 
-    virtual status_t      setRotateAndCropOverride(uint8_t rotateAndCrop) override;
+    virtual status_t      setRotateAndCropOverride(uint8_t rotateAndCrop,
+            bool fromHal = false) override;
 
     virtual status_t      setAutoframingOverride(uint8_t autoframingValue) override;
 
@@ -370,6 +371,8 @@ private:
     std::string mUserTag;
     // The last set video stabilization mode
     int mVideoStabilizationMode = -1;
+    // Whether a zoom_ratio < 1.0 has been used during this session
+    bool mUsedUltraWide = false;
 
     // This only exists in case of camera ID Remapping.
     const std::string mOriginalCameraId;

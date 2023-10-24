@@ -269,15 +269,8 @@ status_t Camera2ClientBase<TClientBase>::dumpDevice(
 template <typename TClientBase>
 binder::Status Camera2ClientBase<TClientBase>::disconnect() {
     if (mCameraServiceWatchdog != nullptr && mDevice != nullptr) {
-        // Timer for the disconnect call should be greater than getExpectedInFlightDuration
-        // since this duration is used to error handle methods in the disconnect sequence
-        // thus allowing existing error handling methods to execute first
-        uint64_t maxExpectedDuration =
-                ns2ms(mDevice->getExpectedInFlightDuration() + kBufferTimeDisconnectNs);
-
         // Initialization from hal succeeded, time disconnect.
-        return mCameraServiceWatchdog->WATCH_CUSTOM_TIMER(disconnectImpl(),
-                maxExpectedDuration / kCycleLengthMs, kCycleLengthMs);
+        return mCameraServiceWatchdog->WATCH(disconnectImpl());
     }
     return disconnectImpl();
 }
@@ -369,7 +362,8 @@ void Camera2ClientBase<TClientBase>::notifyPhysicalCameraChange(const std::strin
             rotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_90;
         }
 
-        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode);
+        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode,
+                                                                   /*fromHal*/ true);
     }
 }
 
@@ -394,7 +388,7 @@ template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         int64_t requestCount, int64_t resultErrorCount, bool deviceError,
         const std::vector<hardware::CameraStreamStats>& streamStats,
-        const std::string& userTag, int videoStabilizationMode) {
+        const std::string& userTag, int videoStabilizationMode, bool usedUltraWide) {
     if (mDeviceActive) {
         status_t res = TClientBase::finishCameraStreamingOps();
         if (res != OK) {
@@ -403,7 +397,7 @@ void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         }
         mCameraServiceProxyWrapper->logIdle(TClientBase::mCameraIdStr,
                 requestCount, resultErrorCount, deviceError, userTag, videoStabilizationMode,
-                streamStats);
+                usedUltraWide, streamStats);
     }
     mDeviceActive = false;
 

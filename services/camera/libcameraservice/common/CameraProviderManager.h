@@ -86,6 +86,7 @@ enum SystemCameraKind {
 };
 
 #define CAMERA_DEVICE_API_VERSION_1_0 HARDWARE_DEVICE_API_VERSION(1, 0)
+#define CAMERA_DEVICE_API_VERSION_1_2 HARDWARE_DEVICE_API_VERSION(1, 2)
 #define CAMERA_DEVICE_API_VERSION_3_0 HARDWARE_DEVICE_API_VERSION(3, 0)
 #define CAMERA_DEVICE_API_VERSION_3_1 HARDWARE_DEVICE_API_VERSION(3, 1)
 #define CAMERA_DEVICE_API_VERSION_3_2 HARDWARE_DEVICE_API_VERSION(3, 2)
@@ -488,7 +489,7 @@ private:
                 CameraProviderManager *manager);
         ~ProviderInfo();
 
-        virtual IPCTransport getIPCTransport() = 0;
+        virtual IPCTransport getIPCTransport() const = 0;
 
         const std::string& getType() const;
 
@@ -682,6 +683,7 @@ private:
             SystemCameraKind getSystemCameraKind();
             status_t fixupMonochromeTags();
             status_t fixupTorchStrengthTags();
+            status_t fixupManualFlashStrengthControlTags();
             status_t addDynamicDepthTags(bool maxResolution = false);
             status_t deriveHeicTags(bool maxResolution = false);
             status_t deriveJpegRTags(bool maxResolution = false);

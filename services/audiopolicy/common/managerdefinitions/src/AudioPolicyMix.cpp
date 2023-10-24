@@ -21,6 +21,7 @@
 #include <iterator>
 #include <optional>
 #include <regex>
+#include <vector>
 #include "AudioPolicyMix.h"
 #include "TypeConverter.h"
 #include "HwModule.h"
@@ -225,6 +226,31 @@ status_t AudioPolicyMixCollection::unregisterMix(const AudioMix& mix)
     return BAD_VALUE;
 }
 
+status_t AudioPolicyMixCollection::updateMix(
+        const AudioMix& mix, const std::vector<AudioMixMatchCriterion>& updatedCriteria) {
+    if (!areMixCriteriaConsistent(mix.mCriteria)) {
+        ALOGE("updateMix(): updated criteria are not consistent "
+              "(MATCH & EXCLUDE criteria of the same type)");
+        return BAD_VALUE;
+    }
+
+    for (size_t i = 0; i < size(); i++) {
+        const sp<AudioPolicyMix>& registeredMix = itemAt(i);
+        if (mix.mDeviceType == registeredMix->mDeviceType &&
+            mix.mDeviceAddress.compare(registeredMix->mDeviceAddress) == 0 &&
+            mix.mRouteFlags == registeredMix->mRouteFlags) {
+            registeredMix->mCriteria = updatedCriteria;
+            ALOGV("updateMix(): updated mix for dev=0x%x addr=%s", mix.mDeviceType,
+                  mix.mDeviceAddress.c_str());
+            return NO_ERROR;
+        }
+    }
+
+    ALOGE("updateMix(): mix not registered for dev=0x%x addr=%s", mix.mDeviceType,
+          mix.mDeviceAddress.c_str());
+    return BAD_VALUE;
+}
+
 status_t AudioPolicyMixCollection::getAudioPolicyMix(audio_devices_t deviceType,
         const String8& address, sp<AudioPolicyMix> &policyMix) const
 {
@@ -269,6 +295,7 @@ status_t AudioPolicyMixCollection::getOutputForAttr(
     ALOGV("getOutputForAttr() querying %zu mixes:", size());
     primaryMix.clear();
     bool mixesDisallowsRequestedDevice = false;
+    const bool isMmapRequested = (flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ);
     for (size_t i = 0; i < size(); i++) {
         sp<AudioPolicyMix> policyMix = itemAt(i);
         const bool primaryOutputMix = !is_mix_loopback_render(policyMix->mRouteFlags);
@@ -277,6 +304,17 @@ status_t AudioPolicyMixCollection::getOutputForAttr(
         if (mixDisallowsRequestedDevice(policyMix.get(), requestedDevice, mixDevice, uid)) {
             ALOGV("%s: Mix %zu: does not allows device", __func__, i);
             mixesDisallowsRequestedDevice = true;
+        }
+
+        if (!primaryOutputMix && isMmapRequested) {
+            // AAudio does not support MMAP_NO_IRQ loopback render, and there is no way with
+            // the current MmapStreamInterface::start to reject a specific client added to a shared
+            // mmap stream.
+            // As a result all MMAP_NOIRQ requests have to be rejected when an loopback render
+            // policy is present. That ensures no shared mmap stream is used when an loopback
+            // render policy is registered.
+            ALOGD("%s: Rejecting MMAP_NOIRQ request due to LOOPBACK|RENDER mix present.", __func__);
+            return INVALID_OPERATION;
         }
 
         if (primaryOutputMix && primaryMix != nullptr) {
@@ -289,7 +327,7 @@ status_t AudioPolicyMixCollection::getOutputForAttr(
             continue; // skip the mix
         }
 
-        if (flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) {
+        if (isMmapRequested) {
             if (is_mix_loopback(policyMix->mRouteFlags)) {
                 // AAudio MMAP_NOIRQ streams cannot be routed to loopback/loopback+render
                 // using dynamic audio policy.
@@ -297,10 +335,11 @@ status_t AudioPolicyMixCollection::getOutputForAttr(
                       "audio policy mix.", __func__);
                 return INVALID_OPERATION;
             }
-            if (mixDevice != nullptr && !mixDevice->isMmap()) {
+            if (mixDevice != nullptr) {
+                // TODO(b/301619865): Only disallow the device that doesn't support MMAP.
                 ALOGD("%s: Rejecting MMAP_NOIRQ request matched to dynamic audio policy "
-                      "mix pointing to device %s which doesn't support mmap", __func__,
-                      mixDevice->toString(false).c_str());
+                      "mix pointing to device %s which the mmap support is unknown at this moment",
+                      __func__, mixDevice->toString(false).c_str());
                 return INVALID_OPERATION;
             }
         }

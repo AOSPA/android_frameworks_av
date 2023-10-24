@@ -1,0 +1,29 @@
+package: "com.android.internal.camera.flags"
+
+flag {
+     namespace: "camera_platform"
+     name: "camera_hsum_permission"
+     description: "Camera access by headless system user"
+     bug: "273539631"
+}
+
+flag {
+     namespace: "camera_platform"
+     name: "log_ultrawide_usage"
+     description: "Enable measuring how much usage there is for ultrawide-angle cameras"
+     bug: "300515796"
+}
+
+flag {
+     namespace: "camera_platform"
+     name: "camera_manual_flash_strength_control"
+     description: "Flash brightness level control in manual flash mode"
+     bug: "238348881"
+}
+
+flag {
+     namespace: "camera_platform"
+     name: "lazy_aidl_wait_for_service"
+     description: "Use waitForService instead of getService with lazy AIDL HALs"
+     bug: "285546208"
+}

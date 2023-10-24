@@ -18,6 +18,7 @@
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
+#include "utils/Errors.h"
 #define LOG_TAG "APM_AudioPolicyManager"
 
 // Need to keep the log statements even in production builds
@@ -734,7 +735,7 @@ DeviceVector AudioPolicyManager::selectBestRxSinkDevicesForCall(bool fromCache)
 
 status_t AudioPolicyManager::updateCallRouting(bool fromCache, uint32_t delayMs, uint32_t *waitMs)
 {
-    if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL && hasPrimaryOutput()) {
+    if (mEngine->getPhoneState() == AUDIO_MODE_IN_CALL) {
         DeviceVector rxDevices = selectBestRxSinkDevicesForCall(fromCache);
         return updateCallRoutingInternal(rxDevices, delayMs, waitMs);
     }
@@ -747,14 +748,21 @@ status_t AudioPolicyManager::updateCallRoutingInternal(
     bool createTxPatch = false;
     bool createRxPatch = false;
     uint32_t muteWaitMs = 0;
-    if(!hasPrimaryOutput() ||
+    if (hasPrimaryOutput() &&
             mPrimaryOutput->devices().onlyContainsDevicesWithType(AUDIO_DEVICE_OUT_STUB)) {
         return INVALID_OPERATION;
     }
-    ALOG_ASSERT(!rxDevices.isEmpty(), "%s() no selected output device", __func__);
 
     audio_attributes_t attr = { .source = AUDIO_SOURCE_VOICE_COMMUNICATION };
     auto txSourceDevice = mEngine->getInputDeviceForAttributes(attr);
+
+    disconnectTelephonyAudioSource(mCallRxSourceClient);
+    disconnectTelephonyAudioSource(mCallTxSourceClient);
+
+    if (rxDevices.isEmpty()) {
+        ALOGW("%s() no selected output device", __func__);
+        return INVALID_OPERATION;
+    }
     if (txSourceDevice == nullptr) {
         ALOGE("%s() selected input device not available", __func__);
         return INVALID_OPERATION;
@@ -762,9 +770,6 @@ status_t AudioPolicyManager::updateCallRoutingInternal(
 
     ALOGV("%s device rxDevice %s txDevice %s", __func__,
           rxDevices.itemAt(0)->toString().c_str(), txSourceDevice->toString().c_str());
-
-    disconnectTelephonyAudioSource(mCallRxSourceClient);
-    disconnectTelephonyAudioSource(mCallTxSourceClient);
 
     auto telephonyRxModule =
         mHwModules.getModuleForDeviceType(AUDIO_DEVICE_IN_TELEPHONY_RX, AUDIO_FORMAT_DEFAULT);
@@ -805,6 +810,10 @@ status_t AudioPolicyManager::updateCallRoutingInternal(
     // Use legacy routing method for voice calls via setOutputDevice() on primary output.
     // Otherwise, create two audio patches for TX and RX path.
     if (!createRxPatch) {
+        if (!hasPrimaryOutput()) {
+            ALOGW("%s() no primary output available", __func__);
+            return INVALID_OPERATION;
+        }
         muteWaitMs = setOutputDevices(__func__, mPrimaryOutput, rxDevices, true, delayMs);
     } else { // create RX path audio patch
         connectTelephonyRxAudioSource();
@@ -967,19 +976,19 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
         }
     }
 
-    if (hasPrimaryOutput()) {
-        if (state == AUDIO_MODE_IN_CALL) {
-            (void)updateCallRouting(false /*fromCache*/, delayMs);
-        } else {
+    if (state == AUDIO_MODE_IN_CALL) {
+        (void)updateCallRouting(false /*fromCache*/, delayMs);
+    } else {
+        if (oldState == AUDIO_MODE_IN_CALL) {
+            disconnectTelephonyAudioSource(mCallRxSourceClient);
+            disconnectTelephonyAudioSource(mCallTxSourceClient);
+        }
+        if (hasPrimaryOutput()) {
             DeviceVector rxDevices = getNewOutputDevices(mPrimaryOutput, false /*fromCache*/);
             // force routing command to audio hardware when ending call
             // even if no device change is needed
             if (isStateInCall(oldState) && rxDevices.isEmpty()) {
                 rxDevices = mPrimaryOutput->devices();
-            }
-            if (oldState == AUDIO_MODE_IN_CALL) {
-                disconnectTelephonyAudioSource(mCallRxSourceClient);
-                disconnectTelephonyAudioSource(mCallTxSourceClient);
             }
             setOutputDevices(__func__, mPrimaryOutput, rxDevices, force, 0);
         }
@@ -4024,6 +4033,17 @@ status_t AudioPolicyManager::unregisterPolicyMixes(Vector<AudioMix> mixes)
     return res;
 }
 
+status_t AudioPolicyManager::updatePolicyMix(
+            const AudioMix& mix,
+            const std::vector<AudioMixMatchCriterion>& updatedCriteria) {
+    status_t res = mPolicyMixes.updateMix(mix, updatedCriteria);
+    if (res == NO_ERROR) {
+        checkForDeviceAndOutputChanges();
+        updateCallAndOutputRouting();
+    }
+    return res;
+}
+
 void AudioPolicyManager::dumpManualSurroundFormats(String8 *dst) const
 {
     size_t i = 0;
@@ -5536,14 +5556,9 @@ status_t AudioPolicyManager::releaseAudioPatchInternal(audio_patch_handle_t hand
                 return NO_ERROR;
             }
             patchHandle = outputDesc->getPatchHandle();
-            // When a Sw bridge is released, the mixer used by this bridge will release its
-            // patch at AudioFlinger side. Hence, the mixer audio patch must be recreated
-            // Reuse patch handle to force audio flinger removing initial mixer patch removal
-            // updating hal patch handle (prevent leaks).
             // While using a HwBridge, force reconsidering device only if not reusing an existing
             // output and no more activity on output (will force to close).
-            bool force = sourceDesc->useSwBridge() ||
-                    (sourceDesc->canCloseOutput() && !outputDesc->isActive());
+            const bool force = sourceDesc->canCloseOutput() && !outputDesc->isActive();
             // APM pattern is to have always outputs opened / patch realized for reachable devices.
             // Update device may result to NONE (empty), coupled with force, it releases the patch.
             // Reconsider device only for cases:
@@ -6567,6 +6582,7 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
             if (mPrimaryOutput == nullptr &&
                     outProfile->getFlags() & AUDIO_OUTPUT_FLAG_PRIMARY) {
                 mPrimaryOutput = outputDesc;
+                mPrimaryModuleHandle = mPrimaryOutput->getModuleHandle();
             }
             if ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
                 outputDesc->close();
@@ -6908,7 +6924,7 @@ status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& de
 
             if (status == NO_ERROR) {
                 const String8& address = String8(device->address().c_str());
-                if (!address.isEmpty()) {
+                if (!address.empty()) {
                     char *param = audio_device_address_to_parameter(device->type(), address);
                     mpClientInterface->setParameters(input, String8(param));
                     free(param);
@@ -7422,7 +7438,9 @@ void AudioPolicyManager::checkA2dpSuspend()
 DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescriptor>& outputDesc,
                                                      bool fromCache)
 {
-    DeviceVector devices;
+    if (outputDesc == nullptr) {
+        return DeviceVector{};
+    }
 
     ssize_t index = mAudioPatches.indexOfKey(outputDesc->getPatchHandle());
     if (index >= 0) {
@@ -7456,6 +7474,7 @@ DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescr
         return DeviceVector(device);
     }
 
+    DeviceVector devices;
     for (const auto &productStrategy : mEngine->getOrderedProductStrategies()) {
         StreamTypeVector streams = mEngine->getStreamTypesForProductStrategy(productStrategy);
         auto attr = mEngine->getAllAttributesForProductStrategy(productStrategy).front();
@@ -8050,8 +8069,10 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
     const auto musicVolumeSrc = toVolumeSource(AUDIO_STREAM_MUSIC, false);
     const auto alarmVolumeSrc = toVolumeSource(AUDIO_STREAM_ALARM, false);
     const auto a11yVolumeSrc = toVolumeSource(AUDIO_STREAM_ACCESSIBILITY, false);
-
-    if (volumeSource == a11yVolumeSrc
+    // Verify that the current volume source is not the ringer volume to prevent recursively
+    // calling to compute volume. This could happen in cases where a11y and ringer sounds belong
+    // to the same volume group.
+    if (volumeSource != ringVolumeSrc && volumeSource == a11yVolumeSrc
             && (AUDIO_MODE_RINGTONE == mEngine->getPhoneState()) &&
             mOutputs.isActive(ringVolumeSrc, 0)) {
         auto &ringCurves = getVolumeCurves(AUDIO_STREAM_RING);
@@ -8114,8 +8135,12 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
         // when the phone is ringing we must consider that music could have been paused just before
         // by the music application and behave as if music was active if the last music track was
         // just stopped
-        if (isStreamActive(AUDIO_STREAM_MUSIC, SONIFICATION_HEADSET_MUSIC_DELAY) ||
-                mLimitRingtoneVolume) {
+        // Verify that the current volume source is not the music volume to prevent recursively
+        // calling to compute volume. This could happen in cases where music and
+        // (alarm, ring, notification, system, etc.) sounds belong to the same volume group.
+        if (volumeSource != musicVolumeSrc &&
+            (isStreamActive(AUDIO_STREAM_MUSIC, SONIFICATION_HEADSET_MUSIC_DELAY)
+                || mLimitRingtoneVolume)) {
             volumeDb += SONIFICATION_HEADSET_VOLUME_FACTOR_DB;
             DeviceTypeSet musicDevice =
                     mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_MEDIA),
@@ -8715,7 +8740,7 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
     sp<DeviceDescriptor> device = devices.getDeviceForOpening();
     const audio_devices_t deviceType = device->type();
     const String8 &address = String8(device->address().c_str());
-    if (!address.isEmpty()) {
+    if (!address.empty()) {
         char *param = audio_device_address_to_parameter(deviceType, address.c_str());
         mpClientInterface->setParameters(output, String8(param));
         free(param);
@@ -8788,6 +8813,7 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
     if (mPrimaryOutput == nullptr && profile->getFlags() & AUDIO_OUTPUT_FLAG_PRIMARY) {
         ALOGV("%s(): re-assigning mPrimaryOutput", __func__);
         mPrimaryOutput = desc;
+        mPrimaryModuleHandle = mPrimaryOutput->getModuleHandle();
     }
     return desc;
 }

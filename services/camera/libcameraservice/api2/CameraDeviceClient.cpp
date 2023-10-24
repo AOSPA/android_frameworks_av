@@ -18,6 +18,7 @@
 #define ATRACE_TAG ATRACE_TAG_CAMERA
 //#define LOG_NDEBUG 0
 
+#include <com_android_internal_camera_flags.h>
 #include <cutils/properties.h>
 #include <utils/CameraThreadState.h>
 #include <utils/Log.h>
@@ -54,6 +55,8 @@ namespace android {
 using namespace camera2;
 using namespace camera3;
 using camera3::camera_stream_rotation_t::CAMERA_STREAM_ROTATION_0;
+
+namespace flags = com::android::internal::camera::flags;
 
 CameraDeviceClientBase::CameraDeviceClientBase(
         const sp<CameraService>& cameraService,
@@ -547,6 +550,13 @@ binder::Status CameraDeviceClient::submitRequestList(
                         ANDROID_CONTROL_VIDEO_STABILIZATION_MODE);
         if (entry.count == 1) {
             mVideoStabilizationMode = entry.data.u8[0];
+        }
+        if (flags::log_ultrawide_usage()) {
+            entry = physicalSettingsList.begin()->metadata.find(
+                    ANDROID_CONTROL_ZOOM_RATIO);
+            if (entry.count == 1 && entry.data.f[0] < 1.0f ) {
+                mUsedUltraWide = true;
+            }
         }
     }
     mRequestIdCounter++;
@@ -1783,11 +1793,11 @@ status_t CameraDeviceClient::setCameraServiceWatchdog(bool enabled) {
     return mDevice->setCameraServiceWatchdog(enabled);
 }
 
-status_t CameraDeviceClient::setRotateAndCropOverride(uint8_t rotateAndCrop) {
+status_t CameraDeviceClient::setRotateAndCropOverride(uint8_t rotateAndCrop, bool fromHal) {
     if (rotateAndCrop > ANDROID_SCALER_ROTATE_AND_CROP_AUTO) return BAD_VALUE;
 
     return mDevice->setRotateAndCropAutoBehavior(
-        static_cast<camera_metadata_enum_android_scaler_rotate_and_crop_t>(rotateAndCrop));
+        static_cast<camera_metadata_enum_android_scaler_rotate_and_crop_t>(rotateAndCrop), fromHal);
 }
 
 status_t CameraDeviceClient::setAutoframingOverride(uint8_t autoframingValue) {
@@ -2072,7 +2082,7 @@ void CameraDeviceClient::notifyIdle(
         }
     }
     Camera2ClientBase::notifyIdleWithUserTag(requestCount, resultErrorCount, deviceError,
-            fullStreamStats, mUserTag, mVideoStabilizationMode);
+            fullStreamStats, mUserTag, mVideoStabilizationMode, mUsedUltraWide);
 }
 
 void CameraDeviceClient::notifyShutter(const CaptureResultExtras& resultExtras,
