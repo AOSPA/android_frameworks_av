@@ -78,6 +78,8 @@ private:
 
     DeviceVector getDevicesForProductStrategy(product_strategy_t strategy) const override;
 
+    sp<DeviceDescriptor> getIPDevice(const DeviceVector &availableDevices) const;
+
 private:
     /* Copy facilities are put private to disable copy. */
     Engine(const Engine &object);
