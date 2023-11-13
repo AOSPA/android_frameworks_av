@@ -292,7 +292,7 @@ ScopedAStatus Component::createBlockPool(
     static constexpr IComponent::BlockPoolAllocator::Tag ALLOCATOR_ID =
         IComponent::BlockPoolAllocator::allocatorId;
     static constexpr IComponent::BlockPoolAllocator::Tag IGBA =
-        IComponent::BlockPoolAllocator::igba;
+        IComponent::BlockPoolAllocator::allocator;
     c2_status_t status = C2_OK;
     switch (allocator.getTag()) {
         case ALLOCATOR_ID:
@@ -411,7 +411,7 @@ void Component::initListener(const std::shared_ptr<Component>& self) {
 
         mDeathRecipient = ::ndk::ScopedAIBinder_DeathRecipient(
                 AIBinder_DeathRecipient_new(OnBinderDied));
-        mDeathContext = new DeathContext{weak_from_this()};
+        mDeathContext = new DeathContext{ref<Component>()};
         AIBinder_DeathRecipient_setOnUnlinked(mDeathRecipient.get(), OnBinderUnlinked);
         AIBinder_linkToDeath(mListener->asBinder().get(), mDeathRecipient.get(), mDeathContext);
     } else {
