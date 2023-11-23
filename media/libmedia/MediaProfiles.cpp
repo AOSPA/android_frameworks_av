@@ -83,6 +83,7 @@ std::array<char const*, 5> const& getXmlPaths() {
 Mutex MediaProfiles::sLock;
 bool MediaProfiles::sIsInitialized = false;
 MediaProfiles *MediaProfiles::sInstance = NULL;
+MediaProfiles::MediaProfiles_override *MediaProfiles::mMediaProfiles_override = NULL;
 
 const MediaProfiles::NameToTagMap MediaProfiles::sVideoEncoderNameMap[] = {
     {"h263", VIDEO_ENCODER_H263},
@@ -721,6 +722,149 @@ void MediaProfiles::addStartTimeOffset(int cameraId, const char** atts, size_t n
 }
 
 /*static*/ void
+MediaProfiles::startOverrideXmlElementHandler(void *userData, const char *name, const char **atts)
+{
+    size_t natts = 0;
+    while (atts[natts]) {
+        ++natts;
+    }
+    MediaProfiles_override *profiles = (MediaProfiles_override *)userData;
+
+    if (strcmp("CamcorderProfiles", name) == 0) {
+        CHECK(natts >= 2 &&
+          !strcmp("cameraId", atts[0]));
+        int cameraId = getCameraId(atts, natts);
+        profiles->mCameraIds_override.push_back(cameraId);
+    } else if (strcmp("VideoEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mVideoEncoders_override.push_back(atts[1]);
+    } else if (strcmp("AudioEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mAudioEncoders_override.push_back(atts[1]);
+    } else if (strcmp("VideoDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mVideoDecoders_override.push_back(atts[1]);
+    } else if (strcmp("AudioDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        CHECK(natts >= 2 &&
+              !strcmp("name", atts[0]));
+        profiles->mAudioDecoders_override.push_back(atts[1]);
+    } else if (strcmp("EncoderOutputFileFormat", name) == 0) {
+         CHECK(natts >= 2 &&
+          !strcmp("name", atts[0]));
+        profiles->mEncoderOutputFileFormats_override.push_back(atts[1]);
+    }
+
+}
+
+/*static*/ void
+MediaProfiles::startElementHandler_override(void *userData, const char *name, const char **atts)
+{
+    // determine number of attributes
+    size_t natts = 0;
+    while (atts[natts]) {
+        ++natts;
+    }
+
+    MediaProfiles *profiles = (MediaProfiles *)userData;
+    MediaProfiles_override *profiles_override = profiles->mMediaProfiles_override;
+    if (strcmp("Video", name) == 0) {
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            createVideoCodec(atts, natts, profiles);
+        }
+    } else if (strcmp("Audio", name) == 0) {
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            createAudioCodec(atts, natts, profiles);
+        }
+    } else if (strcmp("VideoEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mVideoEncoders_override.begin(),
+                profiles_override->mVideoEncoders_override.end(), atts[1]) ==
+                profiles_override->mVideoEncoders_override.end()) {
+             MediaProfiles::VideoEncoderCap* cap = createVideoEncoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mVideoEncoders.add(cap);
+            }
+        }
+    } else if (strcmp("AudioEncoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mAudioEncoders_override.begin(),
+                profiles_override->mAudioEncoders_override.end(), atts[1]) ==
+                profiles_override->mAudioEncoders_override.end()) {
+            MediaProfiles::AudioEncoderCap* cap = createAudioEncoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mAudioEncoders.add(cap);
+            }
+        }
+    } else if (strcmp("VideoDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mVideoDecoders_override.begin(),
+                profiles_override->mVideoDecoders_override.end(), atts[1]) ==
+                profiles_override->mVideoDecoders_override.end()){
+            MediaProfiles::VideoDecoderCap* cap = createVideoDecoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mVideoDecoders.add(cap);
+            }
+        }
+    } else if (strcmp("AudioDecoderCap", name) == 0 &&
+               natts >= 4 &&
+               strcmp("true", atts[3]) == 0) {
+        if (std::find(profiles_override->mAudioDecoders_override.begin(),
+                profiles_override->mAudioDecoders_override.end(), atts[1]) ==
+                profiles_override->mAudioDecoders_override.end()) {
+             MediaProfiles::AudioDecoderCap* cap = createAudioDecoderCap(atts, natts);
+            if (cap != nullptr) {
+              profiles->mAudioDecoders.add(cap);
+            }
+        }
+    } else if (strcmp("EncoderOutputFileFormat", name) == 0) {
+        CHECK(natts >= 2 &&
+          !strcmp("name", atts[0]));
+        if (std::find(profiles_override->mEncoderOutputFileFormats_override.begin(),
+                profiles_override->mEncoderOutputFileFormats_override.end(), atts[1])
+                == profiles_override->mEncoderOutputFileFormats_override.end()) {
+            profiles->mEncoderOutputFileFormats.add(createEncoderOutputFileFormat(atts, natts));
+        }
+    } else if (strcmp("CamcorderProfiles", name) == 0) {
+        profiles->mCurrentCameraId = getCameraId(atts, natts);
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            profiles->addStartTimeOffset(profiles->mCurrentCameraId, atts, natts);
+        }
+    } else if (strcmp("EncoderProfile", name) == 0) {
+        if (std::find(profiles_override->mCameraIds_override.begin(),
+                profiles_override->mCameraIds_override.end(), profiles->mCurrentCameraId) ==
+                profiles_override->mCameraIds_override.end()) {
+            MediaProfiles::CamcorderProfile* profile = createCamcorderProfile(
+            profiles->mCurrentCameraId, atts, natts, profiles->mCameraIds);
+            if (profile != nullptr) {
+                profiles->mCamcorderProfiles.add(profile);
+            }
+        }
+    } else if (strcmp("ImageEncoding", name) == 0) {
+        profiles->addImageEncodingQualityLevel(profiles->mCurrentCameraId, atts, natts);
+    }
+}
+
+/*static*/ void
 MediaProfiles::startElementHandler(void *userData, const char *name, const char **atts)
 {
     // determine number of attributes
@@ -1014,6 +1158,36 @@ MediaProfiles::getInstance()
                                               std::string(variant) + std::string(".xml");
                         strlcpy(value, xmlPath.c_str(), PROPERTY_VALUE_MAX);
                         ALOGI("Profiles xml path: %s", value);
+                        //Checking if QSPA is enabled
+                        char qspaEnabled[PROPERTY_VALUE_MAX];
+                        property_get("ro.boot.vendor.qspa", qspaEnabled, NULL);
+                        if (!strcmp(qspaEnabled, "true")) {
+                            char val[PROPERTY_VALUE_MAX];
+                            if (property_get("ro.boot.vendor.qspa.video", val, NULL) > 0) {
+                                if(!strcmp(val, "disabled")) {
+                                    std::string xmlPath_override =
+                                            std::string("/vendor/etc/media_profiles") +
+                                            std::string(variant) + std::string("_override") +
+                                            std::string(".xml");
+                                    //Check if override xml exists
+                                    struct stat fileStat;
+                                    if (stat(xmlPath_override.c_str(), &fileStat) == 0 &&
+                                            S_ISREG(fileStat.st_mode)) {
+                                        ALOGI("Qspa Profiles override xml path: %s",
+                                                xmlPath_override.c_str());
+                                        mMediaProfiles_override =
+                                                parseOverrideXmlFile(xmlPath_override.c_str());
+                                        sInstance = createInstanceFromXmlFile_override(value,
+                                                mMediaProfiles_override);
+
+                                        CHECK(sInstance != NULL);
+                                        sInstance->checkAndAddRequiredProfilesIfNecessary();
+                                        sIsInitialized = true;
+                                        return sInstance;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             sInstance = createInstanceFromXmlFile(value);
@@ -1263,6 +1437,105 @@ bool MediaProfiles::checkXmlFile(const char* xmlFile) {
     struct stat fStat;
     return stat(xmlFile, &fStat) == 0 && S_ISREG(fStat.st_mode);
     // TODO: Add validation
+}
+
+//Parsing the Qspa override xml file
+/*static*/ MediaProfiles::MediaProfiles_override*
+MediaProfiles::parseOverrideXmlFile(const char *xml)
+{
+    MediaProfiles::MediaProfiles_override *profiles =
+        new MediaProfiles::MediaProfiles_override();
+    FILE *fp = NULL;
+    CHECK((fp = fopen(xml, "r")));
+
+    XML_Parser parser = ::XML_ParserCreate(NULL);
+    CHECK(parser != NULL);
+
+    ::XML_SetUserData(parser, profiles);
+    ::XML_SetElementHandler(parser, startOverrideXmlElementHandler, NULL);
+
+    const int BUFF_SIZE = 512;
+    for (;;) {
+        void *buff = ::XML_GetBuffer(parser, BUFF_SIZE);
+        if (buff == NULL) {
+            ALOGE("failed to in call to XML_GetBuffer()");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        int bytes_read = ::fread(buff, 1, BUFF_SIZE, fp);
+        if (bytes_read < 0) {
+            ALOGE("failed in call to read");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        CHECK(::XML_ParseBuffer(parser, bytes_read, bytes_read == 0));
+
+        if (bytes_read == 0) break;  // done parsing the xml file
+    }
+
+    exit:
+        ::XML_ParserFree(parser);
+        ::fclose(fp);
+    return profiles;
+}
+
+//Creating instance from profiles xml file, given Qspa override xml file
+/*static*/ MediaProfiles*
+MediaProfiles::createInstanceFromXmlFile_override(const char *xml, MediaProfiles_override *profiles_overide)
+{
+    FILE *fp = NULL;
+    CHECK((fp = fopen(xml, "r")));
+
+    XML_Parser parser = ::XML_ParserCreate(NULL);
+    CHECK(parser != NULL);
+
+    MediaProfiles *profiles = new MediaProfiles();
+    profiles->mMediaProfiles_override = profiles_overide;
+    ::XML_SetUserData(parser, profiles);
+    ::XML_SetElementHandler(parser, startElementHandler_override, NULL);
+
+     /*
+      FIXME:
+      expat is not compiled with -DXML_DTD. We don't have DTD parsing support.
+
+      if (!::XML_SetParamEntityParsing(parser, XML_PARAM_ENTITY_PARSING_ALWAYS)) {
+          ALOGE("failed to enable DTD support in the xml file");
+          return UNKNOWN_ERROR;
+      }
+
+    */
+
+    const int BUFF_SIZE = 512;
+    for (;;) {
+        void *buff = ::XML_GetBuffer(parser, BUFF_SIZE);
+        if (buff == NULL) {
+            ALOGE("failed to in call to XML_GetBuffer()");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        int bytes_read = ::fread(buff, 1, BUFF_SIZE, fp);
+        if (bytes_read < 0) {
+            ALOGE("failed in call to read");
+            delete profiles;
+            profiles = NULL;
+            goto exit;
+        }
+
+        CHECK(::XML_ParseBuffer(parser, bytes_read, bytes_read == 0));
+
+        if (bytes_read == 0) break;  // done parsing the xml file
+    }
+
+    exit:
+        ::XML_ParserFree(parser);
+        ::fclose(fp);
+        return profiles;
 }
 
 /*static*/ MediaProfiles*
