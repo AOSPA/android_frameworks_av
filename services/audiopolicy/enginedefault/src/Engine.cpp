@@ -549,6 +549,16 @@ DeviceVector Engine::getDisabledDevicesForInputSource(
     return disabledDevices;
 }
 
+sp<DeviceDescriptor> Engine::getIPDevice(const DeviceVector &availableDevices) const
+{
+    sp<DeviceDescriptor> device = nullptr;
+    if (property_get_bool("vendor.audio.enable.proxyrecord", false)) {
+        device = availableDevices.getDevice(
+                AUDIO_DEVICE_IN_IP, String8(""), AUDIO_FORMAT_DEFAULT);
+    }
+    return device;
+}
+
 sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource) const
 {
     const DeviceVector availableOutputDevices = getApmObserver()->getAvailableOutputDevices();
@@ -604,6 +614,9 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
                     AUDIO_DEVICE_IN_REMOTE_SUBMIX, String8(""), AUDIO_FORMAT_DEFAULT);
             if (device != nullptr) break;
         }
+        device = getIPDevice(availableDevices);
+        if (device != nullptr) break;
+
         device = availableDevices.getDevice(
                 AUDIO_DEVICE_IN_BLUETOOTH_A2DP, String8(""), AUDIO_FORMAT_DEFAULT);
         if (device != nullptr) break;
@@ -627,6 +640,9 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
             LOG_ALWAYS_FATAL_IF(availablePrimaryDevices.isEmpty(), "Primary devices not found");
             availableDevices = availablePrimaryDevices;
         }
+
+        device = getIPDevice(availableDevices);
+        if (device != nullptr) break;
 
         if (audio_is_bluetooth_out_sco_device(commDeviceType)) {
             // if SCO device is requested but no SCO device is available, fall back to default case
@@ -704,6 +720,9 @@ sp<DeviceDescriptor> Engine::getDeviceForInputSource(audio_source_t inputSource)
         break;
     case AUDIO_SOURCE_CAMCORDER:
         // For a device without built-in mic, adding usb device
+        device = getIPDevice(availableDevices);
+        if (device != nullptr) break;
+
         device = availableDevices.getFirstExistingDevice({
                 AUDIO_DEVICE_IN_BACK_MIC, AUDIO_DEVICE_IN_BUILTIN_MIC,
                 AUDIO_DEVICE_IN_USB_DEVICE});
