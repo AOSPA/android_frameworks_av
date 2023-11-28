@@ -1057,9 +1057,9 @@ protected:
         status_t deviceToAudioPort(audio_devices_t deviceType, const char* device_address,
                                    const char* device_name, media::AudioPortFw* aidPort);
 
-        // If any, resolve any "dynamic" fields of an Audio Profiles collection
+        // If any, resolve any "dynamic" fields of the Audio Profiles collection of and IOProfile
         void updateAudioProfiles(const sp<DeviceDescriptor>& devDesc, audio_io_handle_t ioHandle,
-                AudioProfileVector &profiles);
+                const sp<IOProfile> &profiles);
 
         // Notify the policy client to prepare for disconnecting external device.
         void prepareToDisconnectExternalDevice(const sp<DeviceDescriptor> &device);
