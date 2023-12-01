@@ -257,8 +257,10 @@ aidl_interface {
         "aidl/android/media/IEffect.aidl",
         "aidl/android/media/IEffectClient.aidl",
     ],
+    defaults: [
+        "latest_android_media_audio_common_types_import_interface",
+    ],
     imports: [
-        "android.media.audio.common.types-V2",
         "shared-file-region-aidl",
     ],
     backend: {
@@ -311,8 +313,10 @@ aidl_interface {
         "aidl/android/media/TrackSecondaryOutputInfo.aidl",
         "aidl/android/media/SurroundSoundConfig.aidl",
     ],
+    defaults: [
+        "latest_android_media_audio_common_types_import_interface",
+    ],
     imports: [
-        "android.media.audio.common.types-V2",
         "framework-permission-aidl",
     ],
     backend: {
@@ -354,12 +358,11 @@ aidl_interface {
         "aidl/android/media/AudioVolumeGroup.aidl",
         "aidl/android/media/DeviceRole.aidl",
         "aidl/android/media/SoundTriggerSession.aidl",
-        "aidl/android/media/SpatializationLevel.aidl",
-        "aidl/android/media/SpatializationMode.aidl",
-        "aidl/android/media/SpatializerHeadTrackingMode.aidl",
+    ],
+    defaults: [
+        "latest_android_media_audio_common_types_import_interface",
     ],
     imports: [
-        "android.media.audio.common.types-V2",
         "audioclient-types-aidl",
     ],
     backend: {
@@ -405,8 +408,10 @@ aidl_interface {
         "aidl/android/media/ISoundDoseCallback.aidl",
         "aidl/android/media/SoundDoseRecord.aidl",
     ],
+    defaults: [
+        "latest_android_media_audio_common_types_import_interface",
+    ],
     imports: [
-        "android.media.audio.common.types-V2",
         "audioclient-types-aidl",
         "av-types-aidl",
         "effect-aidl",
@@ -442,8 +447,10 @@ aidl_interface {
         "aidl/android/media/IAudioPolicyService.aidl",
         "aidl/android/media/IAudioPolicyServiceClient.aidl",
     ],
+    defaults: [
+        "latest_android_media_audio_common_types_import_interface",
+    ],
     imports: [
-        "android.media.audio.common.types-V2",
         "audioclient-types-aidl",
         "audiopolicy-types-aidl",
         "capture_state_listener-aidl",
@@ -476,6 +483,9 @@ aidl_interface {
         "aidl/android/media/INativeSpatializerCallback.aidl",
         "aidl/android/media/ISpatializer.aidl",
         "aidl/android/media/ISpatializerHeadTrackingCallback.aidl",
+    ],
+    defaults: [
+        "latest_android_media_audio_common_types_import_interface",
     ],
     imports: [
         "audiopolicy-types-aidl",
