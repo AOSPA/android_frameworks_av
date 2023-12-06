@@ -655,6 +655,27 @@ private:
 
     RequiredProfiles *mRequiredProfileRefs;
     Vector<int>              mCameraIds;
+
+    /* Qspa handles */
+    struct MediaProfiles_override {
+        Vector<int> mCameraIds_override;
+        Vector<std::string> mVideoEncoders_override;
+        Vector<std::string> mAudioEncoders_override;
+        Vector<std::string> mVideoDecoders_override;
+        Vector<std::string> mAudioDecoders_override;
+        Vector<std::string> mEncoderOutputFileFormats_override;
+        ~MediaProfiles_override() {};
+    };
+
+    static MediaProfiles_override *mMediaProfiles_override;
+    static MediaProfiles_override *parseOverrideXmlFile(const char *xml);
+    static void startOverrideXmlElementHandler(void *userData, const char *name, const char **atts);
+    static MediaProfiles* createInstanceFromXmlFile_override(const char *xml,
+            MediaProfiles_override *profiles_overide);
+     // Customized element tag handler for parsing the xml configuration file.
+    static void startElementHandler_override(void *userData, const char *name, const char **atts);
+
+
 };
 
 }; // namespace android
