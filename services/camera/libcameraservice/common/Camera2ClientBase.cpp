@@ -369,7 +369,8 @@ void Camera2ClientBase<TClientBase>::notifyPhysicalCameraChange(const std::strin
             rotateAndCropMode = ANDROID_SCALER_ROTATE_AND_CROP_90;
         }
 
-        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode);
+        static_cast<TClientBase *>(this)->setRotateAndCropOverride(rotateAndCropMode,
+                                                                   /*fromHal*/ true);
     }
 }
 

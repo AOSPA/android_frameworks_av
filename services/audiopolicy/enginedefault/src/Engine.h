@@ -47,10 +47,14 @@ class Engine : public EngineBase
 public:
     Engine() = default;
     virtual ~Engine() = default;
+    Engine(const Engine &object) = delete;
+    Engine &operator=(const Engine &object) = delete;
 
     ///
     /// from EngineInterface
     ///
+    status_t loadFromHalConfigWithFallback(
+            const media::audio::common::AudioHalEngineConfig& config) override;
     status_t loadFromXmlConfigWithFallback(const std::string& xmlFilePath = "") override;
 
 private:
@@ -81,9 +85,8 @@ private:
     sp<DeviceDescriptor> getIPDevice(const DeviceVector &availableDevices) const;
 
 private:
-    /* Copy facilities are put private to disable copy. */
-    Engine(const Engine &object);
-    Engine &operator=(const Engine &object);
+    template<typename T>
+    status_t loadWithFallback(const T& configSource);
 
     status_t setDefaultDevice(audio_devices_t device);
 

@@ -55,7 +55,7 @@ private:
 
     sp<PlayAudioOpCallback> mOpCallback;
     // called by PlayAudioOpCallback when OP_PLAY_AUDIO is updated in AppOp callback
-    void checkPlayAudioForUsage();
+    void checkPlayAudioForUsage(bool doBroadcast);
 
     wp<AudioFlinger::ThreadBase> mThread;
     std::atomic_bool mHasOpPlayAudio;
@@ -194,8 +194,8 @@ public:
             sp<os::ExternalVibration> getExternalVibration() const { return mExternalVibration; }
 
             // This function should be called with holding thread lock.
-            void    updateTeePatches();
-            void    setTeePatchesToUpdate(TeePatches teePatchesToUpdate);
+            void    updateTeePatches_l();
+            void    setTeePatchesToUpdate_l(TeePatches teePatchesToUpdate);
 
     void tallyUnderrunFrames(size_t frames) override {
        if (isOut()) { // we expect this from output tracks only
@@ -342,8 +342,9 @@ protected:
 
 private:
     void                interceptBuffer(const AudioBufferProvider::Buffer& buffer);
+    // Must hold thread lock to access tee patches
     template <class F>
-    void                forEachTeePatchTrack(F f) {
+    void                forEachTeePatchTrack_l(F f) {
         for (auto& tp : mTeePatches) { f(tp.patchTrack); }
     };
 
