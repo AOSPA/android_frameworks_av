@@ -623,7 +623,7 @@ binder::Status createSurfaceFromGbp(
     if (format != HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
         if (dataSpace != streamInfo.dataSpace) {
             std::string msg = fmt::sprintf("Camera %s:Surface dataSpace doesn't match: %d vs %d",
-                    logicalCameraId.c_str(), dataSpace, streamInfo.dataSpace);
+                    logicalCameraId.c_str(), static_cast<int>(dataSpace), static_cast<int>(streamInfo.dataSpace));
             ALOGE("%s: %s", __FUNCTION__, msg.c_str());
             return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
         }
@@ -1133,7 +1133,7 @@ status_t mapRequestTemplateToAidl(camera_request_template_t templateId,
 }
 
 void filterParameters(const CameraMetadata& src, const CameraMetadata& deviceInfo,
-        int vendorTagId, CameraMetadata& dst) {
+        metadata_vendor_id_t vendorTagId, CameraMetadata& dst) {
     const CameraMetadata params(src);
     camera_metadata_ro_entry_t availableSessionKeys = deviceInfo.find(
             ANDROID_REQUEST_AVAILABLE_SESSION_KEYS);
