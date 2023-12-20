@@ -99,6 +99,11 @@ class MetadataBuilder {
   MetadataBuilder& setAvailableOutputStreamConfigurations(
       const std::vector<StreamConfiguration>& streamConfigurations);
 
+  // See ANDROID_CONTROL_AVAILABLE_MODES in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAvailableModes(
+      const std::vector<camera_metadata_enum_android_control_mode_t>&
+          availableModes);
+
   // See ANDROID_CONTROL_AE_COMPENSATION_RANGE in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAeCompensationRange(int32_t min, int32_t max);
 
@@ -145,6 +150,9 @@ class MetadataBuilder {
 
   // See ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM in CameraMetadataTag.aidl.
   MetadataBuilder& setAvailableMaxDigitalZoom(const float maxZoom);
+
+  // See ANDROID_CONTROL_ZOOM_RATIO_RANGE in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlZoomRatioRange(float min, float max);
 
   // A list of all keys that the camera device has available to use with
   // CaptureRequest.
