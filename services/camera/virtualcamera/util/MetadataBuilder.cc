@@ -95,6 +95,14 @@ MetadataBuilder& MetadataBuilder::setAvailableFaceDetectModes(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setControlAvailableModes(
+    const std::vector<camera_metadata_enum_android_control_mode_t>&
+        availableModes) {
+  mEntryMap[ANDROID_CONTROL_AVAILABLE_MODES] =
+      convertTo<uint8_t>(availableModes);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::setControlAfAvailableModes(
     const std::vector<camera_metadata_enum_android_control_af_mode_t>&
         availableModes) {
@@ -222,6 +230,12 @@ MetadataBuilder& MetadataBuilder::setAvailableOutputStreamConfigurations(
 MetadataBuilder& MetadataBuilder::setAvailableMaxDigitalZoom(const float maxZoom) {
   mEntryMap[ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM] =
       std::vector<float>(maxZoom);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setControlZoomRatioRange(const float min,
+                                                           const float max) {
+  mEntryMap[ANDROID_CONTROL_ZOOM_RATIO_RANGE] = std::vector<float>({min, max});
   return *this;
 }
 
