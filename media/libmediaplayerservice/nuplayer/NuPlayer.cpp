@@ -2086,6 +2086,8 @@ status_t NuPlayer::instantiateDecoder(
             format->setFloat("vendor.qti-ext-dec-output-render-frame-rate.value",
                     mMaxOutputFrameRate);
         }
+
+        format->setInt32("android._video-scaling", mVideoScalingMode);
     }
 
     Mutex::Autolock autoLock(mDecoderLock);

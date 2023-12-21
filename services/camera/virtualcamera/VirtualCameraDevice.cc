@@ -119,9 +119,10 @@ std::optional<CameraMetadata> initCameraCharacteristics(
     const std::vector<SupportedStreamConfiguration>& supportedInputConfig) {
   if (!std::all_of(supportedInputConfig.begin(), supportedInputConfig.end(),
                    [](const SupportedStreamConfiguration& config) {
-                     return config.pixelFormat == Format::YUV_420_888;
+                     return isFormatSupportedForInput(
+                         config.width, config.height, config.pixelFormat);
                    })) {
-    ALOGE("%s: input configuration contains unsupported pixel format", __func__);
+    ALOGE("%s: input configuration contains unsupported format", __func__);
     return std::nullopt;
   }
 
@@ -322,7 +323,7 @@ ndk::ScopedAStatus VirtualCameraDevice::open(
   ALOGV("%s", __func__);
 
   *_aidl_return = ndk::SharedRefBase::make<VirtualCameraSession>(
-      *this, in_callback, mVirtualCameraClientCallback);
+      sharedFromThis(), in_callback, mVirtualCameraClientCallback);
 
   return ndk::ScopedAStatus::ok();
 };
@@ -365,6 +366,13 @@ binder_status_t VirtualCameraDevice::dump(int fd, const char** args,
 
 std::string VirtualCameraDevice::getCameraName() const {
   return std::string(kDevicePathPrefix) + std::to_string(mCameraId);
+}
+
+std::shared_ptr<VirtualCameraDevice> VirtualCameraDevice::sharedFromThis() {
+  // SharedRefBase which BnCameraDevice inherits from breaks
+  // std::enable_shared_from_this. This is recommended replacement for
+  // shared_from_this() per documentation in binder_interface_utils.h.
+  return ref<VirtualCameraDevice>();
 }
 
 }  // namespace virtualcamera
