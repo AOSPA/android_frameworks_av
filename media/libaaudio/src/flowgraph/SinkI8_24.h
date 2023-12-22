@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 The Android Open Source Project
+ * Copyright 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,27 @@
  * limitations under the License.
  */
 
-package android.companion.virtualcamera;
+#ifndef FLOWGRAPH_SINK_I8_24_H
+#define FLOWGRAPH_SINK_I8_24_H
 
-/**
- * Pixel format supported by a virtual camera stream.
- *
- * @hide
- */
-@Backing(type="int")
-enum Format {
-    UNKNOWN = 0,
-    RGBA_8888 = 1,
-    YUV_420_888 = 0x23,
-}
+#include <stdint.h>
+
+#include "FlowGraphNode.h"
+
+namespace FLOWGRAPH_OUTER_NAMESPACE::flowgraph {
+
+class SinkI8_24 : public FlowGraphSink {
+public:
+    explicit SinkI8_24(int32_t channelCount);
+    ~SinkI8_24() override = default;
+
+    int32_t read(void *data, int32_t numFrames) override;
+
+    const char *getName() override {
+        return "SinkI8_24";
+    }
+};
+
+} /* namespace FLOWGRAPH_OUTER_NAMESPACE::flowgraph */
+
+#endif //FLOWGRAPH_SINK_I8_24_H

@@ -1210,6 +1210,7 @@ MediaCodec::MediaCodec(
       mTunneledInputHeight(0),
       mTunneled(false),
       mTunnelPeekState(TunnelPeekState::kLegacyMode),
+      mTunnelPeekEnabled(false),
       mHaveInputSurface(false),
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
@@ -1755,6 +1756,7 @@ void MediaCodec::updateTunnelPeek(const sp<AMessage> &msg) {
 
     TunnelPeekState previousState = mTunnelPeekState;
     if(tunnelPeek == 0){
+        mTunnelPeekEnabled = false;
         switch (mTunnelPeekState) {
             case TunnelPeekState::kLegacyMode:
                 msg->setInt32("android._tunnel-peek-set-legacy", 0);
@@ -1770,6 +1772,7 @@ void MediaCodec::updateTunnelPeek(const sp<AMessage> &msg) {
                 return;
         }
     } else {
+        mTunnelPeekEnabled = true;
         switch (mTunnelPeekState) {
             case TunnelPeekState::kLegacyMode:
                 msg->setInt32("android._tunnel-peek-set-legacy", 0);
@@ -4973,10 +4976,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             CHECK(msg->senderAwaitsResponse(&replyID));
             TunnelPeekState previousState = mTunnelPeekState;
             if (previousState != TunnelPeekState::kLegacyMode) {
-                mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
+                mTunnelPeekState = mTunnelPeekEnabled ? TunnelPeekState::kEnabledNoBuffer :
+                    TunnelPeekState::kDisabledNoBuffer;
                 ALOGV("TunnelPeekState: %s -> %s",
                         asString(previousState),
-                        asString(TunnelPeekState::kEnabledNoBuffer));
+                        asString(mTunnelPeekState));
             }
 
             mReplyID = replyID;
@@ -5475,10 +5479,11 @@ void MediaCodec::onMessageReceived(const sp<AMessage> &msg) {
             returnBuffersToCodec();
             TunnelPeekState previousState = mTunnelPeekState;
             if (previousState != TunnelPeekState::kLegacyMode) {
-                mTunnelPeekState = TunnelPeekState::kEnabledNoBuffer;
+                mTunnelPeekState = mTunnelPeekEnabled ? TunnelPeekState::kEnabledNoBuffer :
+                    TunnelPeekState::kDisabledNoBuffer;
                 ALOGV("TunnelPeekState: %s -> %s",
                         asString(previousState),
-                        asString(TunnelPeekState::kEnabledNoBuffer));
+                        asString(mTunnelPeekState));
             }
             break;
         }
@@ -6021,7 +6026,7 @@ status_t MediaCodec::onQueueInputBuffer(const sp<AMessage> &msg) {
         if (isBufferDecodeOnly) {
             buffer->meta()->setInt32("decode-only", true);
         }
-        if (mTunneled && !isBufferDecodeOnly) {
+        if (mTunneled && !isBufferDecodeOnly && !(flags & BUFFER_FLAG_CODECCONFIG)) {
             TunnelPeekState previousState = mTunnelPeekState;
             switch(mTunnelPeekState){
                 case TunnelPeekState::kEnabledNoBuffer:
