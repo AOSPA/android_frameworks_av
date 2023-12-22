@@ -13,6 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * Changes from Qualcomm Innovation Center are provided under the following license:
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause-Clear
+*/
+
 #include "HidlProviderInfo.h"
 #include "common/HalConversionsTemplated.h"
 #include "common/CameraProviderInfoTemplated.h"
@@ -156,20 +162,6 @@ status_t HidlProviderInfo::initializeHidlProvider(
         }
     }
 
-    // cameraDeviceStatusChange callbacks may be called (and causing new devices added)
-    // before setCallback returns
-    hardware::Return<Status> status = interface->setCallback(this);
-    if (!status.isOk()) {
-        ALOGE("%s: Transaction error setting up callbacks with camera provider '%s': %s",
-                __FUNCTION__, mProviderName.c_str(), status.description().c_str());
-        return DEAD_OBJECT;
-    }
-    if (status != Status::OK) {
-        ALOGE("%s: Unable to register callbacks with camera provider '%s'",
-                __FUNCTION__, mProviderName.c_str());
-        return mapToStatusT(status);
-    }
-
     hardware::Return<bool> linked = interface->linkToDeath(this, /*cookie*/ mId);
     if (!linked.isOk()) {
         ALOGE("%s: Transaction error in linking to camera provider '%s' death: %s",
@@ -187,7 +179,21 @@ status_t HidlProviderInfo::initializeHidlProvider(
         mActiveInterface = interface;
     }
 
-    ALOGV("%s: Setting device state for %s: 0x%" PRIx64,
+    // cameraDeviceStatusChange callbacks may be called (and causing new devices added)
+    // before setCallback returns
+    hardware::Return<Status> status = interface->setCallback(this);
+    if (!status.isOk()) {
+        ALOGE("%s: Transaction error setting up callbacks with camera provider '%s': %s",
+                __FUNCTION__, mProviderName.c_str(), status.description().c_str());
+        return DEAD_OBJECT;
+    }
+    if (status != Status::OK) {
+        ALOGE("%s: Unable to register callbacks with camera provider '%s'",
+                __FUNCTION__, mProviderName.c_str());
+        return mapToStatusT(status);
+    }
+
+    ALOGI("%s: Setting device state for %s: 0x%" PRIx64,
             __FUNCTION__, mProviderName.c_str(), mDeviceState);
     notifyDeviceStateChange(currentDeviceState);
 
