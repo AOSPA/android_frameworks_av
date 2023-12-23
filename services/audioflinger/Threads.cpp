@@ -2856,6 +2856,8 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
         // effectively get the latency it requested.
         if (track->isExternalTrack()) {
             IAfTrackBase::track_state state = track->state();
+            // Because the track is not on the ActiveTracks,
+            // at this point, only the TrackHandle will be adding the track.
             mutex().unlock();
             status = AudioSystem::startOutput(track->portId());
             mutex().lock();
@@ -2936,7 +2938,12 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
 
         track->setResetDone(false);
         track->resetPresentationComplete();
+
+        // Do not release the ThreadBase mutex after the track is added to mActiveTracks unless
+        // all key changes are complete.  It is possible that the threadLoop will begin
+        // processing the added track immediately after the ThreadBase mutex is released.
         mActiveTracks.add(track);
+
         if (chain != 0) {
             ALOGV("addTrack_l() starting track on chain %p for session %d", chain.get(),
                     track->sessionId());
@@ -4735,8 +4742,12 @@ void PlaybackThread::collectTimestamps_l()
 void PlaybackThread::removeTracks_l(const Vector<sp<IAfTrack>>& tracksToRemove)
 NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mutex()
 {
+    if (tracksToRemove.empty()) return;
+
+    // Block all incoming TrackHandle requests until we are finished with the release.
+    setThreadBusy_l(true);
+
     for (const auto& track : tracksToRemove) {
-        mActiveTracks.remove(track);
         ALOGV("%s(%d): removing track on session %d", __func__, track->id(), track->sessionId());
         sp<IAfEffectChain> chain = getEffectChain_l(track->sessionId());
         if (chain != 0) {
@@ -4744,17 +4755,16 @@ NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mutex()
                     __func__, track->id(), chain.get(), track->sessionId());
             chain->decActiveTrackCnt();
         }
+
         // If an external client track, inform APM we're no longer active, and remove if needed.
-        // We do this under lock so that the state is consistent if the Track is destroyed.
+        // Since the track is active, we do it here instead of TrackBase::destroy().
         if (track->isExternalTrack()) {
+            mutex().unlock();
             AudioSystem::stopOutput(track->portId());
             if (track->isTerminated()) {
                 AudioSystem::releaseOutput(track->portId());
             }
-        }
-        if (track->isTerminated()) {
-            // remove from our tracks vector
-            removeTrack_l(track);
+            mutex().lock();
         }
         if (mHapticChannelCount > 0 &&
                 ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
@@ -4771,7 +4781,24 @@ NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mutex()
                 chain->setHapticIntensity_l(track->id(), os::HapticScale::MUTE);
             }
         }
+
+        // Under lock, the track is removed from the active tracks list.
+        //
+        // Once the track is no longer active, the TrackHandle may directly
+        // modify it as the threadLoop() is no longer responsible for its maintenance.
+        // Do not modify the track from threadLoop after the mutex is unlocked
+        // if it is not active.
+        mActiveTracks.remove(track);
+
+        if (track->isTerminated()) {
+            // remove from our tracks vector
+            removeTrack_l(track);
+        }
     }
+
+    // Allow incoming TrackHandle requests.  We still hold the mutex,
+    // so pending TrackHandle requests will occur after we unlock it.
+    setThreadBusy_l(false);
 }
 
 status_t PlaybackThread::getTimestamp_l(AudioTimestamp& timestamp)
@@ -9699,10 +9726,24 @@ void RecordThread::ioConfigChanged_l(audio_io_config_event_t event, pid_t pid,
 
 void RecordThread::readInputParameters_l()
 {
-    status_t result = mInput->stream->getAudioProperties(&mSampleRate, &mChannelMask, &mHALFormat);
-    LOG_ALWAYS_FATAL_IF(result != OK, "Error retrieving audio properties from HAL: %d", result);
-    mFormat = mHALFormat;
+    const audio_config_base_t audioConfig = mInput->getAudioProperties();
+    mSampleRate = audioConfig.sample_rate;
+    mChannelMask = audioConfig.channel_mask;
+    if (!audio_is_input_channel(mChannelMask)) {
+        LOG_ALWAYS_FATAL("Channel mask %#x not valid for input", mChannelMask);
+    }
+
     mChannelCount = audio_channel_count_from_in_mask(mChannelMask);
+
+    // Get actual HAL format.
+    status_t result = mInput->stream->getAudioProperties(nullptr, nullptr, &mHALFormat);
+    LOG_ALWAYS_FATAL_IF(result != OK, "Error when retrieving input stream format: %d", result);
+    // Get format from the shim, which will be different than the HAL format
+    // if recording compressed audio from IEC61937 wrapped sources.
+    mFormat = audioConfig.format;
+    if (!audio_is_valid_format(mFormat)) {
+        LOG_ALWAYS_FATAL("Format %#x not valid for input", mFormat);
+    }
     if (audio_is_linear_pcm(mFormat)) {
         LOG_ALWAYS_FATAL_IF(mChannelCount > FCC_LIMIT, "HAL channel count %d > %d",
                 mChannelCount, FCC_LIMIT);
@@ -9710,8 +9751,7 @@ void RecordThread::readInputParameters_l()
         // Can have more that FCC_LIMIT channels in encoded streams.
         ALOGI("HAL format %#x is not linear pcm", mFormat);
     }
-    result = mInput->stream->getFrameSize(&mFrameSize);
-    LOG_ALWAYS_FATAL_IF(result != OK, "Error retrieving frame size from HAL: %d", result);
+    mFrameSize = mInput->getFrameSize();
     LOG_ALWAYS_FATAL_IF(mFrameSize <= 0, "Error frame size was %zu but must be greater than zero",
             mFrameSize);
     result = mInput->stream->getBufferSize(&mBufferSize);

@@ -45,6 +45,7 @@
 
 #include <Serializer.h>
 #include <android/media/audio/common/AudioPort.h>
+#include <com_android_media_audio.h>
 #include <cutils/bitops.h>
 #include <cutils/properties.h>
 #include <media/AudioParameter.h>
@@ -3910,9 +3911,13 @@ status_t AudioPolicyManager::registerPolicyMixes(const Vector<AudioMix>& mixes)
             outputConfig.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
             inputConfig.channel_mask = AUDIO_CHANNEL_IN_STEREO;
             rSubmixModule->addOutputProfile(address.c_str(), &outputConfig,
-                    AUDIO_DEVICE_OUT_REMOTE_SUBMIX, address);
+                    AUDIO_DEVICE_OUT_REMOTE_SUBMIX, address,
+                    audio_is_linear_pcm(outputConfig.format)
+                        ? AUDIO_OUTPUT_FLAG_NONE : AUDIO_OUTPUT_FLAG_DIRECT);
             rSubmixModule->addInputProfile(address.c_str(), &inputConfig,
-                    AUDIO_DEVICE_IN_REMOTE_SUBMIX, address);
+                    AUDIO_DEVICE_IN_REMOTE_SUBMIX, address,
+                    audio_is_linear_pcm(inputConfig.format)
+                        ? AUDIO_INPUT_FLAG_NONE : AUDIO_INPUT_FLAG_DIRECT);
 
             if ((res = setDeviceConnectionStateInt(deviceTypeToMakeAvailable,
                     AUDIO_POLICY_DEVICE_STATE_AVAILABLE,
@@ -4745,8 +4750,8 @@ audio_direct_mode_t AudioPolicyManager::getDirectPlaybackSupport(const audio_att
             if (!mAvailableOutputDevices.containsAtLeastOne(curProfile->getSupportedDevices())) {
                 continue;
             }
-            if ((curProfile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)
-                        != AUDIO_OUTPUT_FLAG_NONE) {
+            if (offloadPossible && ((curProfile->getFlags() & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD)
+                        != AUDIO_OUTPUT_FLAG_NONE)) {
                 if ((directMode & AUDIO_DIRECT_OFFLOAD_GAPLESS_SUPPORTED)
                         != AUDIO_DIRECT_NOT_SUPPORTED) {
                     // Already reports offload gapless supported. No need to report offload support.
@@ -6268,7 +6273,11 @@ bool AudioPolicyManager::canBeSpatializedInt(const audio_attributes_t *attr,
     // some positional channel masks and PCM format
 
     if (config != nullptr && *config != AUDIO_CONFIG_INITIALIZER) {
-        if (!audio_is_channel_mask_spatialized(config->channel_mask)) {
+        const bool channel_mask_spatialized =
+                com_android_media_audio_stereo_spatialization()
+                ? audio_channel_mask_contains_stereo(config->channel_mask)
+                : audio_is_channel_mask_spatialized(config->channel_mask);
+        if (!channel_mask_spatialized) {
             return false;
         }
         if (!audio_is_linear_pcm(config->format)) {
@@ -7049,6 +7058,12 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
         closingOutput->stop();
     }
     closingOutput->close();
+    if ((closingOutput->getFlags().output & AUDIO_OUTPUT_FLAG_BIT_PERFECT)
+            == AUDIO_OUTPUT_FLAG_BIT_PERFECT) {
+        for (const auto device : closingOutput->devices()) {
+            device->setPreferredConfig(nullptr);
+        }
+    }
 
     removeOutput(output);
     mPreviousOutputs = mOutputs;
@@ -8727,6 +8742,12 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
     if (status != NO_ERROR) {
         ALOGE("%s failed to open output %d", __func__, status);
         return nullptr;
+    }
+    if ((flags & AUDIO_OUTPUT_FLAG_BIT_PERFECT) == AUDIO_OUTPUT_FLAG_BIT_PERFECT) {
+        auto portConfig = desc->getConfig();
+        for (const auto& device : devices) {
+            device->setPreferredConfig(&portConfig);
+        }
     }
 
     // Here is where the out_set_parameters() for card & device gets called
