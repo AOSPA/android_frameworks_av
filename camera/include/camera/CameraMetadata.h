@@ -279,7 +279,7 @@ class CameraMetadata: public Parcelable {
     /**
      * Return the current vendor tag id associated with this metadata.
      */
-    metadata_vendor_id_t getVendorId();
+    metadata_vendor_id_t getVendorId() const;
 
     /**
      * Find the current vendor tag id associated with this metadata.
