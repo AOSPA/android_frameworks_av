@@ -185,7 +185,7 @@ static const nsecs_t kDirectMinSleepTimeUs = 10000;
 // Minimum amount of time between checking to see if the timestamp is advancing
 // for underrun detection. If we check too frequently, we may not detect a
 // timestamp update and will falsely detect underrun.
-static const nsecs_t kMinimumTimeBetweenTimestampChecksNs = 150 /* ms */ * 1000;
+static constexpr nsecs_t kMinimumTimeBetweenTimestampChecksNs = 150 /* ms */ * 1'000'000;
 
 static const effect_uuid_t IID_VISUALIZER = {0x1d0a1a53, 0x7d5d, 0x48f2, 0x8e71, {0x27,
                                              0xfb, 0xd1, 0x0d, 0x84, 0x2c}};
