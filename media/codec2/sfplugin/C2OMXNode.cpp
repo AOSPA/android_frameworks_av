@@ -202,10 +202,8 @@ C2OMXNode::C2OMXNode(const std::shared_ptr<Codec2Client::Component> &comp)
     android_fdsan_set_error_level(ANDROID_FDSAN_ERROR_LEVEL_WARN_ALWAYS);
     mQueueThread->run("C2OMXNode", PRIORITY_AUDIO);
 
-    android_dataspace ds = HAL_DATASPACE_UNKNOWN;
-    mDataspace.lock().set(ds);
-    uint32_t pf = PIXEL_FORMAT_UNKNOWN;
-    mPixelFormat.lock().set(pf);
+    Mutexed<android_dataspace>::Locked ds(mDataspace);
+    *ds = HAL_DATASPACE_UNKNOWN;
 }
 
 status_t C2OMXNode::freeNode() {
@@ -523,8 +521,8 @@ status_t C2OMXNode::dispatchMessage(const omx_message& msg) {
     ALOGD("dataspace changed to %#x pixel format: %#x", dataSpace, pixelFormat);
     mQueueThread->setDataspace(dataSpace);
 
-    mDataspace.lock().set(dataSpace);
-    mPixelFormat.lock().set(pixelFormat);
+    Mutexed<android_dataspace>::Locked ds(mDataspace);
+    *ds = dataSpace;
     return OK;
 }
 
@@ -559,10 +557,6 @@ void C2OMXNode::onInputBufferDone(c2_cntr64_t index) {
 
 android_dataspace C2OMXNode::getDataspace() {
     return *mDataspace.lock();
-}
-
-uint32_t C2OMXNode::getPixelFormat() {
-    return *mPixelFormat.lock();
 }
 
 void C2OMXNode::setPriority(int priority) {

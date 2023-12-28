@@ -32,7 +32,6 @@
 #include <media/stagefright/foundation/ABuffer.h>
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/foundation/AUtils.h>
-#include <media/stagefright/ACodec.h>
 #include <media/stagefright/MediaCodec.h>
 #include <media/MediaCodecBuffer.h>
 #include <system/window.h>
@@ -88,11 +87,9 @@ ACodecBufferChannel::BufferInfo::BufferInfo(
 }
 
 ACodecBufferChannel::ACodecBufferChannel(
-        const sp<AMessage> &inputBufferFilled, const sp<AMessage> &outputBufferDrained,
-        const sp<AMessage> &pollForRenderedBuffers)
+        const sp<AMessage> &inputBufferFilled, const sp<AMessage> &outputBufferDrained)
     : mInputBufferFilled(inputBufferFilled),
       mOutputBufferDrained(outputBufferDrained),
-      mPollForRenderedBuffers(pollForRenderedBuffers),
       mHeapSeqNum(-1) {
 }
 
@@ -491,7 +488,7 @@ status_t ACodecBufferChannel::renderOutputBuffer(
 }
 
 void ACodecBufferChannel::pollForRenderedBuffers() {
-    mPollForRenderedBuffers->post();
+    // TODO(b/266211548): Poll the native window for rendered buffers.
 }
 
 status_t ACodecBufferChannel::discardBuffer(const sp<MediaCodecBuffer> &buffer) {
