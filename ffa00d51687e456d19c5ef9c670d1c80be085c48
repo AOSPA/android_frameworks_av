@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "78102e19_f2613cbb",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 2
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000463
+      },
+      "writtenOn": "2023-12-28T14:46:35Z",
+      "side": 1,
+      "message": "Fixes screen recording not working\nFixes apps crashing after reproduce videos",
+      "revId": "ffa00d51687e456d19c5ef9c670d1c80be085c48",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
