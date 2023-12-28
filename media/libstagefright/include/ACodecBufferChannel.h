@@ -29,7 +29,6 @@
 #include <media/IOMX.h>
 
 namespace android {
- struct ACodec;
 namespace hardware {
 class HidlMemory;
 };
@@ -64,8 +63,7 @@ public:
     };
 
     ACodecBufferChannel(
-            const sp<AMessage> &inputBufferFilled, const sp<AMessage> &outputBufferDrained,
-            const sp<AMessage> &pollForRenderedBuffers);
+            const sp<AMessage> &inputBufferFilled, const sp<AMessage> &outputBufferDrained);
     virtual ~ACodecBufferChannel();
 
     // BufferChannelBase interface
@@ -140,7 +138,6 @@ private:
 
     const sp<AMessage> mInputBufferFilled;
     const sp<AMessage> mOutputBufferDrained;
-    const sp<AMessage> mPollForRenderedBuffers;
 
     sp<MemoryDealer> mDealer;
     sp<IMemory> mDecryptDestination;

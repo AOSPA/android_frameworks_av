@@ -28,8 +28,7 @@ namespace android {
 class InputSurfaceWrapper {
 public:
     InputSurfaceWrapper()
-        : mDataSpace(HAL_DATASPACE_UNKNOWN),
-          mPixelFormat(PIXEL_FORMAT_UNKNOWN) {
+        : mDataSpace(HAL_DATASPACE_UNKNOWN) {
     }
 
     virtual ~InputSurfaceWrapper() = default;
@@ -113,14 +112,8 @@ public:
      */
     virtual android_dataspace getDataspace() { return mDataSpace; }
 
-    /**
-     * Returns pixel format information from GraphicBufferSource.
-     */
-    virtual uint32_t getPixelFormat() { return mPixelFormat; }
-
 protected:
     android_dataspace mDataSpace;
-    uint32_t mPixelFormat;
 };
 
 }  // namespace android

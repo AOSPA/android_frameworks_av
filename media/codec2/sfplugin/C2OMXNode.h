@@ -99,11 +99,6 @@ struct C2OMXNode : public BnOMXNode {
     android_dataspace getDataspace();
 
     /**
-     * Returns dataspace information from GraphicBufferSource.
-     */
-    uint32_t getPixelFormat();
-
-    /**
      * Sets priority of the queue thread.
      */
     void setPriority(int priority);
@@ -117,7 +112,6 @@ private:
     uint32_t mHeight;
     uint64_t mUsage;
     Mutexed<android_dataspace> mDataspace;
-    Mutexed<uint32_t> mPixelFormat;
 
     // WORKAROUND: timestamp adjustment
 

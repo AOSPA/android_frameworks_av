@@ -64,7 +64,6 @@ class CryptoAsync;
 class MediaCodecBuffer;
 class IMemory;
 struct PersistentSurface;
-class RenderedFrameInfo;
 class SoftwareRenderer;
 class Surface;
 namespace hardware {
@@ -283,8 +282,6 @@ struct MediaCodec : public AHandler {
     // Create a MediaCodec notification message from a list of rendered or dropped render infos
     // by adding rendered frame information to a base notification message. Returns the number
     // of frames that were rendered.
-    static size_t CreateFramesRenderedMessage(
-            const std::list<RenderedFrameInfo> &done, sp<AMessage> &msg);
     static size_t CreateFramesRenderedMessage(
             const std::list<FrameRenderTracker::Info> &done, sp<AMessage> &msg);
 
@@ -577,7 +574,6 @@ private:
     sp<ALooper> mCryptoLooper;
 
     bool mIsSurfaceToDisplay;
-    bool mAreRenderMetricsEnabled;
     PlaybackDurationAccumulator mPlaybackDurationAccumulator;
     VideoRenderQualityTracker mVideoRenderQualityTracker;
 

@@ -19,7 +19,7 @@
 
 #include <set>
 #include <stdint.h>
-#include <deque>
+#include <list>
 #include <vector>
 #include <android/native_window.h>
 #include <media/hardware/MetadataBufferType.h>
@@ -27,9 +27,9 @@
 #include <media/IOMX.h>
 #include <media/stagefright/AHierarchicalStateMachine.h>
 #include <media/stagefright/CodecBase.h>
+#include <media/stagefright/FrameRenderTracker.h>
 #include <media/stagefright/MediaDefs.h>
 #include <media/stagefright/SkipCutBuffer.h>
-#include <ui/GraphicBuffer.h>
 #include <utils/NativeHandle.h>
 #include <OMX_Audio.h>
 #include <hardware/gralloc.h>
@@ -159,7 +159,6 @@ protected:
         kWhatForceStateTransition    = 'fstt',
         kWhatCheckIfStuck            = 'Cstk',
         kWhatSubmitExtraOutputMetadataBuffer = 'sbxo',
-        kWhatPollForRenderedBuffers  = 'pfrb',
     };
 
     enum {
@@ -181,13 +180,6 @@ protected:
                             | GRALLOC_USAGE_HW_COMPOSER
                             | GRALLOC_USAGE_EXTERNAL_DISP)
                             | static_cast<uint64_t>(BufferUsage::VIDEO_DECODER),
-    };
-
-    struct TrackedFrame {
-        int64_t id;
-        int64_t mediaTimeUs;
-        int64_t desiredRenderTimeNs;
-        nsecs_t renderTimeNs;
     };
 
     struct BufferInfo {
@@ -217,6 +209,7 @@ protected:
         sp<GraphicBuffer> mGraphicBuffer;
         bool mNewGraphicBuffer;
         int mFenceFd;
+        FrameRenderTracker::Info *mRenderInfo;
 
         // The following field and 4 methods are used for debugging only
         bool mIsReadFence;
@@ -263,11 +256,6 @@ protected:
     int32_t mNodeGeneration;
     sp<TAllocator> mAllocator[4];
 
-    std::deque<TrackedFrame> mTrackedFrames; // render information for buffers sent to a window
-    bool mAreRenderMetricsEnabled;
-    bool mIsWindowToDisplay;
-    bool mHasPresentFenceTimes;
-
     bool mUsingNativeWindow;
     sp<ANativeWindow> mNativeWindow;
     int mNativeWindowUsageBits;
@@ -284,6 +272,7 @@ protected:
     // format updates. This will equal to mOutputFormat until the first actual frame is received.
     sp<AMessage> mBaseOutputFormat;
 
+    FrameRenderTracker mRenderTracker; // render information for buffers rendered by ACodec
     std::vector<BufferInfo> mBuffers[4];
     bool mPortEOS[2];
     status_t mInputEOSResult;
@@ -364,10 +353,6 @@ protected:
     status_t cancelBufferToNativeWindow(BufferInfo *info);
     status_t freeOutputBuffersNotOwnedByComponent();
     BufferInfo *dequeueBufferFromNativeWindow();
-
-    void initializeFrameTracking();
-    void trackReleasedFrame(int64_t frameId, int64_t mediaTimeUs, int64_t desiredRenderTimeNs);
-    void pollForRenderedFrames();
 
     inline bool storingMetadataInDecodedBuffers() {
         return (mPortMode[kPortIndexOutput] == IOMX::kPortModeDynamicANWBuffer) && !mIsEncoder;
@@ -591,6 +576,21 @@ protected:
     void processDeferredMessages();
 
     void onFrameRendered(int64_t mediaTimeUs, nsecs_t systemNano);
+    // called when we have dequeued a buffer |buf| from the native window to track render info.
+    // |fenceFd| is the dequeue fence, and |info| points to the buffer info where this buffer is
+    // stored.
+    void updateRenderInfoForDequeuedBuffer(
+            ANativeWindowBuffer *buf, int fenceFd, BufferInfo *info);
+
+    // Checks to see if any frames have rendered up until |until|, and to notify client
+    // (MediaCodec) of rendered frames up-until the frame pointed to by |until| or the first
+    // unrendered frame. These frames are removed from the render queue.
+    // If |dropIncomplete| is true, unrendered frames up-until |until| will be dropped from the
+    // queue, allowing all rendered framed up till then to be notified of.
+    // (This will effectively clear the render queue up-until (and including) |until|.)
+    // If |until| is NULL, or is not in the rendered queue, this method will check all frames.
+    void notifyOfRenderedFrames(
+            bool dropIncomplete = false, FrameRenderTracker::Info *until = NULL);
 
     void onFirstTunnelFrameReady();
 

@@ -70,7 +70,6 @@ using hardware::hidl_string;
 using hardware::hidl_vec;
 using hardware::fromHeap;
 using hardware::HidlMemory;
-using server_configurable_flags::GetServerConfigurableFlag;
 
 using namespace hardware::cas::V1_0;
 using namespace hardware::cas::native::V1_0;
@@ -90,11 +89,6 @@ const static size_t kDequeueTimeoutNs = 0;
 // This value is to monitor if decoding is paused then we can signal a new empty work to HAL
 // after app resume to foreground to notify HAL something
 const static uint64_t kPipelinePausedTimeoutMs = 500;
-
-static bool areRenderMetricsEnabled() {
-    std::string v = GetServerConfigurableFlag("media_native", "render_metrics_enabled", "false");
-    return v == "true";
-}
 
 }  // namespace
 
@@ -162,7 +156,6 @@ CCodecBufferChannel::CCodecBufferChannel(
       mCCodecCallback(callback),
       mFrameIndex(0u),
       mFirstValidFrameIndex(0u),
-      mAreRenderMetricsEnabled(areRenderMetricsEnabled()),
       mIsSurfaceToDisplay(false),
       mHasPresentFenceTimes(false),
       mRenderingDepth(3u),
@@ -191,7 +184,8 @@ CCodecBufferChannel::CCodecBufferChannel(
         Mutexed<BlockPools>::Locked pools(mBlockPools);
         pools->outputPoolId = C2BlockPool::BASIC_LINEAR;
     }
-    std::string value = GetServerConfigurableFlag("media_native", "ccodec_rendering_depth", "3");
+    std::string value = server_configurable_flags::GetServerConfigurableFlag(
+            "media_native", "ccodec_rendering_depth", "3");
     android::base::ParseInt(value, &mRenderingDepth);
     mOutputSurface.lock()->maxDequeueBuffers = kSmoothnessFactor + mRenderingDepth;
 }
@@ -1062,7 +1056,7 @@ status_t CCodecBufferChannel::renderOutputBuffer(
 
     int64_t mediaTimeUs = 0;
     (void)buffer->meta()->findInt64("timeUs", &mediaTimeUs);
-    if (mAreRenderMetricsEnabled && mIsSurfaceToDisplay) {
+    if (mIsSurfaceToDisplay) {
         trackReleasedFrame(qbo, mediaTimeUs, timestampNs);
         processRenderedFrames(qbo.frameTimestamps);
     } else {
@@ -1102,15 +1096,6 @@ void CCodecBufferChannel::trackReleasedFrame(const IGraphicBufferProducer::Queue
     if (desiredRenderTimeNs < nowNs) {
         desiredRenderTimeNs = nowNs;
     }
-
-    // If the render time is more than a second from now, then pretend the frame is supposed to be
-    // rendered immediately, because that's what SurfaceFlinger heuristics will do. This is a tight
-    // coupling, but is really the only way to optimize away unnecessary present fence checks in
-    // processRenderedFrames.
-    if (desiredRenderTimeNs > nowNs + 1*1000*1000*1000LL) {
-        desiredRenderTimeNs = nowNs;
-    }
-
     // We've just queued a frame to the surface, so keep track of it and later check to see if it is
     // actually rendered.
     TrackedFrame frame;
@@ -2472,46 +2457,6 @@ void CCodecBufferChannel::setCrypto(const sp<ICrypto> &crypto) {
 
 void CCodecBufferChannel::setDescrambler(const sp<IDescrambler> &descrambler) {
     mDescrambler = descrambler;
-}
-
-uint32_t CCodecBufferChannel::getBuffersPixelFormat(bool isEncoder) {
-    if (isEncoder) {
-        return getInputBuffersPixelFormat();
-    } else {
-        return getOutputBuffersPixelFormat();
-    }
-}
-
-uint32_t CCodecBufferChannel::getInputBuffersPixelFormat() {
-    Mutexed<Input>::Locked input(mInput);
-    if (input->buffers == nullptr) {
-        return PIXEL_FORMAT_UNKNOWN;
-    }
-    return input->buffers->getPixelFormatIfApplicable();
-}
-
-uint32_t CCodecBufferChannel::getOutputBuffersPixelFormat() {
-    Mutexed<Output>::Locked output(mOutput);
-    if (output->buffers == nullptr) {
-        return PIXEL_FORMAT_UNKNOWN;
-    }
-    return output->buffers->getPixelFormatIfApplicable();
-}
-
-void CCodecBufferChannel::resetBuffersPixelFormat(bool isEncoder) {
-    if (isEncoder) {
-        Mutexed<Input>::Locked input(mInput);
-        if (input->buffers == nullptr) {
-            return;
-        }
-        input->buffers->resetPixelFormatIfApplicable();
-    } else {
-        Mutexed<Output>::Locked output(mOutput);
-        if (output->buffers == nullptr) {
-            return;
-        }
-        output->buffers->resetPixelFormatIfApplicable();
-    }
 }
 
 status_t toStatusT(c2_status_t c2s, c2_operation_t c2op) {
