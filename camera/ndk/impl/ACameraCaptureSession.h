@@ -23,14 +23,14 @@
 
 #ifdef __ANDROID_VNDK__
 #include "ndk_vendor/impl/ACameraDevice.h"
+#include "ndk_vendor/impl/ACameraCaptureSessionVendor.h"
 #else
 #include "ACameraDevice.h"
-#endif
 
 using namespace android;
 
 struct ACaptureSessionOutput {
-    explicit ACaptureSessionOutput(ANativeWindow* window, bool isShared = false,
+    explicit ACaptureSessionOutput(ACameraWindowType* window, bool isShared = false,
             const char* physicalCameraId = "") :
             mWindow(window), mIsShared(isShared), mPhysicalCameraId(physicalCameraId) {};
 
@@ -47,27 +47,28 @@ struct ACaptureSessionOutput {
         return mWindow > other.mWindow;
     }
 
-    inline bool isWindowEqual(ANativeWindow* window) const {
+    inline bool isWindowEqual(ACameraWindowType* window) const {
         return mWindow == window;
     }
 
     // returns true if the window was successfully added, false otherwise.
-    inline bool addSharedWindow(ANativeWindow* window) {
+    inline bool addSharedWindow(ACameraWindowType* window) {
         auto ret = mSharedWindows.insert(window);
         return ret.second;
     }
 
     // returns the number of elements removed.
-    inline size_t removeSharedWindow(ANativeWindow* window) {
+    inline size_t removeSharedWindow(ACameraWindowType* window) {
         return mSharedWindows.erase(window);
     }
 
-    ANativeWindow* mWindow;
-    std::set<ANativeWindow*> mSharedWindows;
+    ACameraWindowType* mWindow;
+    std::set<ACameraWindowType *> mSharedWindows;
     bool           mIsShared;
     int            mRotation = CAMERA3_STREAM_ROTATION_0;
     std::string mPhysicalCameraId;
 };
+#endif
 
 struct ACaptureSessionOutputContainer {
     std::set<ACaptureSessionOutput> mOutputs;
@@ -146,7 +147,7 @@ struct ACameraCaptureSession : public RefBase {
         mPreparedCb.context = context;
         mPreparedCb.onWindowPrepared = cb;
     }
-    camera_status_t prepare(ANativeWindow *window);
+    camera_status_t prepare(ACameraWindowType *window);
 
     ACameraDevice* getDevice();
 

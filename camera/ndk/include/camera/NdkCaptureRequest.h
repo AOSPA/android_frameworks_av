@@ -99,7 +99,7 @@ typedef struct ACaptureRequest ACaptureRequest;
  *
  * @see ACaptureRequest_addTarget
  */
-camera_status_t ACameraOutputTarget_create(ANativeWindow* window,
+camera_status_t ACameraOutputTarget_create(ACameraWindowType* window,
         ACameraOutputTarget** output) __INTRODUCED_IN(24);
 
 /**

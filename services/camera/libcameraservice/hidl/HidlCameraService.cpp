@@ -25,8 +25,6 @@
 
 #include <hidl/HidlTransportSupport.h>
 
-#include <utils/Utils.h>
-
 namespace android {
 namespace frameworks {
 namespace cameraservice {
@@ -58,8 +56,8 @@ sp<HidlCameraService> HidlCameraService::getInstance(android::CameraService *cs)
 }
 
 HidlCameraService::HidlCameraService(android::CameraService *cs) : mAidlICameraService(cs) {
-    mVndkVersion = getVNDKVersionFromProp(__ANDROID_API_FUTURE__);
-}
+    mVndkVersion = base::GetIntProperty("ro.vndk.version", __ANDROID_API_FUTURE__);
+};
 
 Return<void>
 HidlCameraService::getCameraCharacteristics(const hidl_string& cameraId,

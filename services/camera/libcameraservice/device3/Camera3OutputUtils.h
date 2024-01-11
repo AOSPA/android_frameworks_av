@@ -48,7 +48,6 @@ namespace camera3 {
     // function also optionally calls notify(ERROR_BUFFER).
     void returnOutputBuffers(
             bool useHalBufManager,
-            const std::set<int32_t> &halBufferManagedStreams,
             sp<NotificationListener> listener, // Only needed when outputSurfaces is not empty
             const camera_stream_buffer_t *outputBuffers,
             size_t numBuffers, nsecs_t timestamp,
@@ -66,7 +65,6 @@ namespace camera3 {
     // vector.
     void returnAndRemovePendingOutputBuffers(
             bool useHalBufManager,
-            const std::set<int32_t> &halBufferManagedStreams,
             sp<NotificationListener> listener, // Only needed when outputSurfaces is not empty
             InFlightRequest& request, SessionStatsBuilder& sessionStatsBuilder);
 
@@ -89,7 +87,6 @@ namespace camera3 {
         uint32_t& nextReprocResultFrameNum;
         uint32_t& nextZslResultFrameNum; // end of outputLock scope
         const bool useHalBufManager;
-        const std::set<int32_t > &halBufManagedStreamIds;
         const bool usePartialResult;
         const bool needFixupMonoChrome;
         const uint32_t numPartialResults;
@@ -121,7 +118,6 @@ namespace camera3 {
         const std::string& cameraId;
         std::mutex& reqBufferLock; // lock to serialize request buffer calls
         const bool useHalBufManager;
-        const std::set<int32_t > &halBufManagedStreamIds;
         StreamSet& outputStreams;
         SessionStatsBuilder& sessionStatsBuilder;
         SetErrorInterface& setErrIntf;
@@ -132,7 +128,6 @@ namespace camera3 {
     struct ReturnBufferStates {
         const std::string& cameraId;
         const bool useHalBufManager;
-        const std::set<int32_t > &halBufManagedStreamIds;
         StreamSet& outputStreams;
         SessionStatsBuilder& sessionStatsBuilder;
         BufferRecordsInterface& bufferRecordsIntf;
@@ -143,7 +138,6 @@ namespace camera3 {
         std::mutex& inflightLock;
         InFlightRequestMap& inflightMap; // end of inflightLock scope
         const bool useHalBufManager;
-        const std::set<int32_t > &halBufManagedStreamIds;
         sp<NotificationListener> listener;
         InflightRequestUpdateInterface& inflightIntf;
         BufferRecordsInterface& bufferRecordsIntf;
