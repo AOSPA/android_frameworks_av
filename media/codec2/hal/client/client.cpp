@@ -638,21 +638,22 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::query(
     if (heapParams) {
         heapParams->reserve(heapParams->size() + numIndices);
     }
-    c2_aidl::Params result;
+    c2_aidl::IConfigurable::QueryResult result;
     ndk::ScopedAStatus transStatus = mBase->query(indices, (mayBlock == C2_MAY_BLOCK), &result);
     c2_status_t status = GetC2Status(transStatus, "query");
     if (status != C2_OK) {
         return status;
     }
+    status = static_cast<c2_status_t>(result.status.status);
 
     std::vector<C2Param*> paramPointers;
-    if (!c2_aidl::utils::ParseParamsBlob(&paramPointers, result)) {
+    if (!c2_aidl::utils::ParseParamsBlob(&paramPointers, result.params)) {
         LOG(ERROR) << "query -- error while parsing params.";
         return C2_CORRUPTED;
     }
     size_t i = 0;
-    for (auto it = paramPointers.begin();
-            it != paramPointers.end(); ) {
+    size_t numUpdatedStackParams = 0;
+    for (auto it = paramPointers.begin(); it != paramPointers.end(); ) {
         C2Param* paramPointer = *it;
         if (numStackIndices > 0) {
             --numStackIndices;
@@ -679,7 +680,9 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::query(
                 status = C2_BAD_INDEX;
                 continue;
             }
-            if (!stackParams[i++]->updateFrom(*paramPointer)) {
+            if (stackParams[i++]->updateFrom(*paramPointer)) {
+                ++numUpdatedStackParams;
+            } else {
                 LOG(WARNING) << "query -- param update failed: "
                                 "index = "
                              << paramPointer->index() << ".";
@@ -699,6 +702,13 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::query(
         }
         ++it;
     }
+    size_t numQueried = numUpdatedStackParams;
+    if (heapParams) {
+        numQueried += heapParams->size();
+    }
+    if (status == C2_OK && indices.size() != numQueried) {
+        status = C2_BAD_INDEX;
+    }
     return status;
 }
 
@@ -717,6 +727,7 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::config(
     if (status != C2_OK) {
         return status;
     }
+    status = static_cast<c2_status_t>(result.status.status);
     size_t i = failures->size();
     failures->resize(i + result.failures.size());
     for (const c2_aidl::SettingResult& sf : result.failures) {
@@ -767,21 +778,23 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::querySupportedValues(
         }
     }
 
-    std::vector<c2_aidl::FieldSupportedValuesQueryResult> result;
+    c2_aidl::IConfigurable::QuerySupportedValuesResult result;
+
     ndk::ScopedAStatus transStatus = mBase->querySupportedValues(
             inFields, (mayBlock == C2_MAY_BLOCK), &result);
     c2_status_t status = GetC2Status(transStatus, "querySupportedValues");
     if (status != C2_OK) {
         return status;
     }
-    if (result.size() != fields.size()) {
+    status = static_cast<c2_status_t>(result.status.status);
+    if (result.values.size() != fields.size()) {
         LOG(ERROR) << "querySupportedValues -- "
                       "input and output lists "
                       "have different sizes.";
         return C2_CORRUPTED;
     }
     for (size_t i = 0; i < fields.size(); ++i) {
-        if (!c2_aidl::utils::FromAidl(&fields[i], inFields[i], result[i])) {
+        if (!c2_aidl::utils::FromAidl(&fields[i], inFields[i], result.values[i])) {
             LOG(ERROR) << "querySupportedValues -- "
                           "invalid returned value.";
             return C2_CORRUPTED;
