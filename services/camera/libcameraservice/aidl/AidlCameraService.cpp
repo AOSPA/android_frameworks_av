@@ -27,7 +27,6 @@
 #include <android/binder_manager.h>
 #include <binder/Status.h>
 #include <hidl/HidlTransportSupport.h>
-#include <utils/Utils.h>
 
 namespace android::frameworks::cameraservice::service::implementation {
 
@@ -80,7 +79,7 @@ bool AidlCameraService::registerService(::android::CameraService* cameraService)
 
 AidlCameraService::AidlCameraService(::android::CameraService* cameraService):
       mCameraService(cameraService) {
-    mVndkVersion = getVNDKVersionFromProp(__ANDROID_API_FUTURE__);
+    mVndkVersion = base::GetIntProperty("ro.vndk.version", __ANDROID_API_FUTURE__);
 }
 ScopedAStatus AidlCameraService::getCameraCharacteristics(const std::string& in_cameraId,
                                                           SCameraMetadata* _aidl_return) {

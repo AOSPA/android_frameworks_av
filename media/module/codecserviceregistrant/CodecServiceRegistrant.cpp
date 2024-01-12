@@ -148,11 +148,6 @@ public:
                 return C2_TRANSACTION_FAILED;
             }
         }
-        status = static_cast<c2_status_t>(configResult.status.status);
-        if (status != C2_BAD_INDEX) {
-            LOG(DEBUG) << "config -- call failed: "
-                       << status << ".";
-        }
         size_t i = failures->size();
         failures->resize(i + configResult.failures.size());
         for (const c2_aidl::SettingResult& sf : configResult.failures) {
@@ -325,8 +320,8 @@ public:
             heapParams->reserve(heapParams->size() + numIndices);
         }
         c2_status_t status = C2_OK;
-        c2_aidl::IConfigurable::QueryResult aidlResult;
-        ScopedAStatus transResult = mAidlConfigurable->query(indices, true, &aidlResult);
+        c2_aidl::Params aidlParams;
+        ScopedAStatus transResult = mAidlConfigurable->query(indices, true, &aidlParams);
         if (!transResult.isOk()) {
             if (transResult.getExceptionCode() == EX_SERVICE_SPECIFIC) {
                 status = c2_status_t(transResult.getServiceSpecificError());
@@ -337,12 +332,8 @@ public:
                 return C2_TRANSACTION_FAILED;
             }
         }
-        status = static_cast<c2_status_t>(aidlResult.status.status);
-        if (status != C2_OK) {
-            LOG(DEBUG) << "query -- call failed: " << status << ".";
-        }
         std::vector<C2Param*> paramPointers;
-        if (!c2_aidl::utils::ParseParamsBlob(&paramPointers, aidlResult.params)) {
+        if (!c2_aidl::utils::ParseParamsBlob(&paramPointers, aidlParams)) {
             LOG(ERROR) << "query -- error while parsing params.";
             return C2_CORRUPTED;
         }
@@ -497,9 +488,9 @@ public:
         }
 
         c2_status_t status = C2_OK;
-        c2_aidl::IConfigurable::QuerySupportedValuesResult queryResult;
+        std::vector<c2_aidl::FieldSupportedValuesQueryResult> queryResults;
         ScopedAStatus transResult = mAidlConfigurable->querySupportedValues(
-                aidlFields, true, &queryResult);
+                aidlFields, true, &queryResults);
         if (!transResult.isOk()) {
             if (transResult.getExceptionCode() == EX_SERVICE_SPECIFIC) {
                 status = c2_status_t(transResult.getServiceSpecificError());
@@ -511,19 +502,14 @@ public:
                 return C2_TRANSACTION_FAILED;
             }
         }
-        status = static_cast<c2_status_t>(queryResult.status.status);
-        if (status != C2_OK) {
-            LOG(DEBUG) << "querySupportedValues -- call failed: "
-                       << status << ".";
-        }
-        if (queryResult.values.size() != fields.size()) {
+        if (queryResults.size() != fields.size()) {
             LOG(ERROR) << "querySupportedValues -- "
                           "input and output lists "
                           "have different sizes.";
             return C2_CORRUPTED;
         }
         for (size_t i = 0; i < fields.size(); ++i) {
-            if (!c2_aidl::utils::FromAidl(&fields[i], aidlFields[i], queryResult.values[i])) {
+            if (!c2_aidl::utils::FromAidl(&fields[i], aidlFields[i], queryResults[i])) {
                 LOG(ERROR) << "querySupportedValues -- "
                               "invalid returned value.";
                 return C2_CORRUPTED;
