@@ -113,8 +113,7 @@ TrackBase::TrackBase(
         mChannelCount(isOut ?
                 audio_channel_count_from_out_mask(channelMask) :
                 audio_channel_count_from_in_mask(channelMask)),
-        mFrameSize(audio_has_proportional_frames(format) ?
-                mChannelCount * audio_bytes_per_sample(format) : sizeof(int8_t)),
+        mFrameSize(audio_bytes_per_frame(mChannelCount, format)),
         mFrameCount(frameCount),
         mSessionId(sessionId),
         mIsOut(isOut),
@@ -451,6 +450,10 @@ Status TrackHandle::getTimestamp(media::AudioTimestampInternal* timestamp,
     if (*_aidl_return != OK) {
         return Status::ok();
     }
+
+    // restrict position modulo INT_MAX to avoid integer sanitization abort
+    legacy.mPosition &= INT_MAX;
+
     *timestamp = legacy2aidl_AudioTimestamp_AudioTimestampInternal(legacy).value();
     return Status::ok();
 }
@@ -887,12 +890,17 @@ void Track::destroy()
         bool wasActive = false;
         const sp<IAfThreadBase> thread = mThread.promote();
         if (thread != 0) {
-            audio_utils::lock_guard _l(thread->mutex());
+            audio_utils::unique_lock ul(thread->mutex());
+            thread->waitWhileThreadBusy_l(ul);
+
             auto* const playbackThread = thread->asIAfPlaybackThread().get();
             wasActive = playbackThread->destroyTrack_l(this);
             forEachTeePatchTrack_l([](const auto& patchTrack) { patchTrack->destroy(); });
         }
         if (isExternalTrack() && !wasActive) {
+            // If the track is not active, the TrackHandle is responsible for
+            // releasing the port id, not the ThreadBase::threadLoop().
+            // At this point, there is no concurrency issue as the track is going away.
             AudioSystem::releaseOutput(mPortId);
         }
     }
@@ -1076,7 +1084,13 @@ void Track::interceptBuffer(
         // Additionally PatchProxyBufferProvider::obtainBuffer (called by PathTrack::getNextBuffer)
         // does not allow 0 frame size request contrary to getNextBuffer
     }
-    for (auto& teePatch : mTeePatches) {
+    TeePatches teePatches;
+    if (mTeePatchesRWLock.tryReadLock() == NO_ERROR) {
+        // Cache a copy of tee patches in case it is updated while using.
+        teePatches = mTeePatches;
+        mTeePatchesRWLock.unlock();
+    }
+    for (auto& teePatch : teePatches) {
         IAfPatchRecord* patchRecord = teePatch.patchRecord.get();
         const size_t framesWritten = patchRecord->writeFrames(
                 sourceBuffer.i8, frameCount, mFrameSize);
@@ -1089,7 +1103,7 @@ void Track::interceptBuffer(
     using namespace std::chrono_literals;
     // Average is ~20us per track, this should virtually never be logged (Logging takes >200us)
     ALOGD_IF(spent > 500us, "%s: took %lldus to intercept %zu tracks", __func__,
-             spent.count(), mTeePatches.size());
+             spent.count(), teePatches.size());
 }
 
 // ExtendedAudioBufferProvider interface
@@ -1178,7 +1192,9 @@ status_t Track::start(AudioSystem::sync_event_t event __unused,
                 return PERMISSION_DENIED;
             }
         }
-        audio_utils::lock_guard _lth(thread->mutex());
+        audio_utils::unique_lock ul(thread->mutex());
+        thread->waitWhileThreadBusy_l(ul);
+
         track_state state = mState;
         // here the track could be either new, or restarted
         // in both cases "unstop" the track
@@ -1303,7 +1319,9 @@ void Track::stop()
     ALOGV("%s(%d): calling pid %d", __func__, mId, IPCThreadState::self()->getCallingPid());
     const sp<IAfThreadBase> thread = mThread.promote();
     if (thread != 0) {
-        audio_utils::lock_guard _l(thread->mutex());
+        audio_utils::unique_lock ul(thread->mutex());
+        thread->waitWhileThreadBusy_l(ul);
+
         track_state state = mState;
         if (state == RESUMING || state == ACTIVE || state == PAUSING || state == PAUSED) {
             // If the track is not active (PAUSED and buffers full), flush buffers
@@ -1311,7 +1329,9 @@ void Track::stop()
             if (!playbackThread->isTrackActive(this)) {
                 reset();
                 mState = STOPPED;
-            } else if (!isFastTrack() && !isOffloaded() && !isDirect()) {
+            } else if (isPatchTrack() || (!isFastTrack() && !isOffloaded() && !isDirect())) {
+                // for a PatchTrack (whatever fast ot not), do not drain but move directly
+                // to STOPPED to avoid closing while active.
                 mState = STOPPED;
             } else {
                 // For fast tracks prepareTracks_l() will set state to STOPPING_2
@@ -1336,7 +1356,9 @@ void Track::pause()
     ALOGV("%s(%d): calling pid %d", __func__, mId, IPCThreadState::self()->getCallingPid());
     const sp<IAfThreadBase> thread = mThread.promote();
     if (thread != 0) {
-        audio_utils::lock_guard _l(thread->mutex());
+        audio_utils::unique_lock ul(thread->mutex());
+        thread->waitWhileThreadBusy_l(ul);
+
         auto* const playbackThread = thread->asIAfPlaybackThread().get();
         switch (mState) {
         case STOPPING_1:
@@ -1373,7 +1395,9 @@ void Track::flush()
     ALOGV("%s(%d)", __func__, mId);
     const sp<IAfThreadBase> thread = mThread.promote();
     if (thread != 0) {
-        audio_utils::lock_guard _l(thread->mutex());
+        audio_utils::unique_lock ul(thread->mutex());
+        thread->waitWhileThreadBusy_l(ul);
+
         auto* const playbackThread = thread->asIAfPlaybackThread().get();
 
         // Flush the ring buffer now if the track is not active in the PlaybackThread.
@@ -1611,7 +1635,10 @@ void Track::copyMetadataTo(MetadataInserter& backInserter) const
 void Track::updateTeePatches_l() {
     if (mTeePatchesToUpdate.has_value()) {
         forEachTeePatchTrack_l([](const auto& patchTrack) { patchTrack->destroy(); });
-        mTeePatches = mTeePatchesToUpdate.value();
+        {
+            RWLock::AutoWLock writeLock(mTeePatchesRWLock);
+            mTeePatches = std::move(mTeePatchesToUpdate.value());
+        }
         if (mState == TrackBase::ACTIVE || mState == TrackBase::RESUMING ||
                 mState == TrackBase::STOPPING_1) {
             forEachTeePatchTrack_l([](const auto& patchTrack) { patchTrack->start(); });

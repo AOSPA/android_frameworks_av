@@ -23,6 +23,7 @@
 #include <audio_utils/mutex.h>
 #include <audio_utils/LinearMap.h>
 #include <binder/AppOpsManager.h>
+#include <utils/RWLock.h>
 
 namespace android {
 
@@ -352,6 +353,7 @@ private:
     // Must hold thread lock to access tee patches
     template <class F>
     void                forEachTeePatchTrack_l(F f) {
+        RWLock::AutoRLock readLock(mTeePatchesRWLock);
         for (auto& tp : mTeePatches) { f(tp.patchTrack); }
     };
 
@@ -387,6 +389,7 @@ private:
     audio_output_flags_t mFlags;
     TeePatches mTeePatches;
     std::optional<TeePatches> mTeePatchesToUpdate;
+    RWLock              mTeePatchesRWLock;
     const float         mSpeed;
     const bool          mIsSpatialized;
     const bool          mIsBitPerfect;
@@ -470,7 +473,8 @@ private:
     SourceMetadatas mTrackMetadatas;
     /** Protects mTrackMetadatas against concurrent access. */
     audio_utils::mutex& trackMetadataMutex() const { return mTrackMetadataMutex; }
-    mutable audio_utils::mutex mTrackMetadataMutex;
+    mutable audio_utils::mutex mTrackMetadataMutex{
+            audio_utils::MutexOrder::kOutputTrack_TrackMetadataMutex};
 };  // end of OutputTrack
 
 // playback track, used by PatchPanel

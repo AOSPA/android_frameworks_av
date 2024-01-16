@@ -255,6 +255,10 @@ private:
     status_t getAudioPolicyConfig(media::AudioPolicyConfig* config) final
             EXCLUDES_AudioFlinger_Mutex;
 
+    // Get the attributes of the mix port when connecting to the given device port.
+    status_t getAudioMixPort(const struct audio_port_v7* devicePort,
+                             struct audio_port_v7* mixPort) const final EXCLUDES_AudioFlinger_Mutex;
+
     status_t onTransactWrapper(TransactionCode code, const Parcel& data, uint32_t flags,
             const std::function<status_t()>& delegate) final EXCLUDES_AudioFlinger_Mutex;
 
@@ -423,7 +427,8 @@ private:
     // for as long as possible.  The memory is only freed when it is needed for another log writer.
     Vector< sp<NBLog::Writer> > mUnregisteredWriters;
     audio_utils::mutex& unregisteredWritersMutex() const { return mUnregisteredWritersMutex; }
-    mutable audio_utils::mutex mUnregisteredWritersMutex;
+    mutable audio_utils::mutex mUnregisteredWritersMutex{
+            audio_utils::MutexOrder::kAudioFlinger_UnregisteredWritersMutex};
 
                             AudioFlinger() ANDROID_API;
     ~AudioFlinger() override;
@@ -495,7 +500,7 @@ private:
         bool mPendingRequests;
 
         // Mutex and condition variable around mPendingRequests' value
-        audio_utils::mutex mMutex;
+        audio_utils::mutex mMutex{audio_utils::MutexOrder::kMediaLogNotifier_Mutex};
         audio_utils::condition_variable mCondition;
 
         // Duration of the sleep period after a processed request
@@ -604,18 +609,19 @@ private:
         int         mCnt;
     };
 
-    mutable audio_utils::mutex mMutex;
+    mutable audio_utils::mutex mMutex{audio_utils::MutexOrder::kAudioFlinger_Mutex};
                 // protects mClients and mNotificationClients.
                 // must be locked after mutex() and ThreadBase::mutex() if both must be locked
                 // avoids acquiring AudioFlinger::mutex() from inside thread loop.
 
-    mutable audio_utils::mutex mClientMutex;
+    mutable audio_utils::mutex mClientMutex{audio_utils::MutexOrder::kAudioFlinger_ClientMutex};
 
     DefaultKeyedVector<pid_t, wp<Client>> mClients GUARDED_BY(clientMutex());   // see ~Client()
 
     audio_utils::mutex& hardwareMutex() const { return mHardwareMutex; }
 
-    mutable audio_utils::mutex mHardwareMutex;
+    mutable audio_utils::mutex mHardwareMutex{
+            audio_utils::MutexOrder::kAudioFlinger_HardwareMutex};
     // NOTE: If both mMutex and mHardwareMutex mutexes must be held,
     // always take mMutex before mHardwareMutex
 

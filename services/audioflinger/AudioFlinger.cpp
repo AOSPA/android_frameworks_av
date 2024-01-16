@@ -27,9 +27,11 @@
 //#define BUFLOG_NDEBUG 0
 #include <afutils/BufLog.h>
 #include <afutils/DumpTryLock.h>
+#include <afutils/NBAIO_Tee.h>
 #include <afutils/Permission.h>
 #include <afutils/PropertyUtils.h>
 #include <afutils/TypedLogger.h>
+#include <android-base/errors.h>
 #include <android-base/stringprintf.h>
 #include <android/media/IAudioPolicyService.h>
 #include <audiomanager/IAudioManager.h>
@@ -37,6 +39,7 @@
 #include <binder/IServiceManager.h>
 #include <binder/Parcel.h>
 #include <cutils/properties.h>
+#include <com_android_media_audioserver.h>
 #include <media/AidlConversion.h>
 #include <media/AudioParameter.h>
 #include <media/AudioValidator.h>
@@ -189,6 +192,7 @@ BINDER_METHOD_ENTRY(isBluetoothVariableLatencyEnabled) \
 BINDER_METHOD_ENTRY(supportsBluetoothVariableLatency) \
 BINDER_METHOD_ENTRY(getSoundDoseInterface) \
 BINDER_METHOD_ENTRY(getAudioPolicyConfig) \
+BINDER_METHOD_ENTRY(getAudioMixPort) \
 
 // singleton for Binder Method Statistics for IAudioFlinger
 static auto& getIAudioFlingerStatistics() {
@@ -206,6 +210,20 @@ static auto& getIAudioFlingerStatistics() {
 #pragma pop_macro("BINDER_METHOD_ENTRY")
 
     return methodStatistics;
+}
+
+namespace base {
+template <typename T>
+struct OkOrFail<std::optional<T>> {
+    using opt_t = std::optional<T>;
+    OkOrFail() = delete;
+    OkOrFail(const opt_t&) = delete;
+
+    static bool IsOk(const opt_t& opt) { return opt.has_value(); }
+    static T Unwrap(opt_t&& opt) { return std::move(opt.value()); }
+    static std::string ErrorMessage(const opt_t&) { return "Empty optional"; }
+    static void Fail(opt_t&&) {}
+};
 }
 
 class DevicesFactoryHalCallbackImpl : public DevicesFactoryHalCallback {
@@ -857,12 +875,15 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             dprintf(fd, "\nIEffect binder call profile:\n");
             write(fd, timeCheckStats.c_str(), timeCheckStats.size());
 
-            // Automatically fetch HIDL statistics.
-            std::shared_ptr<std::vector<std::string>> hidlClassNames =
-                    mediautils::getStatisticsClassesForModule(
-                            METHOD_STATISTICS_MODULE_NAME_AUDIO_HIDL);
-            if (hidlClassNames) {
-                for (const auto& className : *hidlClassNames) {
+            // Automatically fetch HIDL or AIDL statistics.
+            const std::string_view halType = (mDevicesFactoryHal->getHalVersion().getType() ==
+                                      AudioHalVersionInfo::Type::HIDL)
+                                             ? METHOD_STATISTICS_MODULE_NAME_AUDIO_HIDL
+                                             : METHOD_STATISTICS_MODULE_NAME_AUDIO_AIDL;
+            const std::shared_ptr<std::vector<std::string>> halClassNames =
+                    mediautils::getStatisticsClassesForModule(halType);
+            if (halClassNames) {
+                for (const auto& className : *halClassNames) {
                     auto stats = mediautils::getStatisticsForClass(className);
                     if (stats) {
                         timeCheckStats = stats->dump();
@@ -877,6 +898,13 @@ NO_THREAD_SAFETY_ANALYSIS  // conditional try lock
             write(fd, timeCheckStats.c_str(), timeCheckStats.size());
             dprintf(fd, "\n");
         }
+        // dump mutex stats
+        const auto mutexStats = audio_utils::mutex::all_stats_to_string();
+        write(fd, mutexStats.c_str(), mutexStats.size());
+
+        // dump held mutexes
+        const auto mutexThreadInfo = audio_utils::mutex::all_threads_to_string();
+        write(fd, mutexThreadInfo.c_str(), mutexThreadInfo.size());
     }
     return NO_ERROR;
 }
@@ -1888,7 +1916,7 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
         return 0;
     }
     if ((sampleRate == 0) ||
-            !audio_is_valid_format(format) || !audio_has_proportional_frames(format) ||
+            !audio_is_valid_format(format) ||
             !audio_is_input_channel(channelMask)) {
         return 0;
     }
@@ -1911,6 +1939,10 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
 
     std::vector<audio_format_t> formats = {format};
     if (format != AUDIO_FORMAT_PCM_16_BIT) {
+        // For compressed format, buffer size may be queried using PCM. Allow this for compatibility
+        // in cases the primary hw dev does not support the format.
+        // TODO: replace with a table of formats and nominal buffer sizes (based on nominal bitrate
+        // and codec frame size).
         formats.push_back(AUDIO_FORMAT_PCM_16_BIT);
     }
 
@@ -2265,7 +2297,8 @@ status_t AudioFlinger::createRecord(const media::CreateRecordRequest& _input,
     }
     adjAttributionSource = afutils::checkAttributionSourcePackage(
             adjAttributionSource);
-    if (!audio_is_valid_format(input.config.format) ) {
+    // further format checks are performed by createRecordTrack_l()
+    if (!audio_is_valid_format(input.config.format)) {
         ALOGE("createRecord() invalid format %#x", input.config.format);
         lStatus = BAD_VALUE;
         goto Exit;
@@ -3195,41 +3228,19 @@ sp<IAfThreadBase> AudioFlinger::openInput_l(audio_module_handle_t module,
         return 0;
     }
 
-    audio_config_t halconfig = *config;
-    sp<DeviceHalInterface> inHwHal = inHwDev->hwDevice();
-    sp<StreamInHalInterface> inStream;
-    status_t status = inHwHal->openInputStream(
-            *input, devices, &halconfig, flags, address, source,
-            outputDevice, outputDeviceAddress, &inStream);
-    ALOGV("openInput_l() openInputStream returned input %p, devices %#x, SamplingRate %d"
-           ", Format %#x, Channels %#x, flags %#x, status %d addr %s",
-            inStream.get(),
+    AudioStreamIn *inputStream = nullptr;
+    status_t status = inHwDev->openInputStream(
+            &inputStream,
+            *input,
             devices,
-            halconfig.sample_rate,
-            halconfig.format,
-            halconfig.channel_mask,
             flags,
-            status, address);
+            config,
+            address,
+            source,
+            outputDevice,
+            outputDeviceAddress.c_str());
 
-    // If the input could not be opened with the requested parameters and we can handle the
-    // conversion internally, try to open again with the proposed parameters.
-    if (status == BAD_VALUE &&
-        audio_is_linear_pcm(config->format) &&
-        audio_is_linear_pcm(halconfig.format) &&
-        (halconfig.sample_rate <= AUDIO_RESAMPLER_DOWN_RATIO_MAX * config->sample_rate) &&
-        (audio_channel_count_from_in_mask(halconfig.channel_mask) <= FCC_LIMIT) &&
-        (audio_channel_count_from_in_mask(config->channel_mask) <= FCC_LIMIT)) {
-        // FIXME describe the change proposed by HAL (save old values so we can log them here)
-        ALOGV("openInput_l() reopening with proposed sampling rate and channel mask");
-        inStream.clear();
-        status = inHwHal->openInputStream(
-                *input, devices, &halconfig, flags, address, source,
-                outputDevice, outputDeviceAddress, &inStream);
-        // FIXME log this new status; HAL should not propose any further changes
-    }
-
-    if (status == NO_ERROR && inStream != 0) {
-        AudioStreamIn *inputStream = new AudioStreamIn(inHwDev, inStream, flags);
+    if (status == NO_ERROR) {
         if ((flags & AUDIO_INPUT_FLAG_MMAP_NOIRQ) != 0) {
             const sp<IAfMmapCaptureThread> thread =
                     IAfMmapCaptureThread::create(this, *input, inHwDev, inputStream, mSystemReady);
@@ -3586,11 +3597,20 @@ std::vector< sp<IAfEffectModule> > AudioFlinger::purgeOrphanEffectChains_l()
 void AudioFlinger::dumpToThreadLog_l(const sp<IAfThreadBase> &thread)
 {
     constexpr int THREAD_DUMP_TIMEOUT_MS = 2;
-    audio_utils::FdToString fdToString("- ", THREAD_DUMP_TIMEOUT_MS);
-    const int fd = fdToString.borrowFdUnsafe();
-    if (fd >= 0) {
-        thread->dump(fd, {} /* args */);
-        mThreadLog.logs(-1 /* time */, fdToString.closeAndGetString());
+    constexpr auto PREFIX = "- ";
+    if (com::android::media::audioserver::fdtostring_timeout_fix()) {
+        using ::android::audio_utils::FdToString;
+
+        auto writer = OR_RETURN(FdToString::createWriter(PREFIX));
+        thread->dump(writer.borrowFdUnsafe(), {} /* args */);
+        mThreadLog.logs(-1 /* time */, FdToString::closeWriterAndGetString(std::move(writer)));
+    } else {
+        audio_utils::FdToStringOldImpl fdToString("- ", THREAD_DUMP_TIMEOUT_MS);
+        const int fd = fdToString.borrowFdUnsafe();
+        if (fd >= 0) {
+            thread->dump(fd, {} /* args */);
+            mThreadLog.logs(-1 /* time */, fdToString.closeAndGetString());
+        }
     }
 }
 
@@ -4716,6 +4736,24 @@ status_t AudioFlinger::listAudioPatches(
     return mPatchPanel->listAudioPatches_l(num_patches, patches);
 }
 
+/**
+ * Get the attributes of the mix port when connecting to the given device port.
+ */
+status_t AudioFlinger::getAudioMixPort(const struct audio_port_v7 *devicePort,
+                                       struct audio_port_v7 *mixPort) const {
+    if (status_t status = AudioValidator::validateAudioPort(*devicePort); status != NO_ERROR) {
+        ALOGE("%s, invalid device port, status=%d", __func__, status);
+        return status;
+    }
+    if (status_t status = AudioValidator::validateAudioPort(*mixPort); status != NO_ERROR) {
+        ALOGE("%s, invalid mix port, status=%d", __func__, status);
+        return status;
+    }
+
+    audio_utils::lock_guard _l(mutex());
+    return mPatchPanel->getAudioMixPort_l(devicePort, mixPort);
+}
+
 // ----------------------------------------------------------------------------
 
 status_t AudioFlinger::onTransactWrapper(TransactionCode code,
@@ -4749,6 +4787,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::GET_SUPPORTED_LATENCY_MODES:
         case TransactionCode::INVALIDATE_TRACKS:
         case TransactionCode::GET_AUDIO_POLICY_CONFIG:
+        case TransactionCode::GET_AUDIO_MIX_PORT:
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, code, IPCThreadState::self()->getCallingPid());
             // return status only for non void methods

@@ -18,6 +18,7 @@
 #define ANDROID_SERVERS_CAMERA_CAMERA2CLIENT_BASE_H
 
 #include "common/CameraDeviceBase.h"
+#include "camera/CameraMetadata.h"
 #include "camera/CaptureResult.h"
 #include "utils/CameraServiceProxyWrapper.h"
 #include "CameraServiceWatchdog.h"
@@ -98,7 +99,7 @@ public:
                                      bool deviceError,
                                      const std::vector<hardware::CameraStreamStats>& streamStats,
                                      const std::string& userTag, int videoStabilizationMode,
-                                     bool usedUltraWide);
+                                     bool usedUltraWide, bool usedZoomOverride);
 
     int                   getCameraId() const;
     const sp<CameraDeviceBase>&
@@ -135,6 +136,8 @@ public:
     status_t      injectCamera(const std::string& injectedCamId,
                                sp<CameraProviderManager> manager) override;
     status_t      stopInjection() override;
+
+    status_t      injectSessionParams(const CameraMetadata& sessionParams) override;
 
 protected:
 

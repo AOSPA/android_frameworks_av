@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 The Android Open Source Project
+ * Copyright (C) 2023 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,18 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package android.companion.virtualcamera;
 
-package android.media;
+import android.companion.virtualcamera.Format;
 
 /**
- * The spatialization mode supported by the spatializer stage effect implementation.
- * Used by methods of the ISpatializer interface.
- * {@hide}
+ * Configuration supported by virtual camera owner.
+ *
+ * @hide
  */
-@Backing(type="byte")
-enum SpatializationMode {
-    /** The spatializer supports binaural mode (over headphones type devices). */
-    SPATIALIZER_BINAURAL = 0,
-    /** The spatializer supports transaural mode (over speaker type devices). */
-    SPATIALIZER_TRANSAURAL = 1,
+parcelable SupportedStreamConfiguration {
+    int width;
+    int height;
+    Format pixelFormat = Format.UNKNOWN;
 }

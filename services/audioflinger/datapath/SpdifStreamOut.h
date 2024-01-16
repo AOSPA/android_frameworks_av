@@ -1,22 +1,21 @@
 /*
-**
-** Copyright 2015, The Android Open Source Project
-**
-** Licensed under the Apache License, Version 2.0 (the "License");
-** you may not use this file except in compliance with the License.
-** You may obtain a copy of the License at
-**
-**     http://www.apache.org/licenses/LICENSE-2.0
-**
-** Unless required by applicable law or agreed to in writing, software
-** distributed under the License is distributed on an "AS IS" BASIS,
-** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-** See the License for the specific language governing permissions and
-** limitations under the License.
-*/
+ *
+ * Copyright 2015, The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-#ifndef ANDROID_SPDIF_STREAM_OUT_H
-#define ANDROID_SPDIF_STREAM_OUT_H
+#pragma once
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -25,6 +24,7 @@
 
 #include "AudioStreamOut.h"
 
+#include <afutils/NBAIO_Tee.h>
 #include <audio_utils/spdif/SPDIFEncoder.h>
 
 namespace android {
@@ -38,8 +38,6 @@ public:
 
     SpdifStreamOut(AudioHwDevice *dev, audio_output_flags_t flags,
             audio_format_t format);
-
-    ~SpdifStreamOut() override = default;
 
     status_t open(
             audio_io_handle_t handle,
@@ -68,22 +66,29 @@ public:
     [[nodiscard]] size_t getFrameSize() const override { return sizeof(int8_t); }
 
     /**
+     * @return audio_config_base_t from the perspective of the application and the AudioFlinger.
+     */
+    [[nodiscard]] audio_config_base_t getAudioProperties() const override {
+        return mApplicationConfig;
+    }
+
+    /**
      * @return format from the perspective of the application and the AudioFlinger.
      */
-    [[nodiscard]] virtual audio_format_t getFormat() const { return mApplicationFormat; }
+    [[nodiscard]] virtual audio_format_t getFormat() const { return mApplicationConfig.format; }
 
     /**
      * The HAL may be running at a higher sample rate if, for example, playing wrapped EAC3.
      * @return sample rate from the perspective of the application and the AudioFlinger.
      */
-    [[nodiscard]] virtual uint32_t getSampleRate() const { return mApplicationSampleRate; }
+    [[nodiscard]] virtual uint32_t getSampleRate() const { return mApplicationConfig.sample_rate; }
 
     /**
      * The HAL is in stereo mode when playing multi-channel compressed audio over HDMI.
      * @return channel mask from the perspective of the application and the AudioFlinger.
      */
     [[nodiscard]] virtual audio_channel_mask_t getChannelMask() const {
-        return mApplicationChannelMask;
+        return mApplicationConfig.channel_mask;
     }
 
     status_t flush() override;
@@ -108,16 +113,15 @@ private:
         SpdifStreamOut * const mSpdifStreamOut;
     };
 
-    MySPDIFEncoder       mSpdifEncoder;
-    audio_format_t       mApplicationFormat = AUDIO_FORMAT_DEFAULT;
-    uint32_t             mApplicationSampleRate = 0;
-    audio_channel_mask_t mApplicationChannelMask = AUDIO_CHANNEL_NONE;
+    MySPDIFEncoder mSpdifEncoder;
+    audio_config_base_t mApplicationConfig = AUDIO_CONFIG_BASE_INITIALIZER;
 
-    ssize_t  writeDataBurst(const void* data, size_t bytes);
-    ssize_t  writeInternal(const void* buffer, size_t bytes);
+    ssize_t writeDataBurst(const void* data, size_t bytes);
+
+#ifdef TEE_SINK
+    NBAIO_Tee mTee;
+#endif
 
 };
 
 } // namespace android
-
-#endif // ANDROID_SPDIF_STREAM_OUT_H

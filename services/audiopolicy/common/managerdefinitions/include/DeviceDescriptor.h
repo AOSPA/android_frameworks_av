@@ -89,7 +89,11 @@ public:
     void importAudioPortAndPickAudioProfile(const sp<PolicyAudioPort>& policyPort,
                                             bool force = false);
 
+    status_t readFromParcelable(const media::AudioPortFw& parcelable) override;
+
     void setEncapsulationInfoFromHal(AudioPolicyClientInterface *clientInterface);
+
+    void setPreferredConfig(const audio_config_base_t * preferredConfig);
 
     void dump(String8 *dst, int spaces, bool verbose = true) const;
 
@@ -104,7 +108,8 @@ private:
     std::string mTagName; // Unique human readable identifier for a device port found in conf file.
     audio_format_t      mCurrentEncodedFormat;
     bool                mIsDynamic = false;
-    const std::string   mDeclaredAddress; // Original device address
+    std::string         mDeclaredAddress; // Original device address
+    std::optional<audio_config_base_t> mPreferredConfig;
 };
 
 class DeviceVector : public SortedVector<sp<DeviceDescriptor> >

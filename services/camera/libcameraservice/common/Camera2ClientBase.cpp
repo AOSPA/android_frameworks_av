@@ -370,7 +370,8 @@ template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         int64_t requestCount, int64_t resultErrorCount, bool deviceError,
         const std::vector<hardware::CameraStreamStats>& streamStats,
-        const std::string& userTag, int videoStabilizationMode, bool usedUltraWide) {
+        const std::string& userTag, int videoStabilizationMode, bool usedUltraWide,
+        bool usedZoomOverride) {
     if (mDeviceActive) {
         status_t res = TClientBase::finishCameraStreamingOps();
         if (res != OK) {
@@ -379,7 +380,7 @@ void Camera2ClientBase<TClientBase>::notifyIdleWithUserTag(
         }
         mCameraServiceProxyWrapper->logIdle(TClientBase::mCameraIdStr,
                 requestCount, resultErrorCount, deviceError, userTag, videoStabilizationMode,
-                usedUltraWide, streamStats);
+                usedUltraWide, usedZoomOverride, streamStats);
     }
     mDeviceActive = false;
 
@@ -498,6 +499,12 @@ status_t Camera2ClientBase<TClientBase>::injectCamera(const std::string& injecte
 template <typename TClientBase>
 status_t Camera2ClientBase<TClientBase>::stopInjection() {
     return mDevice->stopInjection();
+}
+
+template <typename TClientBase>
+status_t Camera2ClientBase<TClientBase>::injectSessionParams(
+    const CameraMetadata& sessionParams) {
+    return mDevice->injectSessionParams(sessionParams);
 }
 
 template class Camera2ClientBase<CameraService::Client>;
