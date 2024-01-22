@@ -126,6 +126,9 @@ class Hal2AidlMapper {
     status_t createOrUpdatePortConfig(
             const ::aidl::android::media::audio::common::AudioPortConfig& requestedPortConfig,
             ::aidl::android::media::audio::common::AudioPortConfig* result, bool *created);
+    status_t createOrUpdatePortConfigRetry(
+            const ::aidl::android::media::audio::common::AudioPortConfig& requestedPortConfig,
+            ::aidl::android::media::audio::common::AudioPortConfig* result, bool *created);
     void eraseConnectedPort(int32_t portId);
     status_t findOrCreatePatch(
         const std::set<int32_t>& sourcePortConfigIds,
@@ -185,6 +188,7 @@ class Hal2AidlMapper {
     status_t updateAudioPort(
             int32_t portId, ::aidl::android::media::audio::common::AudioPort* port);
     status_t updateRoutes();
+    void updateDynamicMixPorts();
 
     Ports mPorts;
     // Remote submix "template" ports (no address specified, no profiles).
@@ -202,6 +206,7 @@ class Hal2AidlMapper {
     ConnectedPorts mConnectedPorts;
     std::pair<int32_t, ::aidl::android::media::audio::common::AudioPort>
             mDisconnectedPortReplacement;
+    std::set<int32_t> mDynamicMixPortIds;
 };
 
 }  // namespace android
