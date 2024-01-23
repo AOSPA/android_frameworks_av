@@ -311,6 +311,10 @@ cc_library_shared {
         ":audio_effectproxy_src_files",
         ":core_audio_hal_aidl_src_files",
     ],
+    /* QTI HAVE dependency */
+    shared_libs: [
+        "libaudiohalvendorextn",
+    ],
 }
 
 filegroup {

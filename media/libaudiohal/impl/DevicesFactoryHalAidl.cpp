@@ -22,10 +22,12 @@
 #define LOG_TAG "DevicesFactoryHalAidl"
 //#define LOG_NDEBUG 0
 
+
 #include <aidl/android/hardware/audio/core/IModule.h>
 #include <android/binder_manager.h>
 #include <media/AidlConversionNdkCpp.h>
 #include <media/AidlConversionUtil.h>
+#include <qti-audio-core/HalAdapterVendorExtension.h>
 #include <utils/Log.h>
 
 #include "DeviceHalAidl.h"
@@ -165,8 +167,10 @@ std::shared_ptr<IHalAdapterVendorExtension> DevicesFactoryHalAidl::getVendorExte
             mVendorExt = std::shared_ptr<IHalAdapterVendorExtension>(
                     IHalAdapterVendorExtension::fromBinder(ndk::SpAIBinder(
                                     AServiceManager_waitForService(serviceName.c_str()))));
+            ALOGD("%s: fetched from service manager: %s", __func__, serviceName.c_str());
         } else {
-            mVendorExt = nullptr;
+            mVendorExt = ndk::SharedRefBase::make<::qti::audio::core::HalAdapterVendorExtension>();
+            ALOGD("%s: created local instance: %s", __func__, serviceName.c_str());
         }
     }
     return mVendorExt.value();
