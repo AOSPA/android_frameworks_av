@@ -138,7 +138,7 @@ cc_library_static {
             cflags: [
                 "-DDISABLE_AUDIO_SYSTEM_OFFLOAD",
             ],
-        }
+        },
     },
 }
 
@@ -274,7 +274,7 @@ cc_library {
         "VideoFrameSchedulerBase.cpp",
         "VideoFrameScheduler.cpp",
         "VideoRenderQualityTracker.cpp",
-      ],
+    ],
 
     shared_libs: [
         "libstagefright_framecapture_utils",
@@ -338,7 +338,7 @@ cc_library {
         "libavextensions",
     ],
 
-    header_libs:[
+    header_libs: [
         "libmediadrm_headers",
         "libnativeloader-headers",
         "libstagefright_xmlparser_headers",
