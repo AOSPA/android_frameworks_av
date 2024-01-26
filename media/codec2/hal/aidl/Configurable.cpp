@@ -19,7 +19,6 @@
 #include <android-base/logging.h>
 
 #include <android/binder_auto_utils.h>
-#include <android-base/hex.h>
 #include <codec2/aidl/Configurable.h>
 #include <codec2/aidl/ParamTypes.h>
 
@@ -136,6 +135,8 @@ ScopedAStatus CachedConfigurable::querySupportedParams(
                 LOG(WARNING) << "querySupportedParams -- invalid output params.";
                 break;
             }
+        } else {
+            res = Status::BAD_INDEX;
         }
     }
     paramDesc->resize(dstIx);
