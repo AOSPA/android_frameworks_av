@@ -25,8 +25,5 @@
         }
       ]
     }
-  ],
-  "postsubmit": [
-    { "name": "c2aidl_gtracker_test"}
   ]
 }

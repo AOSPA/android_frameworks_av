@@ -368,8 +368,7 @@ C2Fence _C2FenceFactory::CreateSyncFence(int fenceFd) {
             p.reset();
         }
     } else {
-        ALOGV("Create sync fence from invalid fd");
-        return C2Fence();
+        ALOGE("Create sync fence from invalid fd");
     }
     return C2Fence(p);
 }
@@ -565,9 +564,7 @@ C2Fence _C2FenceFactory::CreateFromNativeHandle(const native_handle_t* handle) {
             p = SyncFenceImpl::CreateFromNativeHandle(handle);
             break;
         default:
-            ALOGV("Unsupported fence type %d", type);
-            // If this is malformed-handle close the handle here.
-            (void) native_handle_close(handle);
+            ALOGD("Unsupported fence type %d", type);
             // return a null-fence in this case
             break;
     }
