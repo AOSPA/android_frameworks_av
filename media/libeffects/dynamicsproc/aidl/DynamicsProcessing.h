@@ -39,25 +39,22 @@ class DynamicsProcessingImpl final : public EffectImpl {
     ndk::ScopedAStatus open(const Parameter::Common& common,
                             const std::optional<Parameter::Specific>& specific,
                             OpenEffectReturn* ret) override;
-    ndk::ScopedAStatus commandImpl(CommandId command) REQUIRES(mImplMutex) override;
+    ndk::ScopedAStatus commandImpl(CommandId command) override;
     ndk::ScopedAStatus getDescriptor(Descriptor* _aidl_return) override;
-    ndk::ScopedAStatus setParameterSpecific(const Parameter::Specific& specific)
-            REQUIRES(mImplMutex) override;
-    ndk::ScopedAStatus getParameterSpecific(const Parameter::Id& id, Parameter::Specific* specific)
-            REQUIRES(mImplMutex) override;
-    IEffect::Status effectProcessImpl(float* in, float* out, int process)
-            REQUIRES(mImplMutex) override;
-    std::shared_ptr<EffectContext> createContext(const Parameter::Common& common)
-            REQUIRES(mImplMutex) override;
-    RetCode releaseContext() REQUIRES(mImplMutex) override;
+    ndk::ScopedAStatus setParameterSpecific(const Parameter::Specific& specific) override;
+    ndk::ScopedAStatus getParameterSpecific(const Parameter::Id& id,
+                                            Parameter::Specific* specific) override;
+    IEffect::Status effectProcessImpl(float* in, float* out, int process) override;
+    std::shared_ptr<EffectContext> createContext(const Parameter::Common& common) override;
+    RetCode releaseContext() override;
 
+    std::shared_ptr<EffectContext> getContext() override { return mContext; }
     std::string getEffectName() override { return kEffectName; }
 
   private:
-    std::shared_ptr<DynamicsProcessingContext> mContext GUARDED_BY(mImplMutex);
+    std::shared_ptr<DynamicsProcessingContext> mContext;
     ndk::ScopedAStatus getParameterDynamicsProcessing(const DynamicsProcessing::Tag& tag,
-                                                      Parameter::Specific* specific)
-            REQUIRES(mImplMutex);
+                                                      Parameter::Specific* specific);
     bool isParamInRange(const Parameter::Specific& specific);
 };
 

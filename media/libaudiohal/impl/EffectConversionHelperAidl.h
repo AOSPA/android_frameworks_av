@@ -47,7 +47,6 @@ class EffectConversionHelperAidl {
     bool isBypassingOrTunnel() const;
 
     ::aidl::android::hardware::audio::effect::Descriptor getDescriptor() const;
-    status_t reopen();
 
   protected:
     const int32_t mSessionId;
@@ -108,8 +107,6 @@ class EffectConversionHelperAidl {
     };
     std::shared_ptr<android::hardware::EventFlag> mEfGroup = nullptr;
     status_t updateEventFlags();
-
-    void updateMqs(const ::aidl::android::hardware::audio::effect::IEffect::OpenEffectReturn& ret);
 
     status_t handleInit(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                         void* pReplyData);

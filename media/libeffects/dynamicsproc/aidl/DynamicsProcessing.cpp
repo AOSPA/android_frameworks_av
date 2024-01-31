@@ -211,12 +211,11 @@ ndk::ScopedAStatus DynamicsProcessingImpl::open(const Parameter::Common& common,
     RETURN_IF(common.input.base.format.pcm != common.output.base.format.pcm ||
                       common.input.base.format.pcm != PcmType::FLOAT_32_BIT,
               EX_ILLEGAL_ARGUMENT, "dataMustBe32BitsFloat");
-    std::lock_guard lg(mImplMutex);
     RETURN_OK_IF(mState != State::INIT);
-    mImplContext = createContext(common);
-    RETURN_IF(!mContext || !mImplContext, EX_NULL_POINTER, "createContextFailed");
-    mEventFlag = mImplContext->getStatusEventFlag();
+    auto context = createContext(common);
+    RETURN_IF(!context, EX_NULL_POINTER, "createContextFailed");
 
+    RETURN_IF_ASTATUS_NOT_OK(setParameterCommon(common), "setCommParamErr");
     if (specific.has_value()) {
         RETURN_IF_ASTATUS_NOT_OK(setParameterSpecific(specific.value()), "setSpecParamErr");
     } else {
@@ -228,8 +227,8 @@ ndk::ScopedAStatus DynamicsProcessingImpl::open(const Parameter::Common& common,
     }
 
     mState = State::IDLE;
-    mContext->dupeFmq(ret);
-    RETURN_IF(createThread(getEffectName()) != RetCode::SUCCESS, EX_UNSUPPORTED_OPERATION,
+    context->dupeFmq(ret);
+    RETURN_IF(createThread(context, getEffectName()) != RetCode::SUCCESS, EX_UNSUPPORTED_OPERATION,
               "FailedToCreateWorker");
     return ndk::ScopedAStatus::ok();
 }

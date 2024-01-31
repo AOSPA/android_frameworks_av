@@ -425,6 +425,10 @@ std::shared_ptr<EffectContext> EffectBundleAidl::createContext(const Parameter::
     return mContext;
 }
 
+std::shared_ptr<EffectContext> EffectBundleAidl::getContext() {
+    return mContext;
+}
+
 RetCode EffectBundleAidl::releaseContext() {
     if (mContext) {
         GlobalSession::getGlobalSession().releaseSession(mType, mContext->getSessionId());
