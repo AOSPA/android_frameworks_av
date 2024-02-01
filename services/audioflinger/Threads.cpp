@@ -2713,7 +2713,6 @@ void AudioFlinger::PlaybackThread::setVolumeForOutput_l(float left, float right)
 status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
 {
     status_t status = ALREADY_EXISTS;
-    int intensity;
 
     if (mActiveTracks.indexOf(track) < 0) {
         // the track is newly added, make sure it fills up all its
@@ -2765,12 +2764,8 @@ status_t AudioFlinger::PlaybackThread::addTrack_l(const sp<Track>& track)
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.
             mLock.unlock();
-            if (property_get_bool("vendor.audio.gaming.enabled", false /* default_value */)) {
-                intensity = static_cast<int>(os::HapticScale::NONE);
-            } else {
-                intensity = AudioFlinger::onExternalVibrationStart(
-                        track->getExternalVibration());
-            }
+            const int intensity = AudioFlinger::onExternalVibrationStart(
+                    track->getExternalVibration());
             std::optional<media::AudioVibratorInfo> vibratorInfo;
             {
                 // TODO(b/184194780): Use the vibrator information from the vibrator that will be
@@ -7349,10 +7344,6 @@ void AudioFlinger::DuplicatingThread::addOutputTrack(MixerThread *thread)
     attributionSource.pid = VALUE_OR_FATAL(legacy2aidl_pid_t_int32_t(
       IPCThreadState::self()->getCallingPid()));
     attributionSource.token = sp<BBinder>::make();
-
-    if (property_get_bool("vendor.audio.gaming.enabled", false /* default_value */))
-        mChannelMask = (audio_channel_mask_t)(mChannelMask | mHapticChannelMask);
-
     sp<OutputTrack> outputTrack = new OutputTrack(thread,
                                             this,
                                             mSampleRate,
