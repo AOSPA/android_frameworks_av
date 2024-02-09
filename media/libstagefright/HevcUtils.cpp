@@ -78,6 +78,7 @@ status_t HevcParameterSets::addNalUnit(const uint8_t* data, size_t size) {
             }
             err = parsePps(data + 2, size - 2);
             break;
+        case 35:  // AUD
         case 39:  // Prefix SEI
         case 40:  // Suffix SEI
             // Ignore

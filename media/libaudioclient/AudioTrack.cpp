@@ -1782,10 +1782,14 @@ status_t AudioTrack::setOutputDevice(audio_port_handle_t deviceId) {
             __func__, mPortId, deviceId, mSelectedDeviceId, mRoutedDeviceId);
     if (mSelectedDeviceId != deviceId) {
         mSelectedDeviceId = deviceId;
-        if (mStatus == NO_ERROR && mSelectedDeviceId != mRoutedDeviceId) {
+        if (mStatus == NO_ERROR) {
+            // allow track invalidation when track is not playing to propagate
+            // the updated mSelectedDeviceId
             if (isPlaying_l()) {
-                android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
-                mProxy->interrupt();
+                if (mSelectedDeviceId != mRoutedDeviceId) {
+                    android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
+                    mProxy->interrupt();
+                }
             } else {
                 // if the track is idle, try to restore now and
                 // defer to next start if not possible
@@ -2949,7 +2953,9 @@ status_t AudioTrack::restoreTrack_l(const char *from)
     if (isOffloadedOrDirect_l() || mDoNotReconnect ||
         (mOrigFlags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) {
         // FIXME re-creation of offloaded and direct tracks is not yet implemented;
-        // reconsider enabling for linear PCM encodings when position can be preserved.
+        // Disabled since (1) timestamp correction is not implemented for non-PCM and
+        // (2) We pre-empt existing direct tracks on resource constraint, so these tracks
+        // shouldn't reconnect.
 
         // Tear down sink only for non-internal invalidation.
         // Since new track could again have invalidation on setPlayback rate causing

@@ -286,9 +286,6 @@ AudioFlinger::AudioFlinger()
     BatteryNotifier::getInstance().noteResetAudio();
 
     mMediaLogNotifier->run("MediaLogNotifier");
-    std::vector<pid_t> halPids;
-    mDevicesFactoryHal->getHalPids(&halPids);
-    mediautils::TimeCheck::setAudioHalPids(halPids);
 
     // Notify that we have started (also called when audioserver service restarts)
     mediametrics::LogItem(mMetricsId)
@@ -4150,7 +4147,7 @@ status_t AudioFlinger::createEffect(const media::CreateEffectRequest& request,
         }
 
         // Only audio policy service can create a spatializer effect
-        if ((memcmp(&descOut.type, FX_IID_SPATIALIZER, sizeof(effect_uuid_t)) == 0) &&
+        if (IAfEffectModule::isSpatializer(&descOut.type) &&
             (callingUid != AID_AUDIOSERVER || currentPid != getpid())) {
             ALOGW("%s: attempt to create a spatializer effect from uid/pid %d/%d",
                     __func__, callingUid, currentPid);

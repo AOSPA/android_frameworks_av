@@ -796,6 +796,7 @@ inline constexpr char KEY_HDR_STATIC_INFO[] = "hdr-static-info";
 inline constexpr char KEY_HDR10_PLUS_INFO[] = "hdr10-plus-info";
 inline constexpr char KEY_HEIGHT[] = "height";
 inline constexpr char KEY_I_FRAME_INTERVAL[] = "i-frame-interval";
+inline constexpr char KEY_IMPORTANCE[] = "importance";
 inline constexpr char KEY_INTRA_REFRESH_PERIOD[] = "intra-refresh-period";
 inline constexpr char KEY_IS_ADTS[] = "is-adts";
 inline constexpr char KEY_IS_AUTOSELECT[] = "is-autoselect";
@@ -811,6 +812,9 @@ inline constexpr char KEY_MAX_BIT_RATE[] = "max-bitrate";
 inline constexpr char KEY_MAX_FPS_TO_ENCODER[] = "max-fps-to-encoder";
 inline constexpr char KEY_MAX_HEIGHT[] = "max-height";
 inline constexpr char KEY_MAX_INPUT_SIZE[] = "max-input-size";
+inline constexpr char KEY_BUFFER_BATCH_MAX_OUTPUT_SIZE[] = "buffer-batch-max-output-size";
+inline constexpr char KEY_BUFFER_BATCH_THRESHOLD_OUTPUT_SIZE[] =
+        "buffer-batch-threshold-output-size";
 inline constexpr char KEY_MAX_OUTPUT_CHANNEL_COUNT[] = "max-output-channel-count";
 inline constexpr char KEY_MAX_PTS_GAP_TO_ENCODER[] = "max-pts-gap-to-encoder";
 inline constexpr char KEY_MAX_WIDTH[] = "max-width";
