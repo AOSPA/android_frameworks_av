@@ -73,6 +73,15 @@ class MetadataBuilder {
   MetadataBuilder& setLensFacing(
       camera_metadata_enum_android_lens_facing lensFacing);
 
+  // See ANDROID_SENSOR_READOUT_TIMESTAMP in CameraMetadataTag.aidl.
+  MetadataBuilder& setSensorReadoutTimestamp(
+      camera_metadata_enum_android_sensor_readout_timestamp_t
+          sensorReadoutTimestamp);
+
+  // See ANDROID_LENS_FOCAL_LENGTH and ANDROID_LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+  // in CameraMetadataTag.aidl.
+  MetadataBuilder& setFocalLength(float focalLength);
+
   // See ANDROID_SENSOR_ORIENTATION in CameraMetadataTag.aidl.
   MetadataBuilder& setSensorOrientation(int32_t sensorOrientation);
 
@@ -84,6 +93,12 @@ class MetadataBuilder {
 
   // See ANDROID_SENSOR_INFO_ACTIVE_ARRAY_SIZE in CameraMetadataTag.aidl.
   MetadataBuilder& setSensorActiveArraySize(int x0, int y0, int x1, int y1);
+
+  // See ANDROID_SENSOR_INFO_PIXEL_ARRAY_SIZE in CameraMetadataTag.aidl.
+  MetadataBuilder& setSensorPixelArraySize(int width, int height);
+
+  // See ANDROID_SENSOR_INFO_PHYSICAL_SIZE in CameraMetadataTag.aidl.
+  MetadataBuilder& setSensorPhysicalSize(float width, float height);
 
   // See ANDROID_STATISTICS_FACE_DETECT_MODE in CameraMetadataTag.aidl.
   MetadataBuilder& setAvailableFaceDetectModes(
@@ -103,6 +118,16 @@ class MetadataBuilder {
   MetadataBuilder& setControlAvailableModes(
       const std::vector<camera_metadata_enum_android_control_mode_t>&
           availableModes);
+
+  // See ANDROID_CONTROL_AVAILABLE_SCENE_MODES in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAvailableSceneModes(
+      const std::vector<camera_metadata_enum_android_control_scene_mode>&
+          availableSceneModes);
+
+  // See ANDROID_CONTROL_AVAILABLE_EFFECTS in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAvailableEffects(
+      const std::vector<camera_metadata_enum_android_control_effect_mode>&
+          availableEffects);
 
   // See ANDROID_CONTROL_AE_COMPENSATION_RANGE in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAeCompensationRange(int32_t min, int32_t max);
@@ -131,6 +156,16 @@ class MetadataBuilder {
                                         int32_t maxAwbRegions,
                                         int32_t maxAfRegions);
 
+  // See ANDROID_CONTROL_AWB_AVAILABLE_MODES in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAvailableAwbModes(
+      const std::vector<camera_metadata_enum_android_control_awb_mode>& awbModes);
+
+  // See CONTROL_AWB_LOCK_AVAILABLE in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAwbLockAvailable(bool awbLockAvailable);
+
+  // See CONTROL_AE_LOCK_AVAILABLE in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAeLockAvailable(bool aeLockAvailable);
+
   // See ANDROID_CONTROL_AE_REGIONS in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAeRegions(
       const std::vector<ControlRegion>& aeRegions);
@@ -148,11 +183,29 @@ class MetadataBuilder {
   // See ANDROID_JPEG_SIZE in CameraMetadataTag.aidl.
   MetadataBuilder& setMaxJpegSize(int32_t size);
 
+  // The maximum numbers of different types of output streams
+  // that can be configured and used simultaneously by a camera device.
+  //
+  // See ANDROID_REQUEST_MAX_NUM_OUTPUT_STREAMS in CameraMetadataTag.aidl.
+  MetadataBuilder& setMaxNumberOutputStreams(int32_t maxRawStreams,
+                                             int32_t maxProcessedStreams,
+                                             int32_t maxStallStreams);
+
+  // See ANDROID_SYNC_MAX_LATENCY in CameraMetadataTag.aidl.
+  MetadataBuilder& setSyncMaxLatency(
+      camera_metadata_enum_android_sync_max_latency setSyncMaxLatency);
+
   // See ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM in CameraMetadataTag.aidl.
   MetadataBuilder& setAvailableMaxDigitalZoom(const float maxZoom);
 
   // See ANDROID_CONTROL_ZOOM_RATIO_RANGE in CameraMetadataTag.aidl.
   MetadataBuilder& setControlZoomRatioRange(float min, float max);
+
+  // See ANDROID_REQUEST_AVAILABLE_CAPABILITIES in CameraMetadataTag.aidl.
+  MetadataBuilder& setAvailableRequestCapabilities(
+      const std::vector<
+          camera_metadata_enum_android_request_available_capabilities_t>&
+          requestCapabilities);
 
   // A list of all keys that the camera device has available to use with
   // CaptureRequest.

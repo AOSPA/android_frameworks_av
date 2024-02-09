@@ -725,8 +725,9 @@ NO_THREAD_SAFETY_ANALYSIS  // condition variable
     {
         audio_utils::unique_lock _l(event->mutex());
         while (event->mWaitStatus) {
-            if (event->mCondition.wait_for(_l, std::chrono::nanoseconds(kConfigEventTimeoutNs))
-                        == std::cv_status::timeout) {
+            if (event->mCondition.wait_for(
+                    _l, std::chrono::nanoseconds(kConfigEventTimeoutNs), getTid())
+                            == std::cv_status::timeout) {
                 event->mStatus = TIMED_OUT;
                 event->mWaitStatus = false;
             }
@@ -4189,6 +4190,30 @@ NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
 
             metadataUpdate = updateMetadata_l();
 
+            // Acquire a local copy of active tracks with lock (release w/o lock).
+            //
+            // Control methods on the track acquire the ThreadBase lock (e.g. start()
+            // stop(), pause(), etc.), but the threadLoop is entitled to call audio
+            // data / buffer methods on tracks from activeTracks without the ThreadBase lock.
+            activeTracks.insert(activeTracks.end(), mActiveTracks.begin(), mActiveTracks.end());
+
+            setHalLatencyMode_l();
+
+            // updateTeePatches_l will acquire the ThreadBase_Mutex of other threads,
+            // so this is done before we lock our effect chains.
+            for (const auto& track : mActiveTracks) {
+                track->updateTeePatches_l();
+            }
+
+            // signal actual start of output stream when the render position reported by
+            // the kernel starts moving.
+            if (!mHalStarted && ((isSuspended() && (mBytesWritten != 0)) || (!mStandby
+                    && (mKernelPositionOnStandby
+                            != mTimestamp.mPosition[ExtendedTimestamp::LOCATION_KERNEL])))) {
+                mHalStarted = true;
+                mWaitHalStartCV.notify_all();
+            }
+
             // prevent any changes in effect chain list and in each effect chain
             // during mixing and effect process as the audio buffers could be deleted
             // or modified if an effect is created or deleted
@@ -4215,28 +4240,6 @@ NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
                                 mType == SPATIALIZER && track->isSpatialized();
                     }
                 }
-            }
-
-            // Acquire a local copy of active tracks with lock (release w/o lock).
-            //
-            // Control methods on the track acquire the ThreadBase lock (e.g. start()
-            // stop(), pause(), etc.), but the threadLoop is entitled to call audio
-            // data / buffer methods on tracks from activeTracks without the ThreadBase lock.
-            activeTracks.insert(activeTracks.end(), mActiveTracks.begin(), mActiveTracks.end());
-
-            setHalLatencyMode_l();
-
-            for (const auto &track : mActiveTracks ) {
-                track->updateTeePatches_l();
-            }
-
-            // signal actual start of output stream when the render position reported by the kernel
-            // starts moving.
-            if (!mHalStarted && ((isSuspended() && (mBytesWritten != 0)) || (!mStandby
-                    && (mKernelPositionOnStandby
-                            != mTimestamp.mPosition[ExtendedTimestamp::LOCATION_KERNEL])))) {
-                mHalStarted = true;
-                mWaitHalStartCV.notify_all();
             }
         } // mutex() scope ends
 
@@ -7993,15 +7996,11 @@ void SpatializerThread::setHalLatencyMode_l() {
         //   (mRequestedLatencyMode = AUDIO_LATENCY_MODE_LOW)
         //      AND
         // - At least one active track is spatialized
-        bool hasSpatializedActiveTrack = false;
         for (const auto& track : mActiveTracks) {
             if (track->isSpatialized()) {
-                hasSpatializedActiveTrack = true;
+                latencyMode = mRequestedLatencyMode;
                 break;
             }
-        }
-        if (hasSpatializedActiveTrack && mRequestedLatencyMode == AUDIO_LATENCY_MODE_LOW) {
-            latencyMode = AUDIO_LATENCY_MODE_LOW;
         }
     }
 
@@ -8016,7 +8015,7 @@ void SpatializerThread::setHalLatencyMode_l() {
 }
 
 status_t SpatializerThread::setRequestedLatencyMode(audio_latency_mode_t mode) {
-    if (mode != AUDIO_LATENCY_MODE_LOW && mode != AUDIO_LATENCY_MODE_FREE) {
+    if (mode < 0 || mode >= AUDIO_LATENCY_MODE_CNT) {
         return BAD_VALUE;
     }
     audio_utils::lock_guard _l(mutex());

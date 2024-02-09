@@ -23,6 +23,9 @@ aidl_interface {
         cpp: {
             enabled: false,
         },
+        rust: {
+            enabled: false,
+        },
         ndk: {
             enabled: true,
             additional_shared_libraries: [
@@ -33,6 +36,6 @@ aidl_interface {
         java: {
             enabled: true,
             platform_apis: true,
-        }
+        },
     },
 }
