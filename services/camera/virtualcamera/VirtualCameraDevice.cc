@@ -23,8 +23,10 @@
 #include <chrono>
 #include <cstdint>
 #include <iterator>
+#include <numeric>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "VirtualCameraSession.h"
 #include "aidl/android/companion/virtualcamera/SupportedStreamConfiguration.h"
@@ -76,25 +78,20 @@ const std::array<PixelFormat, 3> kOutputFormats{
     PixelFormat::IMPLEMENTATION_DEFINED, PixelFormat::YCBCR_420_888,
     PixelFormat::BLOB};
 
-struct Resolution {
-  Resolution(const int w, const int h) : width(w), height(h) {
-  }
-
-  bool operator<(const Resolution& other) const {
-    return width * height < other.width * other.height;
-  }
-
-  bool operator==(const Resolution& other) const {
-    return width == other.width && height == other.height;
-  }
-
-  const int width;
-  const int height;
-};
-
 bool isSupportedOutputFormat(const PixelFormat pixelFormat) {
   return std::find(kOutputFormats.begin(), kOutputFormats.end(), pixelFormat) !=
          kOutputFormats.end();
+}
+
+std::vector<MetadataBuilder::FpsRange> fpsRangesForInputConfig(
+    const std::vector<SupportedStreamConfiguration>& configs) {
+  std::set<MetadataBuilder::FpsRange> availableRanges;
+  for (const SupportedStreamConfiguration& config : configs) {
+    availableRanges.insert({.minFps = config.maxFps, .maxFps = config.maxFps});
+  }
+
+  return std::vector<MetadataBuilder::FpsRange>(availableRanges.begin(),
+                                                availableRanges.end());
 }
 
 std::optional<Resolution> getMaxResolution(
@@ -155,10 +152,11 @@ std::optional<CameraMetadata> initCameraCharacteristics(
           .setFlashAvailable(false)
           .setLensFacing(
               static_cast<camera_metadata_enum_android_lens_facing>(lensFacing))
-          .setFocalLength(43.0)
+          .setAvailableFocalLengths({VirtualCameraDevice::kFocalLength})
           .setSensorOrientation(static_cast<int32_t>(sensorOrientation))
           .setSensorReadoutTimestamp(
               ANDROID_SENSOR_READOUT_TIMESTAMP_NOT_SUPPORTED)
+          .setSensorTimestampSource(ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN)
           .setSensorPhysicalSize(36.0, 24.0)
           .setAvailableFaceDetectModes({ANDROID_STATISTICS_FACE_DETECT_MODE_OFF})
           .setAvailableMaxDigitalZoom(1.0)
@@ -166,29 +164,44 @@ std::optional<CameraMetadata> initCameraCharacteristics(
           .setControlAfAvailableModes({ANDROID_CONTROL_AF_MODE_OFF})
           .setControlAvailableSceneModes({ANDROID_CONTROL_SCENE_MODE_DISABLED})
           .setControlAvailableEffects({ANDROID_CONTROL_EFFECT_MODE_OFF})
-          .setControlAeAvailableFpsRange(10, 30)
+          .setControlAeAvailableModes({ANDROID_CONTROL_AE_MODE_ON})
+          .setControlAeAvailableAntibandingModes(
+              {ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO})
+          .setControlAeAvailableFpsRanges(
+              fpsRangesForInputConfig(supportedInputConfig))
           .setControlMaxRegions(0, 0, 0)
           .setControlAfRegions({kDefaultEmptyControlRegion})
           .setControlAeRegions({kDefaultEmptyControlRegion})
           .setControlAwbRegions({kDefaultEmptyControlRegion})
-          .setControlAeCompensationRange(0, 1)
+          .setControlAeCompensationRange(0, 0)
           .setControlAeCompensationStep(camera_metadata_rational_t{0, 1})
           .setControlAwbLockAvailable(false)
           .setControlAeLockAvailable(false)
           .setControlAvailableAwbModes({ANDROID_CONTROL_AWB_MODE_AUTO})
           .setControlZoomRatioRange(/*min=*/1.0, /*max=*/1.0)
+          // TODO(b/301023410) Add JPEG Exif + thumbnail support.
+          .setJpegAvailableThumbnailSizes({Resolution(0, 0)})
           .setMaxJpegSize(kMaxJpegSize)
           .setMaxNumberOutputStreams(
               VirtualCameraDevice::kMaxNumberOfRawStreams,
               VirtualCameraDevice::kMaxNumberOfProcessedStreams,
               VirtualCameraDevice::kMaxNumberOfStallStreams)
           .setSyncMaxLatency(ANDROID_SYNC_MAX_LATENCY_UNKNOWN)
-          .setAvailableRequestKeys({})
-          .setAvailableRequestKeys({ANDROID_CONTROL_AF_MODE})
-          .setAvailableResultKeys({ANDROID_CONTROL_AF_MODE})
+          .setAvailableRequestKeys(
+              {ANDROID_CONTROL_CAPTURE_INTENT, ANDROID_CONTROL_AE_MODE,
+               ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION,
+               ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
+               ANDROID_CONTROL_AE_ANTIBANDING_MODE,
+               ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER, ANDROID_CONTROL_AF_TRIGGER,
+               ANDROID_CONTROL_AF_MODE, ANDROID_CONTROL_AWB_MODE,
+               ANDROID_STATISTICS_FACE_DETECT_MODE, ANDROID_FLASH_MODE})
+          .setAvailableResultKeys(
+              {ANDROID_CONTROL_AE_MODE, ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
+               ANDROID_CONTROL_AF_MODE, ANDROID_CONTROL_AWB_MODE,
+               ANDROID_FLASH_STATE, ANDROID_SENSOR_TIMESTAMP,
+               ANDROID_LENS_FOCAL_LENGTH})
           .setAvailableCapabilities(
-              {ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE})
-          .setAvailableCharacteristicKeys();
+              {ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
 
   // Active array size must correspond to largest supported input resolution.
   std::optional<Resolution> maxResolution =
@@ -227,7 +240,7 @@ std::optional<CameraMetadata> initCameraCharacteristics(
   ALOGV("Adding %zu output configurations", outputConfigurations.size());
   builder.setAvailableOutputStreamConfigurations(outputConfigurations);
 
-  auto metadata = builder.build();
+  auto metadata = builder.setAvailableCharacteristicKeys().build();
   if (metadata == nullptr) {
     ALOGE("Failed to build metadata!");
     return CameraMetadata();
@@ -406,6 +419,11 @@ binder_status_t VirtualCameraDevice::dump(int fd, const char** args,
 
 std::string VirtualCameraDevice::getCameraName() const {
   return std::string(kDevicePathPrefix) + std::to_string(mCameraId);
+}
+
+const std::vector<SupportedStreamConfiguration>&
+VirtualCameraDevice::getInputConfigs() const {
+  return mSupportedInputConfigurations;
 }
 
 std::shared_ptr<VirtualCameraDevice> VirtualCameraDevice::sharedFromThis() {

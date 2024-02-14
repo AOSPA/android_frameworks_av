@@ -226,6 +226,8 @@ static const enum {
 static const int kPriorityAudioApp = 2;
 static const int kPriorityFastMixer = 3;
 static const int kPriorityFastCapture = 3;
+// Request real-time priority for PlaybackThread in ARC
+static const int kPriorityPlaybackThreadArc = 1;
 
 // IAudioFlinger::createTrack() has an in/out parameter 'pFrameCount' for the total size of the
 // track buffer in shared memory.  Zero on input means to use a default value.  For fast tracks,
@@ -3344,7 +3346,11 @@ ThreadBase::MetadataUpdate PlaybackThread::updateMetadata_l()
         return {}; // nothing to do
     }
     StreamOutHalInterface::SourceMetadata metadata;
-    if (com_android_media_audio_stereo_spatialization()) {
+    static const bool stereo_spatialization_property =
+            property_get_bool("ro.audio.stereo_spatialization_enabled", false);
+    const bool stereo_spatialization_enabled =
+            stereo_spatialization_property && com_android_media_audio_stereo_spatialization();
+    if (stereo_spatialization_enabled) {
         std::map<audio_session_t, std::vector<playback_track_metadata_v7_t> >allSessionsMetadata;
         for (const sp<IAfTrack>& track : mActiveTracks) {
             std::vector<playback_track_metadata_v7_t>& sessionMetadata =
@@ -3974,6 +3980,27 @@ NO_THREAD_SAFETY_ANALYSIS  // manual locking of AudioFlinger
             const int priorityBoost = requestSpatializerPriority(getpid(), tid);
             if (priorityBoost > 0) {
                 stream()->setHalThreadPriority(priorityBoost);
+            }
+        }
+    } else if (property_get_bool("ro.boot.container", false /* default_value */)) {
+        // In ARC experiments (b/73091832), the latency under using CFS scheduler with any priority
+        // is not enough for PlaybackThread to process audio data in time. We request the lowest
+        // real-time priority, SCHED_FIFO=1, for PlaybackThread in ARC. ro.boot.container is true
+        // only on ARC.
+        const pid_t tid = getTid();
+        if (tid == -1) {
+            ALOGW("%s: Cannot update PlaybackThread priority for ARC, no tid", __func__);
+        } else {
+            const status_t status = requestPriority(getpid(),
+                                                    tid,
+                                                    kPriorityPlaybackThreadArc,
+                                                    false /* isForApp */,
+                                                    true /* asynchronous */);
+            if (status != OK) {
+                ALOGW("%s: Cannot update PlaybackThread priority for ARC, status %d", __func__,
+                        status);
+            } else {
+                stream()->setHalThreadPriority(kPriorityPlaybackThreadArc);
             }
         }
     }
