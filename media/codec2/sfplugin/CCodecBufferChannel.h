@@ -208,7 +208,20 @@ public:
 
     void setMetaMode(MetaMode mode);
 
+    /**
+     * get pixel format from output buffers.
+     *
+     * @return 0 if no valid pixel format found.
+     */
+    uint32_t getBuffersPixelFormat(bool isEncoder);
+
+    void resetBuffersPixelFormat(bool isEncoder);
+
 private:
+    uint32_t getInputBuffersPixelFormat();
+
+    uint32_t getOutputBuffersPixelFormat();
+
     class QueueGuard;
 
     /**
@@ -337,6 +350,7 @@ private:
     sp<MemoryDealer> makeMemoryDealer(size_t heapSize);
 
     std::deque<TrackedFrame> mTrackedFrames;
+    bool mAreRenderMetricsEnabled;
     bool mIsSurfaceToDisplay;
     bool mHasPresentFenceTimes;
 

@@ -79,6 +79,7 @@
 #include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/OMXClient.h>
 #include <media/stagefright/PersistentSurface.h>
+#include <media/stagefright/RenderedFrameInfo.h>
 #include <media/stagefright/SurfaceUtils.h>
 #include <nativeloader/dlext_namespaces.h>
 #include <private/android_filesystem_config.h>
@@ -93,6 +94,7 @@ using aidl::android::media::BnResourceManagerClient;
 using aidl::android::media::IResourceManagerClient;
 using aidl::android::media::IResourceManagerService;
 using aidl::android::media::ClientInfoParcel;
+using server_configurable_flags::GetServerConfigurableFlag;
 using FreezeEvent = VideoRenderQualityTracker::FreezeEvent;
 using JudderEvent = VideoRenderQualityTracker::JudderEvent;
 
@@ -282,6 +284,11 @@ static int64_t getId(const std::shared_ptr<IResourceManagerClient> &client) {
 
 static bool isResourceError(status_t err) {
     return (err == NO_MEMORY);
+}
+
+static bool areRenderMetricsEnabled() {
+    std::string v = GetServerConfigurableFlag("media_native", "render_metrics_enabled", "false");
+    return v == "true";
 }
 
 static const int kMaxRetry = 2;
@@ -765,7 +772,7 @@ public:
             const sp<AMessage> &outputFormat) override;
     virtual void onInputSurfaceDeclined(status_t err) override;
     virtual void onSignaledInputEOS(status_t err) override;
-    virtual void onOutputFramesRendered(const std::list<FrameRenderTracker::Info> &done) override;
+    virtual void onOutputFramesRendered(const std::list<RenderedFrameInfo> &done) override;
     virtual void onOutputBuffersChanged() override;
     virtual void onFirstTunnelFrameReady() override;
     virtual void onMetricsUpdated(const sp<AMessage> &updatedMetrics) override;
@@ -875,7 +882,7 @@ void CodecCallback::onSignaledInputEOS(status_t err) {
     notify->post();
 }
 
-void CodecCallback::onOutputFramesRendered(const std::list<FrameRenderTracker::Info> &done) {
+void CodecCallback::onOutputFramesRendered(const std::list<RenderedFrameInfo> &done) {
     sp<AMessage> notify(mNotify->dup());
     notify->setInt32("what", kWhatOutputFramesRendered);
     if (MediaCodec::CreateFramesRenderedMessage(done, notify)) {
@@ -1048,9 +1055,10 @@ MediaCodec::MediaCodec(
       mHavePendingInputBuffers(false),
       mCpuBoostRequested(false),
       mIsSurfaceToDisplay(false),
+      mAreRenderMetricsEnabled(areRenderMetricsEnabled()),
       mVideoRenderQualityTracker(
               VideoRenderQualityTracker::Configuration::getFromServerConfigurableFlags(
-                      server_configurable_flags::GetServerConfigurableFlag)),
+                      GetServerConfigurableFlag)),
       mLatencyUnknown(0),
       mBytesEncoded(0),
       mEarliestEncodedPtsUs(INT64_MAX),
@@ -6042,12 +6050,10 @@ status_t MediaCodec::handleLeftover(size_t index) {
     return onQueueInputBuffer(msg);
 }
 
-//static
-size_t MediaCodec::CreateFramesRenderedMessage(
-        const std::list<FrameRenderTracker::Info> &done, sp<AMessage> &msg) {
+template<typename T>
+static size_t CreateFramesRenderedMessageInternal(const std::list<T> &done, sp<AMessage> &msg) {
     size_t index = 0;
-    for (std::list<FrameRenderTracker::Info>::const_iterator it = done.cbegin();
-            it != done.cend(); ++it) {
+    for (typename std::list<T>::const_iterator it = done.cbegin(); it != done.cend(); ++it) {
         if (it->getRenderTimeNs() < 0) {
             continue; // dropped frame from tracking
         }
@@ -6056,6 +6062,18 @@ size_t MediaCodec::CreateFramesRenderedMessage(
         ++index;
     }
     return index;
+}
+
+//static
+size_t MediaCodec::CreateFramesRenderedMessage(
+        const std::list<RenderedFrameInfo> &done, sp<AMessage> &msg) {
+    return CreateFramesRenderedMessageInternal(done, msg);
+}
+
+//static
+size_t MediaCodec::CreateFramesRenderedMessage(
+        const std::list<FrameRenderTracker::Info> &done, sp<AMessage> &msg) {
+    return CreateFramesRenderedMessageInternal(done, msg);
 }
 
 status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
@@ -6133,7 +6151,7 @@ status_t MediaCodec::onReleaseOutputBuffer(const sp<AMessage> &msg) {
 
         // If rendering to the screen, then schedule a time in the future to poll to see if this
         // frame was ever rendered to seed onFrameRendered callbacks.
-        if (mIsSurfaceToDisplay) {
+        if (mAreRenderMetricsEnabled && mIsSurfaceToDisplay) {
             if (mediaTimeUs != INT64_MIN) {
                 noRenderTime ? mVideoRenderQualityTracker.onFrameReleased(mediaTimeUs)
                              : mVideoRenderQualityTracker.onFrameReleased(mediaTimeUs,
