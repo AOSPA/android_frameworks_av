@@ -27,8 +27,22 @@ flag {
 }
 
 flag {
+  name: "in_process_sw_audio_codec"
+  namespace: "codec_fwk"
+  description: "Feature flag for in-process software audio codec support"
+  bug: "297922713"
+}
+
+flag {
   name: "null_output_surface"
   namespace: "codec_fwk"
   description: "Feature flag for null output Surface support"
   bug: "297920102"
+}
+
+flag {
+  name: "region_of_interest"
+  namespace: "codec_fwk"
+  description: "Feature flag for region of interest support"
+  bug: "299191092"
 }
