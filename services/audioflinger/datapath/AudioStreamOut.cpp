@@ -99,10 +99,11 @@ status_t AudioStreamOut::getPresentationPosition(uint64_t *frames, struct timesp
         return status;
     }
 
-    if (mHalFormatHasProportionalFrames) {
+    if (mHalFormatHasProportionalFrames &&
+            (flags & AUDIO_OUTPUT_FLAG_DIRECT) == AUDIO_OUTPUT_FLAG_DIRECT) {
         *frames = halPosition / mRateMultiplier;
     } else {
-        // For offloaded MP3 and other compressed formats.
+        // For offloaded MP3 and other compressed formats, and linear PCM.
         *frames = halPosition;
     }
 
