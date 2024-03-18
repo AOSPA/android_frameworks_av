@@ -149,6 +149,36 @@ class MetadataBuilder {
   MetadataBuilder& setAvailableOutputStreamConfigurations(
       const std::vector<StreamConfiguration>& streamConfigurations);
 
+  // See COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES in CameraCharacteristics.java.
+  MetadataBuilder& setAvailableAberrationCorrectionModes(
+      const std::vector<
+          camera_metadata_enum_android_color_correction_aberration_mode>&
+          aberrationCorectionModes);
+
+  // See COLOR_CORRECTION_ABERRATION_MODE in CaptureRequest.java.
+  MetadataBuilder& setAberrationCorrectionMode(
+      camera_metadata_enum_android_color_correction_aberration_mode
+          aberrationCorrectionMode);
+
+  // See NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES in CameraCharacteristics.java.
+  MetadataBuilder& setAvailableNoiseReductionModes(
+      const std::vector<camera_metadata_enum_android_noise_reduction_mode>&
+          noiseReductionModes);
+
+  // See NOISE_REDUCTION_MODE in CaptureRequest.java.
+  MetadataBuilder& setNoiseReductionMode(
+      camera_metadata_enum_android_noise_reduction_mode noiseReductionMode);
+
+  // See REQUEST_PARTIAL_RESULT_COUNT in CameraCharacteristics.java.
+  MetadataBuilder& setRequestPartialResultCount(int partialResultCount);
+
+  // See SCALER_CROPPING_TYPE in CameraCharacteristics.java.
+  MetadataBuilder& setCroppingType(
+      camera_metadata_enum_android_scaler_cropping_type croppingType);
+
+  // See STATISTICS_INFO_MAX_FACE_COUNT in CameraCharacteristic.java.
+  MetadataBuilder& setMaxFaceCount(int maxFaceCount);
+
   // See ANDROID_CONTROL_AVAILABLE_MODES in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAvailableModes(
       const std::vector<camera_metadata_enum_android_control_mode_t>&

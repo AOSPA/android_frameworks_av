@@ -2908,7 +2908,7 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.
             mutex().unlock();
-            const os::HapticScale intensity = afutils::onExternalVibrationStart(
+            const os::HapticScale hapticScale = afutils::onExternalVibrationStart(
                     track->getExternalVibration());
             std::optional<media::AudioVibratorInfo> vibratorInfo;
             {
@@ -2918,7 +2918,7 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
                 vibratorInfo = std::move(mAfThreadCallback->getDefaultVibratorInfo_l());
             }
             mutex().lock();
-            track->setHapticIntensity(intensity);
+            track->setHapticScale(hapticScale);
             if (vibratorInfo) {
                 track->setHapticMaxAmplitude(vibratorInfo->maxAmplitude);
             }
@@ -2934,7 +2934,8 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
 
             // Set haptic intensity for effect
             if (chain != nullptr) {
-                chain->setHapticIntensity_l(track->id(), intensity);
+                // TODO(b/324559333): Add adaptive haptics scaling support for the HapticGenerator.
+                chain->setHapticScale_l(track->id(), hapticScale);
             }
         }
 
@@ -4841,7 +4842,7 @@ NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mutex()
             // When the track is stop, set the haptic intensity as MUTE
             // for the HapticGenerator effect.
             if (chain != nullptr) {
-                chain->setHapticIntensity_l(track->id(), os::HapticScale::MUTE);
+                chain->setHapticScale_l(track->id(), os::HapticScale::mute());
             }
         }
 
@@ -5205,7 +5206,7 @@ MixerThread::MixerThread(const sp<IAfThreadCallback>& afThreadCallback, AudioStr
                                                     // audio to FastMixer
         fastTrack->mFormat = mFormat; // mPipeSink format for audio to FastMixer
         fastTrack->mHapticPlaybackEnabled = mHapticChannelMask != AUDIO_CHANNEL_NONE;
-        fastTrack->mHapticIntensity = os::HapticScale::NONE;
+        fastTrack->mHapticScale = {/*level=*/os::HapticLevel::NONE };
         fastTrack->mHapticMaxAmplitude = NAN;
         fastTrack->mGeneration++;
         state->mFastTracksGen++;
@@ -5766,7 +5767,7 @@ PlaybackThread::mixer_state MixerThread::prepareTracks_l(
                     fastTrack->mChannelMask = track->channelMask();
                     fastTrack->mFormat = track->format();
                     fastTrack->mHapticPlaybackEnabled = track->getHapticPlaybackEnabled();
-                    fastTrack->mHapticIntensity = track->getHapticIntensity();
+                    fastTrack->mHapticScale = track->getHapticScale();
                     fastTrack->mHapticMaxAmplitude = track->getHapticMaxAmplitude();
                     fastTrack->mGeneration++;
                     state->mTrackMask |= 1 << j;
@@ -6127,10 +6128,11 @@ PlaybackThread::mixer_state MixerThread::prepareTracks_l(
                 trackId,
                 AudioMixer::TRACK,
                 AudioMixer::HAPTIC_ENABLED, (void *)(uintptr_t)track->getHapticPlaybackEnabled());
+            const os::HapticScale hapticScale = track->getHapticScale();
             mAudioMixer->setParameter(
-                trackId,
-                AudioMixer::TRACK,
-                AudioMixer::HAPTIC_INTENSITY, (void *)(uintptr_t)track->getHapticIntensity());
+                    trackId,
+                    AudioMixer::TRACK,
+                    AudioMixer::HAPTIC_SCALE, (void *)&hapticScale);
             const float hapticMaxAmplitude = track->getHapticMaxAmplitude();
             mAudioMixer->setParameter(
                 trackId,
@@ -10791,6 +10793,16 @@ NO_THREAD_SAFETY_ANALYSIS  // elease and re-acquire mutex()
     mActiveTracks.setHasChanged();
     updateMetadata_l();
 
+    // For mmap streams, once the routing has changed, they will be disconnected. It should be
+    // okay to notify the client earlier before the new patch creation.
+    if (mDeviceId != deviceId) {
+        if (const sp<MmapStreamCallback> callback = mCallback.promote()) {
+            // The aaudioservice handle the routing changed event asynchronously. In that case,
+            // it is safe to hold the lock here.
+            callback->onRoutingChanged(deviceId);
+        }
+    }
+
     if (mAudioHwDev->supportsAudioPatches()) {
         status = mHalDevice->createAudioPatch(patch->num_sources, patch->sources, patch->num_sinks,
                                               patch->sinks, handle);
@@ -10815,12 +10827,6 @@ NO_THREAD_SAFETY_ANALYSIS  // elease and re-acquire mutex()
         } else {
             sendIoConfigEvent_l(AUDIO_INPUT_CONFIG_CHANGED);
             mInDeviceTypeAddr = sourceDeviceTypeAddr;
-        }
-        sp<MmapStreamCallback> callback = mCallback.promote();
-        if (mDeviceId != deviceId && callback != 0) {
-            mutex().unlock();
-            callback->onRoutingChanged(deviceId);
-            mutex().lock();
         }
         mPatch = *patch;
         mDeviceId = deviceId;
@@ -10971,21 +10977,18 @@ status_t MmapThread::checkEffectCompatibility_l(
 
 void MmapThread::checkInvalidTracks_l()
 {
-    sp<MmapStreamCallback> callback;
     for (const sp<IAfMmapTrack>& track : mActiveTracks) {
         if (track->isInvalid()) {
-            callback = mCallback.promote();
-            if (callback == nullptr &&  mNoCallbackWarningCount < kMaxNoCallbackWarnings) {
+            if (const sp<MmapStreamCallback> callback = mCallback.promote()) {
+                // The aaudioservice handle the routing changed event asynchronously. In that case,
+                // it is safe to hold the lock here.
+                callback->onRoutingChanged(AUDIO_PORT_HANDLE_NONE);
+            } else if (mNoCallbackWarningCount < kMaxNoCallbackWarnings) {
                 ALOGW("Could not notify MMAP stream tear down: no onRoutingChanged callback!");
                 mNoCallbackWarningCount++;
             }
             break;
         }
-    }
-    if (callback != 0) {
-        mutex().unlock();
-        callback->onRoutingChanged(AUDIO_PORT_HANDLE_NONE);
-        mutex().lock();
     }
 }
 
