@@ -41,7 +41,6 @@ struct MultiAccessUnitInterface : public C2InterfaceHelper {
     bool isParamSupported(C2Param::Index index);
     C2LargeFrame::output getLargeFrameParam() const;
     C2Component::kind_t kind() const;
-    bool isValidField(const C2ParamField &field) const;
 
 protected:
     void getDecoderSampleRateAndChannelCount(
@@ -50,7 +49,6 @@ protected:
     std::shared_ptr<C2LargeFrame::output> mLargeFrameParams;
     C2ComponentKindSetting mKind;
     std::set<C2Param::Index> mSupportedParamIndexSet;
-    std::vector<C2ParamField> mParamFields;
 
     friend struct MultiAccessUnitHelper;
 };
