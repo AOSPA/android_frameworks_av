@@ -23,8 +23,10 @@
 #include <chrono>
 #include <cstdint>
 #include <iterator>
+#include <numeric>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "VirtualCameraSession.h"
 #include "aidl/android/companion/virtualcamera/SupportedStreamConfiguration.h"
@@ -36,7 +38,7 @@
 #include "android/binder_status.h"
 #include "log/log.h"
 #include "system/camera_metadata.h"
-#include "util/MetadataBuilder.h"
+#include "util/MetadataUtil.h"
 #include "util/Util.h"
 
 namespace android {
@@ -70,28 +72,79 @@ const char* kDevicePathPrefix = "device@1.1/virtual/";
 
 constexpr int32_t kMaxJpegSize = 3 * 1024 * 1024 /*3MiB*/;
 
+constexpr int32_t kMinFps = 15;
+
+constexpr std::chrono::nanoseconds kMaxFrameDuration =
+    std::chrono::duration_cast<std::chrono::nanoseconds>(1e9ns / kMinFps);
+
+constexpr uint8_t kPipelineMaxDepth = 2;
+
 constexpr MetadataBuilder::ControlRegion kDefaultEmptyControlRegion{};
 
-const std::array<int32_t, 3> kOutputFormats{
-    ANDROID_SCALER_AVAILABLE_FORMATS_IMPLEMENTATION_DEFINED,
-    ANDROID_SCALER_AVAILABLE_FORMATS_YCbCr_420_888,
-    ANDROID_SCALER_AVAILABLE_FORMATS_BLOB};
+constexpr float kAspectRatioEpsilon = 0.05;
 
-struct Resolution {
-  Resolution(const int w, const int h) : width(w), height(h) {
+const std::array<Resolution, 5> kStandardJpegThumbnailSizes{
+    Resolution(176, 144), Resolution(240, 144), Resolution(256, 144),
+    Resolution(240, 160), Resolution(240, 180)};
+
+const std::array<PixelFormat, 3> kOutputFormats{
+    PixelFormat::IMPLEMENTATION_DEFINED, PixelFormat::YCBCR_420_888,
+    PixelFormat::BLOB};
+
+bool isApproximatellySameAspectRatio(const Resolution r1, const Resolution r2) {
+  float aspectRatio1 =
+      static_cast<float>(r1.width) / static_cast<float>(r1.height);
+  float aspectRatio2 =
+      static_cast<float>(r2.width) / static_cast<float>(r2.height);
+
+  return abs(aspectRatio1 - aspectRatio2) < kAspectRatioEpsilon;
+}
+
+std::vector<Resolution> getSupportedJpegThumbnailSizes(
+    const std::vector<SupportedStreamConfiguration>& configs) {
+  auto isSupportedByAnyInputConfig =
+      [&configs](const Resolution thumbnailResolution) {
+        return std::any_of(
+            configs.begin(), configs.end(),
+            [thumbnailResolution](const SupportedStreamConfiguration& config) {
+              return isApproximatellySameAspectRatio(
+                  thumbnailResolution, Resolution(config.width, config.height));
+            });
+      };
+
+  std::vector<Resolution> supportedThumbnailSizes({Resolution(0, 0)});
+  std::copy_if(kStandardJpegThumbnailSizes.begin(),
+               kStandardJpegThumbnailSizes.end(),
+               std::back_insert_iterator(supportedThumbnailSizes),
+               isSupportedByAnyInputConfig);
+  return supportedThumbnailSizes;
+}
+
+bool isSupportedOutputFormat(const PixelFormat pixelFormat) {
+  return std::find(kOutputFormats.begin(), kOutputFormats.end(), pixelFormat) !=
+         kOutputFormats.end();
+}
+
+std::vector<MetadataBuilder::FpsRange> fpsRangesForInputConfig(
+    const std::vector<SupportedStreamConfiguration>& configs) {
+  std::set<MetadataBuilder::FpsRange> availableRanges;
+
+  for (const SupportedStreamConfiguration& config : configs) {
+    availableRanges.insert({.minFps = kMinFps, .maxFps = config.maxFps});
+    availableRanges.insert({.minFps = config.maxFps, .maxFps = config.maxFps});
   }
 
-  bool operator<(const Resolution& other) const {
-    return width * height < other.width * other.height;
+  if (std::any_of(configs.begin(), configs.end(),
+                  [](const SupportedStreamConfiguration& config) {
+                    return config.maxFps >= 30;
+                  })) {
+    availableRanges.insert({.minFps = kMinFps, .maxFps = 30});
+    availableRanges.insert({.minFps = 30, .maxFps = 30});
   }
 
-  bool operator==(const Resolution& other) const {
-    return width == other.width && height == other.height;
-  }
-
-  const int width;
-  const int height;
-};
+  return std::vector<MetadataBuilder::FpsRange>(availableRanges.begin(),
+                                                availableRanges.end());
+}
 
 std::optional<Resolution> getMaxResolution(
     const std::vector<SupportedStreamConfiguration>& configs) {
@@ -151,25 +204,76 @@ std::optional<CameraMetadata> initCameraCharacteristics(
           .setFlashAvailable(false)
           .setLensFacing(
               static_cast<camera_metadata_enum_android_lens_facing>(lensFacing))
+          .setAvailableFocalLengths({VirtualCameraDevice::kFocalLength})
           .setSensorOrientation(static_cast<int32_t>(sensorOrientation))
+          .setSensorReadoutTimestamp(
+              ANDROID_SENSOR_READOUT_TIMESTAMP_NOT_SUPPORTED)
+          .setSensorTimestampSource(ANDROID_SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN)
+          .setSensorPhysicalSize(36.0, 24.0)
           .setAvailableFaceDetectModes({ANDROID_STATISTICS_FACE_DETECT_MODE_OFF})
+          .setAvailableTestPatternModes({ANDROID_SENSOR_TEST_PATTERN_MODE_OFF})
           .setAvailableMaxDigitalZoom(1.0)
           .setControlAvailableModes({ANDROID_CONTROL_MODE_AUTO})
           .setControlAfAvailableModes({ANDROID_CONTROL_AF_MODE_OFF})
-          .setControlAeAvailableFpsRange(10, 30)
+          .setControlAvailableSceneModes({ANDROID_CONTROL_SCENE_MODE_DISABLED})
+          .setControlAvailableEffects({ANDROID_CONTROL_EFFECT_MODE_OFF})
+          .setControlAvailableVideoStabilizationModes(
+              {ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_OFF})
+          .setControlAeAvailableModes({ANDROID_CONTROL_AE_MODE_ON})
+          .setControlAeAvailableAntibandingModes(
+              {ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO})
+          .setControlAeAvailableFpsRanges(
+              fpsRangesForInputConfig(supportedInputConfig))
           .setControlMaxRegions(0, 0, 0)
           .setControlAfRegions({kDefaultEmptyControlRegion})
           .setControlAeRegions({kDefaultEmptyControlRegion})
           .setControlAwbRegions({kDefaultEmptyControlRegion})
-          .setControlAeCompensationRange(0, 1)
+          .setControlAeCompensationRange(0, 0)
           .setControlAeCompensationStep(camera_metadata_rational_t{0, 1})
+          .setControlAwbLockAvailable(false)
+          .setControlAeLockAvailable(false)
+          .setControlAvailableAwbModes({ANDROID_CONTROL_AWB_MODE_AUTO})
           .setControlZoomRatioRange(/*min=*/1.0, /*max=*/1.0)
+          .setJpegAvailableThumbnailSizes(
+              getSupportedJpegThumbnailSizes(supportedInputConfig))
           .setMaxJpegSize(kMaxJpegSize)
-          .setAvailableRequestKeys({ANDROID_CONTROL_AF_MODE})
-          .setAvailableResultKeys({ANDROID_CONTROL_AF_MODE})
+          .setMaxFrameDuration(kMaxFrameDuration)
+          .setMaxNumberOutputStreams(
+              VirtualCameraDevice::kMaxNumberOfRawStreams,
+              VirtualCameraDevice::kMaxNumberOfProcessedStreams,
+              VirtualCameraDevice::kMaxNumberOfStallStreams)
+          .setPipelineMaxDepth(kPipelineMaxDepth)
+          .setSyncMaxLatency(ANDROID_SYNC_MAX_LATENCY_UNKNOWN)
+          .setAvailableRequestKeys({ANDROID_CONTROL_CAPTURE_INTENT,
+                                    ANDROID_CONTROL_AE_MODE,
+                                    ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION,
+                                    ANDROID_CONTROL_AE_TARGET_FPS_RANGE,
+                                    ANDROID_CONTROL_AE_ANTIBANDING_MODE,
+                                    ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
+                                    ANDROID_CONTROL_AF_TRIGGER,
+                                    ANDROID_CONTROL_AF_MODE,
+                                    ANDROID_CONTROL_AWB_MODE,
+                                    ANDROID_SCALER_CROP_REGION,
+                                    ANDROID_CONTROL_EFFECT_MODE,
+                                    ANDROID_CONTROL_MODE,
+                                    ANDROID_CONTROL_SCENE_MODE,
+                                    ANDROID_CONTROL_VIDEO_STABILIZATION_MODE,
+                                    ANDROID_CONTROL_ZOOM_RATIO,
+                                    ANDROID_STATISTICS_FACE_DETECT_MODE,
+                                    ANDROID_FLASH_MODE,
+                                    ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES,
+                                    ANDROID_JPEG_QUALITY,
+                                    ANDROID_JPEG_THUMBNAIL_QUALITY})
+          .setAvailableResultKeys(
+              {ANDROID_CONTROL_AE_MODE, ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER,
+               ANDROID_CONTROL_AF_MODE, ANDROID_CONTROL_AWB_MODE,
+               ANDROID_CONTROL_EFFECT_MODE, ANDROID_CONTROL_MODE,
+               ANDROID_FLASH_MODE, ANDROID_FLASH_STATE,
+               ANDROID_JPEG_AVAILABLE_THUMBNAIL_SIZES, ANDROID_JPEG_QUALITY,
+               ANDROID_JPEG_THUMBNAIL_QUALITY, ANDROID_SENSOR_TIMESTAMP,
+               ANDROID_LENS_FOCAL_LENGTH})
           .setAvailableCapabilities(
-              {ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE})
-          .setAvailableCharacteristicKeys();
+              {ANDROID_REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
 
   // Active array size must correspond to largest supported input resolution.
   std::optional<Resolution> maxResolution =
@@ -179,6 +283,7 @@ std::optional<CameraMetadata> initCameraCharacteristics(
   }
   builder.setSensorActiveArraySize(0, 0, maxResolution->width,
                                    maxResolution->height);
+  builder.setSensorPixelArraySize(maxResolution->width, maxResolution->height);
 
   std::vector<MetadataBuilder::StreamConfiguration> outputConfigurations;
 
@@ -189,7 +294,7 @@ std::optional<CameraMetadata> initCameraCharacteristics(
       getResolutionToMaxFpsMap(supportedInputConfig);
 
   // Add configurations for all unique input resolutions and output formats.
-  for (int32_t format : kOutputFormats) {
+  for (const PixelFormat format : kOutputFormats) {
     std::transform(
         resolutionToMaxFpsMap.begin(), resolutionToMaxFpsMap.end(),
         std::back_inserter(outputConfigurations), [format](const auto& entry) {
@@ -198,7 +303,7 @@ std::optional<CameraMetadata> initCameraCharacteristics(
           return MetadataBuilder::StreamConfiguration{
               .width = resolution.width,
               .height = resolution.height,
-              .format = format,
+              .format = static_cast<int32_t>(format),
               .minFrameDuration = std::chrono::nanoseconds(1s) / maxFps,
               .minStallDuration = 0s};
         });
@@ -207,7 +312,7 @@ std::optional<CameraMetadata> initCameraCharacteristics(
   ALOGV("Adding %zu output configurations", outputConfigurations.size());
   builder.setAvailableOutputStreamConfigurations(outputConfigurations);
 
-  auto metadata = builder.build();
+  auto metadata = builder.setAvailableCharacteristicKeys().build();
   if (metadata == nullptr) {
     ALOGE("Failed to build metadata!");
     return CameraMetadata();
@@ -283,6 +388,13 @@ ndk::ScopedAStatus VirtualCameraDevice::isStreamCombinationSupported(
 
 bool VirtualCameraDevice::isStreamCombinationSupported(
     const StreamConfiguration& streamConfiguration) const {
+  if (streamConfiguration.streams.empty()) {
+    ALOGE("%s: Querying empty configuration", __func__);
+    return false;
+  }
+
+  int numberOfProcessedStreams = 0;
+  int numberOfStallStreams = 0;
   for (const Stream& stream : streamConfiguration.streams) {
     ALOGV("%s: Configuration queried: %s", __func__, stream.toString().c_str());
 
@@ -291,13 +403,16 @@ bool VirtualCameraDevice::isStreamCombinationSupported(
       return false;
     }
 
-    // TODO(b/301023410) remove hardcoded format checks, verify against configuration.
     if (stream.rotation != StreamRotation::ROTATION_0 ||
-        (stream.format != PixelFormat::IMPLEMENTATION_DEFINED &&
-         stream.format != PixelFormat::YCBCR_420_888 &&
-         stream.format != PixelFormat::BLOB)) {
+        !isSupportedOutputFormat(stream.format)) {
       ALOGV("Unsupported output stream type");
       return false;
+    }
+
+    if (stream.format == PixelFormat::BLOB) {
+      numberOfStallStreams++;
+    } else {
+      numberOfProcessedStreams++;
     }
 
     auto matchesSupportedInputConfig =
@@ -311,6 +426,19 @@ bool VirtualCameraDevice::isStreamCombinationSupported(
       return false;
     }
   }
+
+  if (numberOfProcessedStreams > kMaxNumberOfProcessedStreams) {
+    ALOGE("%s: %d processed streams exceeds the supported maximum of %d",
+          __func__, numberOfProcessedStreams, kMaxNumberOfProcessedStreams);
+    return false;
+  }
+
+  if (numberOfStallStreams > kMaxNumberOfStallStreams) {
+    ALOGE("%s: %d stall streams exceeds the supported maximum of %d", __func__,
+          numberOfStallStreams, kMaxNumberOfStallStreams);
+    return false;
+  }
+
   return true;
 }
 
@@ -363,6 +491,24 @@ binder_status_t VirtualCameraDevice::dump(int fd, const char** args,
 
 std::string VirtualCameraDevice::getCameraName() const {
   return std::string(kDevicePathPrefix) + std::to_string(mCameraId);
+}
+
+const std::vector<SupportedStreamConfiguration>&
+VirtualCameraDevice::getInputConfigs() const {
+  return mSupportedInputConfigurations;
+}
+
+Resolution VirtualCameraDevice::getMaxInputResolution() const {
+  std::optional<Resolution> maxResolution =
+      getMaxResolution(mSupportedInputConfigurations);
+  if (!maxResolution.has_value()) {
+    ALOGE(
+        "%s: Cannot determine sensor size for virtual camera - input "
+        "configurations empty?",
+        __func__);
+    return Resolution(0, 0);
+  }
+  return maxResolution.value();
 }
 
 std::shared_ptr<VirtualCameraDevice> VirtualCameraDevice::sharedFromThis() {

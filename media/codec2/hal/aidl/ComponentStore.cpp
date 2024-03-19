@@ -206,6 +206,15 @@ ScopedAStatus ComponentStore::createComponent(
         const std::shared_ptr<IClientManager>& pool,
         std::shared_ptr<IComponent> *component) {
 
+    if (!listener) {
+        ALOGE("createComponent(): listener is null");
+        return ScopedAStatus::fromServiceSpecificError(Status::BAD_VALUE);
+    }
+    if (!pool) {
+        ALOGE("createComponent(): pool is null");
+        return ScopedAStatus::fromServiceSpecificError(Status::BAD_VALUE);
+    }
+
     std::shared_ptr<C2Component> c2component;
     c2_status_t status =
             mStore->createComponent(name, &c2component);
@@ -218,7 +227,8 @@ ScopedAStatus ComponentStore::createComponent(
         std::shared_ptr<Component> comp =
             SharedRefBase::make<Component>(c2component, listener, ref<ComponentStore>(), pool);
         *component = comp;
-        if (!component) {
+        if (!component || !comp) {
+            ALOGE("createComponent(): component cannot be returned");
             status = C2_CORRUPTED;
         } else {
             reportComponentBirth(comp.get());

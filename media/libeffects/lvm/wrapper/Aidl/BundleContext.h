@@ -85,7 +85,7 @@ class BundleContext final : public EffectContext {
     RetCode setVolumeStereo(const Parameter::VolumeStereo& volumeStereo) override;
     Parameter::VolumeStereo getVolumeStereo() override { return {1.0f, 1.0f}; }
 
-    IEffect::Status lvmProcess(float* in, float* out, int samples);
+    IEffect::Status process(float* in, float* out, int samples);
 
     IEffect::Status processEffect(float* in, float* out, int sampleToProcess);
 
@@ -124,8 +124,8 @@ class BundleContext final : public EffectContext {
     bool mVirtualizerTempDisabled = false;
     ::aidl::android::media::audio::common::AudioDeviceDescription mForceDevice;
     // Volume
-    float mLevelSaved = 0; /* for when mute is set, level must be saved */
-    float mVolume = 0;
+    float mLevelSaveddB = 0; /* for when mute is set, level must be saved */
+    float mVolumedB = 0;
     bool mMuteEnabled = false; /* Must store as mute = -96dB level */
 
     RetCode initControlParameter(LVM_ControlParams_t& params) const;

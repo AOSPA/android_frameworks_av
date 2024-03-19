@@ -3,6 +3,7 @@
 # Please add flags in alphabetical order.
 
 package: "com.android.media.audio"
+container: "system"
 
 flag {
     name: "alarm_min_volume_zero"
@@ -56,4 +57,11 @@ flag {
     namespace: "media_audio"
     description: "Enable stereo channel mask for spatialization."
     bug: "303920722"
+}
+
+flag {
+    name: "volume_refactoring"
+    namespace: "media_audio"
+    description: "Refactor the audio volume internal architecture logic"
+    bug: "324152869"
 }

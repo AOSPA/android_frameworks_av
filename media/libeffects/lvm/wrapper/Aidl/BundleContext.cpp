@@ -284,15 +284,15 @@ RetCode BundleContext::limitLevel() {
 
         // roundoff
         int maxLevelRound = (int)(totalEnergyEstimation + 0.99);
-        if (maxLevelRound + mVolume > 0) {
-            gainCorrection = maxLevelRound + mVolume;
+        if (maxLevelRound + mVolumedB > 0) {
+            gainCorrection = maxLevelRound + mVolumedB;
         }
 
-        params.VC_EffectLevel = mVolume - gainCorrection;
+        params.VC_EffectLevel = mVolumedB - gainCorrection;
         if (params.VC_EffectLevel < -96) {
             params.VC_EffectLevel = -96;
         }
-        LOG(INFO) << "\tVol: " << mVolume << ", GainCorrection: " << gainCorrection
+        LOG(INFO) << "\tVol: " << mVolumedB << ", GainCorrection: " << gainCorrection
                   << ", Actual vol: " << params.VC_EffectLevel;
 
         /* Activate the initial settings */
@@ -576,25 +576,25 @@ RetCode BundleContext::setBassBoostStrength(int strength) {
 
 RetCode BundleContext::setVolumeLevel(float level) {
     if (mMuteEnabled) {
-        mLevelSaved = level;
+        mLevelSaveddB = level;
     } else {
-        mVolume = level;
+        mVolumedB = level;
     }
     LOG(INFO) << __func__ << " success with level " << level;
     return limitLevel();
 }
 
 float BundleContext::getVolumeLevel() const {
-    return (mMuteEnabled ? mLevelSaved : mVolume);
+    return (mMuteEnabled ? mLevelSaveddB : mVolumedB);
 }
 
 RetCode BundleContext::setVolumeMute(bool mute) {
     mMuteEnabled = mute;
     if (mMuteEnabled) {
-        mLevelSaved = mVolume;
-        mVolume = -96;
+        mLevelSaveddB = mVolumedB;
+        mVolumedB = -96;
     } else {
-        mVolume = mLevelSaved;
+        mVolumedB = mLevelSaveddB;
     }
     return limitLevel();
 }
@@ -747,7 +747,7 @@ std::vector<Virtualizer::ChannelAngle> BundleContext::getSpeakerAngles(
     return angles;
 }
 
-IEffect::Status BundleContext::lvmProcess(float* in, float* out, int samples) {
+IEffect::Status BundleContext::process(float* in, float* out, int samples) {
     IEffect::Status status = {EX_NULL_POINTER, 0, 0};
     RETURN_VALUE_IF(!in, status, "nullInput");
     RETURN_VALUE_IF(!out, status, "nullOutput");
@@ -854,21 +854,34 @@ IEffect::Status BundleContext::lvmProcess(float* in, float* out, int samples) {
             LOG(DEBUG) << "Effect_process() processing last frame";
         }
         mNumberEffectsCalled = 0;
-        float* outTmp = (accumulate ? getWorkBuffer() : out);
-        /* Process the samples */
-        LVM_ReturnStatus_en lvmStatus;
-        {
-            std::lock_guard lg(mMutex);
-
-            lvmStatus = LVM_Process(mInstance, in, outTmp, inputFrameCount, 0);
-            if (lvmStatus != LVM_SUCCESS) {
-                LOG(ERROR) << __func__ << lvmStatus;
-                return {EX_UNSUPPORTED_OPERATION, 0, 0};
-            }
-            if (accumulate) {
-                for (int i = 0; i < samples; i++) {
-                    out[i] += outTmp[i];
+        int frames = samples * sizeof(float) / frameSize;
+        int bufferIndex = 0;
+        // LVM library supports max of int16_t frames at a time and should be multiple of
+        // kBlockSizeMultiple.
+        constexpr int kBlockSizeMultiple = 4;
+        constexpr int kMaxBlockFrames =
+                (std::numeric_limits<int16_t>::max() / kBlockSizeMultiple) * kBlockSizeMultiple;
+        while (frames > 0) {
+            float* outTmp = (accumulate ? getWorkBuffer() : out);
+            /* Process the samples */
+            LVM_ReturnStatus_en lvmStatus;
+            {
+                std::lock_guard lg(mMutex);
+                int processFrames = std::min(frames, kMaxBlockFrames);
+                lvmStatus = LVM_Process(mInstance, in + bufferIndex, outTmp + bufferIndex,
+                                        processFrames, 0);
+                if (lvmStatus != LVM_SUCCESS) {
+                    LOG(ERROR) << "LVM lib failed with error: " << lvmStatus;
+                    return {EX_UNSUPPORTED_OPERATION, 0, 0};
                 }
+                if (accumulate) {
+                    for (int i = 0; i < samples; i++) {
+                        out[i] += outTmp[i];
+                    }
+                }
+                frames -= processFrames;
+                int processedSize = processFrames * frameSize / sizeof(float);
+                bufferIndex += processedSize;
             }
         }
     } else {

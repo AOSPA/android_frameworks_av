@@ -329,7 +329,7 @@ public:
             return nullptr;
         }
         std::vector<int> fds;
-        for (int i = 0; i < nh->numFds-1; i++) {
+        for (int i = 0; i < nh->numFds; i++) {
             fds.push_back(dup(nh->data[i]));
         }
         std::shared_ptr<SyncFenceImpl> p = (nh->numFds == 1)?

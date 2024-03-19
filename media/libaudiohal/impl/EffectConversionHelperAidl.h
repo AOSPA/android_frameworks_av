@@ -69,9 +69,6 @@ class EffectConversionHelperAidl {
                                 void* pReplyData);
 
   private:
-    const aidl::android::media::audio::common::AudioFormatDescription kDefaultFormatDescription = {
-            .type = aidl::android::media::audio::common::AudioFormatType::PCM,
-            .pcm = aidl::android::media::audio::common::PcmType::FLOAT_32_BIT};
     const bool mIsProxyEffect;
 
     static constexpr int kDefaultframeCount = 0x100;
@@ -81,13 +78,16 @@ class EffectConversionHelperAidl {
         return pt ? std::to_string(*pt) : "nullptr";
     }
 
-    using AudioChannelLayout = aidl::android::media::audio::common::AudioChannelLayout;
     const aidl::android::media::audio::common::AudioConfig kDefaultAudioConfig = {
             .base = {.sampleRate = 44100,
-                     .channelMask = AudioChannelLayout::make<AudioChannelLayout::layoutMask>(
-                             AudioChannelLayout::LAYOUT_STEREO),
-                     .format = kDefaultFormatDescription},
+                     .channelMask = aidl::android::media::audio::common::AudioChannelLayout::make<
+                             aidl::android::media::audio::common::AudioChannelLayout::layoutMask>(
+                             aidl::android::media::audio::common::AudioChannelLayout::
+                                     LAYOUT_STEREO),
+                     .format = {.type = aidl::android::media::audio::common::AudioFormatType::PCM,
+                                .pcm = aidl::android::media::audio::common::PcmType::FLOAT_32_BIT}},
             .frameCount = kDefaultframeCount};
+
     // command handler map
     typedef status_t (EffectConversionHelperAidl::*CommandHandler)(uint32_t /* cmdSize */,
                                                                    const void* /* pCmdData */,
@@ -98,7 +98,6 @@ class EffectConversionHelperAidl {
     std::shared_ptr<StatusMQ> mStatusQ = nullptr;
     std::shared_ptr<DataMQ> mInputQ = nullptr, mOutputQ = nullptr;
 
-
     struct EventFlagDeleter {
         void operator()(::android::hardware::EventFlag* flag) const {
             if (flag) {
@@ -108,8 +107,10 @@ class EffectConversionHelperAidl {
     };
     std::shared_ptr<android::hardware::EventFlag> mEfGroup = nullptr;
     status_t updateEventFlags();
-
-    void updateMqs(const ::aidl::android::hardware::audio::effect::IEffect::OpenEffectReturn& ret);
+    void updateDataMqs(
+            const ::aidl::android::hardware::audio::effect::IEffect::OpenEffectReturn& ret);
+    void updateMqsAndEventFlags(
+            const ::aidl::android::hardware::audio::effect::IEffect::OpenEffectReturn& ret);
 
     status_t handleInit(uint32_t cmdSize, const void* pCmdData, uint32_t* replySize,
                         void* pReplyData);

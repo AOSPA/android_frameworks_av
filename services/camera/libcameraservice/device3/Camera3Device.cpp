@@ -112,6 +112,7 @@
 using namespace android::camera3;
 using namespace android::camera3::SessionConfigurationUtils;
 using namespace android::hardware::camera;
+using namespace android::hardware::cameraservice::utils::conversion::aidl;
 
 namespace flags = com::android::internal::camera::flags;
 namespace android {
@@ -287,6 +288,8 @@ status_t Camera3Device::initializeCommonLocked() {
                 strerror(-res), res);
         return res;
     }
+
+    mSupportsExtensionKeys = areExtensionKeysSupported(mDeviceInfo);
 
     return OK;
 }
@@ -2593,10 +2596,13 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
 
     config.streams = streams.editArray();
     config.hal_buffer_managed_streams = mHalBufManagedStreamIds;
+    config.use_hal_buf_manager = mUseHalBufManager;
 
     // Do the HAL configuration; will potentially touch stream
-    // max_buffers, usage, and priv fields, as well as data_space and format
-    // fields for IMPLEMENTATION_DEFINED formats.
+    // max_buffers, usage, priv fields, data_space and format
+    // fields for IMPLEMENTATION_DEFINED formats as well as hal buffer managed
+    // streams and use_hal_buf_manager (in case aconfig flag session_hal_buf_manager
+    // is not enabled but the HAL supports session specific hal buffer manager).
 
     int64_t logId = mCameraServiceProxyWrapper->getCurrentLogIdForCamera(mId);
     const camera_metadata_t *sessionBuffer = sessionParams.getAndLock();
@@ -2616,6 +2622,8 @@ status_t Camera3Device::configureStreamsLocked(int operatingMode,
                 strerror(-res), res);
         return res;
     }
+    // It is possible that use hal buffer manager behavior was changed by the
+    // configureStreams call.
     mUseHalBufManager = config.use_hal_buf_manager;
     if (flags::session_hal_buf_manager()) {
         bool prevSessionHalBufManager = (mHalBufManagedStreamIds.size() != 0);
@@ -3955,12 +3963,21 @@ status_t Camera3Device::RequestThread::prepareHalRequests() {
 
                     for (it = captureRequest->mSettingsList.begin();
                             it != captureRequest->mSettingsList.end(); it++) {
-                        res = hardware::cameraservice::utils::conversion::aidl::filterVndkKeys(
-                                mVndkVersion, it->metadata, false /*isStatic*/);
+                        res = filterVndkKeys(mVndkVersion, it->metadata, false /*isStatic*/);
                         if (res != OK) {
                             SET_ERR("RequestThread: Failed during VNDK filter of capture requests "
                                     "%d: %s (%d)", halRequest->frame_number, strerror(-res), res);
                             return INVALID_OPERATION;
+                        }
+
+                        if (!parent->mSupportsExtensionKeys) {
+                            res = filterExtensionKeys(&it->metadata);
+                            if (res != OK) {
+                                SET_ERR("RequestThread: Failed during extension filter of capture "
+                                        "requests %d: %s (%d)", halRequest->frame_number,
+                                        strerror(-res), res);
+                                return INVALID_OPERATION;
+                            }
                         }
                     }
                 }

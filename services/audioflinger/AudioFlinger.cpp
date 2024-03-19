@@ -311,7 +311,8 @@ void AudioFlinger::onFirstRef()
     }
 
     mPatchPanel = IAfPatchPanel::create(sp<IAfPatchPanelCallback>::fromExisting(this));
-    mMelReporter = sp<MelReporter>::make(sp<IAfMelReporterCallback>::fromExisting(this));
+    mMelReporter = sp<MelReporter>::make(sp<IAfMelReporterCallback>::fromExisting(this),
+                                         mPatchPanel);
 }
 
 status_t AudioFlinger::setAudioHalPids(const std::vector<pid_t>& pids) {
@@ -1956,7 +1957,7 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
     mHardwareStatus = AUDIO_HW_IDLE;
 
     // Change parameters of the configuration each iteration until we find a
-    // configuration that the device will support.
+    // configuration that the device will support, or HAL suggests what it supports.
     audio_config_t config = AUDIO_CONFIG_INITIALIZER;
     for (auto testChannelMask : channelMasks) {
         config.channel_mask = testChannelMask;
@@ -1966,11 +1967,16 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
                 config.sample_rate = testSampleRate;
 
                 size_t bytes = 0;
+                audio_config_t loopConfig = config;
                 status_t result = dev->getInputBufferSize(&config, &bytes);
+                if (result == BAD_VALUE) {
+                    // Retry with the config suggested by the HAL.
+                    result = dev->getInputBufferSize(&config, &bytes);
+                }
                 if (result != OK || bytes == 0) {
+                    config = loopConfig;
                     continue;
                 }
-
                 if (config.sample_rate != sampleRate || config.channel_mask != channelMask ||
                     config.format != format) {
                     uint32_t dstChannelCount = audio_channel_count_from_in_mask(channelMask);
@@ -2170,30 +2176,24 @@ sp<IAfThreadBase> AudioFlinger::getEffectThread_l(audio_session_t sessionId,
     sp<IAfThreadBase> thread;
 
     for (size_t i = 0; i < mPlaybackThreads.size(); i++) {
-        if (mPlaybackThreads.valueAt(i)->getEffect(sessionId, effectId) != 0) {
-            ALOG_ASSERT(thread == 0);
-            thread = mPlaybackThreads.valueAt(i);
+        thread = mPlaybackThreads.valueAt(i);
+        if (thread->getEffect(sessionId, effectId) != 0) {
+            return thread;
         }
-    }
-    if (thread != nullptr) {
-        return thread;
     }
     for (size_t i = 0; i < mRecordThreads.size(); i++) {
-        if (mRecordThreads.valueAt(i)->getEffect(sessionId, effectId) != 0) {
-            ALOG_ASSERT(thread == 0);
-            thread = mRecordThreads.valueAt(i);
+        thread = mRecordThreads.valueAt(i);
+        if (thread->getEffect(sessionId, effectId) != 0) {
+            return thread;
         }
-    }
-    if (thread != nullptr) {
-        return thread;
     }
     for (size_t i = 0; i < mMmapThreads.size(); i++) {
-        if (mMmapThreads.valueAt(i)->getEffect(sessionId, effectId) != 0) {
-            ALOG_ASSERT(thread == 0);
-            thread = mMmapThreads.valueAt(i);
+        thread = mMmapThreads.valueAt(i);
+        if (thread->getEffect(sessionId, effectId) != 0) {
+            return thread;
         }
     }
-    return thread;
+    return nullptr;
 }
 
 // ----------------------------------------------------------------------------
@@ -2546,6 +2546,7 @@ AudioHwDevice* AudioFlinger::loadHwModule_ll(const char *name)
         bool mm;
         if (OK == dev->getMasterMute(&mm)) {
             mMasterMute = mm;
+            ALOGI_IF(mMasterMute, "%s: applying mute from HAL %s", __func__, name);
         }
     }
 
@@ -4389,11 +4390,12 @@ void AudioFlinger::setEffectSuspended(int effectId,
 
     sp<IAfThreadBase> thread = getEffectThread_l(sessionId, effectId);
     if (thread == nullptr) {
-      return;
+        return;
     }
     audio_utils::lock_guard _sl(thread->mutex());
-    sp<IAfEffectModule> effect = thread->getEffect_l(sessionId, effectId);
-    thread->setEffectSuspended_l(&effect->desc().type, suspended, sessionId);
+    if (const auto& effect = thread->getEffect_l(sessionId, effectId)) {
+        thread->setEffectSuspended_l(&effect->desc().type, suspended, sessionId);
+    }
 }
 
 
@@ -4485,7 +4487,7 @@ status_t AudioFlinger::moveEffectChain_ll(audio_session_t sessionId,
             if (effect->state() == IAfEffectModule::ACTIVE ||
                     effect->state() == IAfEffectModule::STOPPING) {
                 ++started;
-                effect->start();
+                effect->start_l();
             }
         }
         dstChain->mutex().unlock();
@@ -4588,7 +4590,7 @@ Exit:
         // removeEffect_l() has stopped the effect if it was active so it must be restarted
         if (effect->state() == IAfEffectModule::ACTIVE ||
             effect->state() == IAfEffectModule::STOPPING) {
-            effect->start();
+            effect->start_l();
         }
     }
 
@@ -4786,7 +4788,7 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::GET_AUDIO_POLICY_CONFIG:
         case TransactionCode::GET_AUDIO_MIX_PORT:
             ALOGW("%s: transaction %d received from PID %d",
-                  __func__, code, IPCThreadState::self()->getCallingPid());
+                  __func__, static_cast<int>(code), IPCThreadState::self()->getCallingPid());
             // return status only for non void methods
             switch (code) {
                 case TransactionCode::SET_RECORD_SILENCED:
@@ -4819,7 +4821,8 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::SUPPORTS_BLUETOOTH_VARIABLE_LATENCY: {
             if (!isServiceUid(IPCThreadState::self()->getCallingUid())) {
                 ALOGW("%s: transaction %d received from PID %d unauthorized UID %d",
-                      __func__, code, IPCThreadState::self()->getCallingPid(),
+                      __func__, static_cast<int>(code),
+                      IPCThreadState::self()->getCallingPid(),
                       IPCThreadState::self()->getCallingUid());
                 // return status only for non-void methods
                 switch (code) {

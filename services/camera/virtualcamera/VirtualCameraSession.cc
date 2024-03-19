@@ -18,6 +18,7 @@
 #define LOG_TAG "VirtualCameraSession"
 #include "VirtualCameraSession.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -26,6 +27,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <tuple>
 #include <unordered_set>
@@ -40,9 +42,11 @@
 #include "aidl/android/hardware/camera/common/Status.h"
 #include "aidl/android/hardware/camera/device/BufferCache.h"
 #include "aidl/android/hardware/camera/device/BufferStatus.h"
+#include "aidl/android/hardware/camera/device/CameraMetadata.h"
 #include "aidl/android/hardware/camera/device/CaptureRequest.h"
 #include "aidl/android/hardware/camera/device/HalStream.h"
 #include "aidl/android/hardware/camera/device/NotifyMsg.h"
+#include "aidl/android/hardware/camera/device/RequestTemplate.h"
 #include "aidl/android/hardware/camera/device/ShutterMsg.h"
 #include "aidl/android/hardware/camera/device/StreamBuffer.h"
 #include "aidl/android/hardware/camera/device/StreamConfiguration.h"
@@ -58,7 +62,7 @@
 #include "util/EglFramebuffer.h"
 #include "util/EglProgram.h"
 #include "util/JpegUtil.h"
-#include "util/MetadataBuilder.h"
+#include "util/MetadataUtil.h"
 #include "util/TestPatternHelper.h"
 #include "util/Util.h"
 
@@ -68,6 +72,7 @@ namespace virtualcamera {
 
 using ::aidl::android::companion::virtualcamera::Format;
 using ::aidl::android::companion::virtualcamera::IVirtualCameraCallback;
+using ::aidl::android::companion::virtualcamera::SupportedStreamConfiguration;
 using ::aidl::android::hardware::camera::common::Status;
 using ::aidl::android::hardware::camera::device::BufferCache;
 using ::aidl::android::hardware::camera::device::CameraMetadata;
@@ -96,36 +101,75 @@ using namespace std::chrono_literals;
 
 // Size of request/result metadata fast message queue.
 // Setting to 0 to always disables FMQ.
-static constexpr size_t kMetadataMsgQueueSize = 0;
+constexpr size_t kMetadataMsgQueueSize = 0;
 
 // Maximum number of buffers to use per single stream.
-static constexpr size_t kMaxStreamBuffers = 2;
+constexpr size_t kMaxStreamBuffers = 2;
 
-CameraMetadata createDefaultRequestSettings(RequestTemplate type) {
-  hardware::camera::common::V1_0::helper::CameraMetadata metadataHelper;
+constexpr int32_t kDefaultJpegQuality = 80;
+constexpr int32_t kDefaultJpegThumbnailQuality = 70;
 
-  camera_metadata_enum_android_control_capture_intent_t intent =
-      ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
+// Thumbnail size (0,0) correspods to disabling thumbnail.
+const Resolution kDefaultJpegThumbnailSize(0, 0);
+
+camera_metadata_enum_android_control_capture_intent_t requestTemplateToIntent(
+    const RequestTemplate type) {
   switch (type) {
     case RequestTemplate::PREVIEW:
-      intent = ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
-      break;
+      return ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
     case RequestTemplate::STILL_CAPTURE:
-      intent = ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
-      break;
+      return ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
     case RequestTemplate::VIDEO_RECORD:
-      intent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
-      break;
+      return ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_RECORD;
     case RequestTemplate::VIDEO_SNAPSHOT:
-      intent = ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
-      break;
+      return ANDROID_CONTROL_CAPTURE_INTENT_VIDEO_SNAPSHOT;
     default:
-      // Leave default.
-      break;
+      // Return PREVIEW by default
+      return ANDROID_CONTROL_CAPTURE_INTENT_PREVIEW;
   }
+}
 
-  auto metadata = MetadataBuilder().setControlCaptureIntent(intent).build();
-  return (metadata != nullptr) ? std::move(*metadata) : CameraMetadata();
+int getMaxFps(const std::vector<SupportedStreamConfiguration>& configs) {
+  return std::transform_reduce(
+      configs.begin(), configs.end(), 0,
+      [](const int a, const int b) { return std::max(a, b); },
+      [](const SupportedStreamConfiguration& config) { return config.maxFps; });
+}
+
+CameraMetadata createDefaultRequestSettings(
+    const RequestTemplate type,
+    const std::vector<SupportedStreamConfiguration>& inputConfigs) {
+  int maxFps = getMaxFps(inputConfigs);
+  auto metadata =
+      MetadataBuilder()
+          .setControlCaptureIntent(requestTemplateToIntent(type))
+          .setControlMode(ANDROID_CONTROL_MODE_AUTO)
+          .setControlAeMode(ANDROID_CONTROL_AE_MODE_ON)
+          .setControlAeExposureCompensation(0)
+          .setControlAeTargetFpsRange(maxFps, maxFps)
+          .setControlAeAntibandingMode(ANDROID_CONTROL_AE_ANTIBANDING_MODE_AUTO)
+          .setControlAePrecaptureTrigger(
+              ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE)
+          .setControlAfTrigger(ANDROID_CONTROL_AF_TRIGGER_IDLE)
+          .setControlAfMode(ANDROID_CONTROL_AF_MODE_OFF)
+          .setControlAwbMode(ANDROID_CONTROL_AWB_MODE_AUTO)
+          .setControlEffectMode(ANDROID_CONTROL_EFFECT_MODE_OFF)
+          .setFaceDetectMode(ANDROID_STATISTICS_FACE_DETECT_MODE_OFF)
+          .setFlashMode(ANDROID_FLASH_MODE_OFF)
+          .setFlashState(ANDROID_FLASH_STATE_UNAVAILABLE)
+          .setJpegQuality(VirtualCameraDevice::kDefaultJpegQuality)
+          .setJpegThumbnailQuality(VirtualCameraDevice::kDefaultJpegQuality)
+          .setJpegThumbnailSize(0, 0)
+          .build();
+  if (metadata == nullptr) {
+    ALOGE("%s: Failed to construct metadata for default request type %s",
+          __func__, toString(type).c_str());
+    return CameraMetadata();
+  } else {
+    ALOGV("%s: Successfully created metadata for request type %s", __func__,
+          toString(type).c_str());
+  }
+  return *metadata;
 }
 
 HalStream getHalStream(const Stream& stream) {
@@ -148,6 +192,23 @@ HalStream getHalStream(const Stream& stream) {
   halStream.producerUsage = BufferUsage::GPU_RENDER_TARGET;
   halStream.supportOffline = false;
   return halStream;
+}
+
+Stream getHighestResolutionStream(const std::vector<Stream>& streams) {
+  return *(std::max_element(streams.begin(), streams.end(),
+                            [](const Stream& a, const Stream& b) {
+                              return a.width * a.height < b.width * b.height;
+                            }));
+}
+
+RequestSettings createSettingsFromMetadata(const CameraMetadata& metadata) {
+  return RequestSettings{
+      .jpegQuality = getJpegQuality(metadata).value_or(
+          VirtualCameraDevice::kDefaultJpegQuality),
+      .thumbnailResolution =
+          getJpegThumbnailSize(metadata).value_or(Resolution(0, 0)),
+      .thumbnailJpegQuality = getJpegThumbnailQuality(metadata).value_or(
+          VirtualCameraDevice::kDefaultJpegQuality)};
 }
 
 }  // namespace
@@ -233,13 +294,15 @@ ndk::ScopedAStatus VirtualCameraSession::configureStreams(
       }
     }
 
-    inputWidth = streams[0].width;
-    inputHeight = streams[0].height;
+    Stream maxResStream = getHighestResolutionStream(streams);
+    inputWidth = maxResStream.width;
+    inputHeight = maxResStream.height;
     if (mRenderThread == nullptr) {
       // If there's no client callback, start camera in test mode.
       const bool testMode = mVirtualCameraClientCallback == nullptr;
       mRenderThread = std::make_unique<VirtualCameraRenderThread>(
-          mSessionContext, inputWidth, inputHeight, mCameraDeviceCallback,
+          mSessionContext, Resolution(inputWidth, inputHeight),
+          virtualCamera->getMaxInputResolution(), mCameraDeviceCallback,
           testMode);
       mRenderThread->start();
       inputSurface = mRenderThread->getInputSurface();
@@ -255,7 +318,6 @@ ndk::ScopedAStatus VirtualCameraSession::configureStreams(
         inputWidth, inputHeight, Format::YUV_420_888);
   }
 
-  mFirstRequest.store(true);
   return ndk::ScopedAStatus::ok();
 }
 
@@ -263,12 +325,22 @@ ndk::ScopedAStatus VirtualCameraSession::constructDefaultRequestSettings(
     RequestTemplate in_type, CameraMetadata* _aidl_return) {
   ALOGV("%s: type %d", __func__, static_cast<int32_t>(in_type));
 
+  std::shared_ptr<VirtualCameraDevice> camera = mCameraDevice.lock();
+  if (camera == nullptr) {
+    ALOGW(
+        "%s: constructDefaultRequestSettings called on already unregistered "
+        "camera",
+        __func__);
+    return cameraStatus(Status::CAMERA_DISCONNECTED);
+  }
+
   switch (in_type) {
     case RequestTemplate::PREVIEW:
     case RequestTemplate::STILL_CAPTURE:
     case RequestTemplate::VIDEO_RECORD:
     case RequestTemplate::VIDEO_SNAPSHOT: {
-      *_aidl_return = createDefaultRequestSettings(in_type);
+      *_aidl_return =
+          createDefaultRequestSettings(in_type, camera->getInputConfigs());
       return ndk::ScopedAStatus::ok();
     }
     case RequestTemplate::MANUAL:
@@ -387,13 +459,25 @@ ndk::ScopedAStatus VirtualCameraSession::processCaptureRequest(
     const CaptureRequest& request) {
   ALOGD("%s: request: %s", __func__, request.toString().c_str());
 
-  if (mFirstRequest.exchange(false) && request.settings.metadata.empty()) {
-    return cameraStatus(Status::ILLEGAL_ARGUMENT);
-  }
-
   std::shared_ptr<ICameraDeviceCallback> cameraCallback = nullptr;
+  RequestSettings requestSettings;
   {
     std::lock_guard<std::mutex> lock(mLock);
+
+    // If metadata it empty, last received metadata applies, if  it's non-empty
+    // update it.
+    if (!request.settings.metadata.empty()) {
+      mCurrentRequestMetadata = request.settings;
+    }
+
+    // We don't have any metadata for this request - this means we received none
+    // in first request, this is an error state.
+    if (mCurrentRequestMetadata.metadata.empty()) {
+      return cameraStatus(Status::ILLEGAL_ARGUMENT);
+    }
+
+    requestSettings = createSettingsFromMetadata(mCurrentRequestMetadata);
+
     cameraCallback = mCameraDeviceCallback;
   }
 
@@ -427,7 +511,7 @@ ndk::ScopedAStatus VirtualCameraSession::processCaptureRequest(
       return cameraStatus(Status::INTERNAL_ERROR);
     }
     mRenderThread->enqueueTask(std::make_unique<ProcessCaptureRequestTask>(
-        request.frameNumber, taskBuffers));
+        request.frameNumber, taskBuffers, requestSettings));
   }
 
   if (mVirtualCameraClientCallback != nullptr) {

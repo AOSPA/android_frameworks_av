@@ -1,5 +1,6 @@
 // music bundle wrapper
 package {
+    default_team: "trendy_team_media_framework_audio",
     default_applicable_licenses: [
         "frameworks_av_media_libeffects_lvm_wrapper_license",
     ],
@@ -120,7 +121,6 @@ cc_library_shared {
     shared_libs: [
         "libaudio_aidl_conversion_common_ndk",
         "libaudioutils",
-        "libbinder",
         "liblog",
         "libstagefright_foundation",
     ],
