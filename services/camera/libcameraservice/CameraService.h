@@ -78,7 +78,8 @@ class CameraService :
     public virtual ::android::hardware::BnCameraService,
     public virtual IBinder::DeathRecipient,
     public virtual CameraProviderManager::StatusListener,
-    public virtual IServiceManager::LocalRegistrationCallback
+    public virtual IServiceManager::LocalRegistrationCallback,
+    public AttributionAndPermissionUtilsEncapsulator
 {
     friend class BinderService<CameraService>;
     friend class CameraOfflineSessionClient;
@@ -317,13 +318,6 @@ public:
     // Shared utilities
     static binder::Status filterGetInfoErrorCode(status_t err);
 
-    bool isAutomotiveDevice() const;
-
-    /**
-     * Returns true if the client has uid AID_AUTOMOTIVE_EVS and the device is an automotive device.
-     */
-    bool isAutomotivePrivilegedClient(int32_t uid) const;
-
     /**
      * Returns true if the device is an automotive device and cameraId is system
      * only camera which has characteristic AUTOMOTIVE_LOCATION value as either
@@ -335,7 +329,9 @@ public:
     /////////////////////////////////////////////////////////////////////
     // CameraClient functionality
 
-    class BasicClient : public virtual RefBase {
+    class BasicClient :
+        public virtual RefBase,
+        public AttributionAndPermissionUtilsEncapsulator {
     friend class CameraService;
     public:
         virtual status_t       initialize(sp<CameraProviderManager> manager,
@@ -459,8 +455,6 @@ public:
                 bool overrideToPortrait);
 
         virtual ~BasicClient();
-
-        std::shared_ptr<AttributionAndPermissionUtils> mAttributionAndPermissionUtils;
 
         // the instance is in the middle of destruction. When this is set,
         // the instance should not be accessed from callback.
@@ -681,20 +675,6 @@ private:
         return activityManager;
     }
 
-    bool hasPermissionsForCamera(int callingPid, int callingUid) const;
-
-    bool hasPermissionsForCamera(const std::string& cameraId, int callingPid, int callingUid) const;
-
-    bool hasPermissionsForSystemCamera(const std::string& cameraId, int callingPid, int callingUid,
-            bool checkCameraPermissions = true) const;
-
-    bool hasPermissionsForCameraHeadlessSystemUser(const std::string& cameraId, int callingPid,
-            int callingUid) const;
-
-    bool hasPermissionsForCameraPrivacyAllowlist(int callingPid, int callingUid) const;
-
-    bool hasPermissionsForOpenCloseListener(int callingPid, int callingUid) const;
-
    /**
      * Typesafe version of device status, containing both the HAL-layer and the service interface-
      * layer values.
@@ -879,12 +859,13 @@ private:
     // prevented from accessing the camera.
     class SensorPrivacyPolicy : public hardware::BnSensorPrivacyListener,
             public virtual IBinder::DeathRecipient,
-            public virtual IServiceManager::LocalRegistrationCallback {
+            public virtual IServiceManager::LocalRegistrationCallback,
+            public AttributionAndPermissionUtilsEncapsulator {
         public:
             explicit SensorPrivacyPolicy(wp<CameraService> service,
                     std::shared_ptr<AttributionAndPermissionUtils> attributionAndPermissionUtils)
-                    : mService(service),
-                      mAttributionAndPermissionUtils(attributionAndPermissionUtils),
+                    : AttributionAndPermissionUtilsEncapsulator(attributionAndPermissionUtils),
+                      mService(service),
                       mSensorPrivacyEnabled(false),
                     mCameraPrivacyState(SensorPrivacyManager::DISABLED), mRegistered(false) {}
 
@@ -909,7 +890,6 @@ private:
         private:
             SensorPrivacyManager mSpm;
             wp<CameraService> mService;
-            std::shared_ptr<AttributionAndPermissionUtils> mAttributionAndPermissionUtils;
             Mutex mSensorPrivacyLock;
             bool mSensorPrivacyEnabled;
             int mCameraPrivacyState;
@@ -924,7 +904,6 @@ private:
     sp<SensorPrivacyPolicy> mSensorPrivacyPolicy;
 
     std::shared_ptr<CameraServiceProxyWrapper> mCameraServiceProxyWrapper;
-    std::shared_ptr<AttributionAndPermissionUtils> mAttributionAndPermissionUtils;
 
     // Delay-load the Camera HAL module
     virtual void onFirstRef();
@@ -936,11 +915,6 @@ private:
     // Caller must not hold mServiceLock
     void addStates(const std::string& id);
     void removeStates(const std::string& id);
-
-    bool isTrustedCallingUid(uid_t uid) const;
-
-    status_t getUidForPackage(const std::string &packageName, int userId,
-            /*inout*/uid_t& uid, int err) const;
 
     // Check if we can connect, before we acquire the service lock.
     // The returned originalClientPid is the PID of the original process that wants to connect to

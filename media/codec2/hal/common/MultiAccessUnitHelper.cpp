@@ -91,18 +91,23 @@ C2Component::kind_t MultiAccessUnitInterface::kind() const {
     return (C2Component::kind_t)(mKind.value);
 }
 
-void MultiAccessUnitInterface::getDecoderSampleRateAndChannelCount(
-        uint32_t &sampleRate_, uint32_t &channelCount_) const {
+bool MultiAccessUnitInterface::getDecoderSampleRateAndChannelCount(
+        uint32_t * const sampleRate_, uint32_t * const channelCount_) const {
+    if (sampleRate_ == nullptr || channelCount_ == nullptr) {
+        return false;
+    }
     if (mC2ComponentIntf) {
         C2StreamSampleRateInfo::output sampleRate;
         C2StreamChannelCountInfo::output channelCount;
         c2_status_t res = mC2ComponentIntf->query_vb(
                 {&sampleRate, &channelCount}, {}, C2_MAY_BLOCK, nullptr);
-        if (res == C2_OK) {
-            sampleRate_ = sampleRate.value;
-            channelCount_ = channelCount.value;
+        if (res == C2_OK && sampleRate.value > 0 && channelCount.value > 0) {
+            *sampleRate_ = sampleRate.value;
+            *channelCount_ = channelCount.value;
+            return true;
         }
     }
+    return false;
 }
 
 //C2MultiAccessUnitBuffer
@@ -116,12 +121,12 @@ class C2MultiAccessUnitBuffer : public C2Buffer {
 
 //MultiAccessUnitHelper
 MultiAccessUnitHelper::MultiAccessUnitHelper(
-        const std::shared_ptr<MultiAccessUnitInterface>& intf):
+        const std::shared_ptr<MultiAccessUnitInterface>& intf,
+        std::shared_ptr<C2BlockPool>& linearPool):
         mInit(false),
-        mInterface(intf) {
-    std::shared_ptr<C2AllocatorStore> store = GetCodec2PlatformAllocatorStore();
-    if(store->fetchAllocator(C2AllocatorStore::DEFAULT_LINEAR, &mLinearAllocator) == C2_OK) {
-        mLinearPool = std::make_shared<C2PooledBlockPool>(mLinearAllocator, ++mBlockPoolId);
+        mInterface(intf),
+        mLinearPool(linearPool) {
+    if (mLinearPool) {
         mInit = true;
     }
 }
@@ -159,6 +164,7 @@ c2_status_t MultiAccessUnitHelper::error(
         std::list<std::unique_ptr<C2Work>> * const worklist) {
     if (worklist == nullptr) {
         LOG(ERROR) << "Provided null worklist for error()";
+        mFrameHolder.clear();
         return C2_OK;
     }
     std::unique_lock<std::mutex> l(mLock);
@@ -267,6 +273,7 @@ c2_status_t MultiAccessUnitHelper::scatter(
                 LOG(ERROR) << "ERROR: Work has Large frame info but has no linear blocks.";
                 return C2_CORRUPTED;
             }
+            frameInfo.mInputC2Ref = inBuffers;
             const std::vector<C2ConstLinearBlock>& multiAU =
                     inBuffers.front()->data().linearBlocks();
             std::shared_ptr<const C2AccessUnitInfos::input> auInfo =
@@ -315,26 +322,10 @@ c2_status_t MultiAccessUnitHelper::scatter(
             }
         }
         if (!processedWork->empty()) {
-            {
-                C2LargeFrame::output multiAccessParams = mInterface->getLargeFrameParam();
-                if (mInterface->kind() == C2Component::KIND_DECODER) {
-                    uint32_t sampleRate = 0;
-                    uint32_t channelCount = 0;
-                    uint32_t frameSize = 0;
-                    mInterface->getDecoderSampleRateAndChannelCount(
-                            sampleRate, channelCount);
-                    if (sampleRate > 0 && channelCount > 0) {
-                        frameSize = channelCount * 2;
-                        multiAccessParams.maxSize =
-                                (multiAccessParams.maxSize / frameSize) * frameSize;
-                        multiAccessParams.thresholdSize =
-                                (multiAccessParams.thresholdSize / frameSize) * frameSize;
-                    }
-                }
-                frameInfo.mLargeFrameTuning = multiAccessParams;
-                std::lock_guard<std::mutex> l(mLock);
-                mFrameHolder.push_back(std::move(frameInfo));
-            }
+            C2LargeFrame::output multiAccessParams = mInterface->getLargeFrameParam();
+            frameInfo.mLargeFrameTuning = multiAccessParams;
+            std::lock_guard<std::mutex> l(mLock);
+            mFrameHolder.push_back(std::move(frameInfo));
         }
     }
     return C2_OK;
@@ -501,6 +492,20 @@ c2_status_t MultiAccessUnitHelper::processWorklets(MultiAccessUnitInfo &frame,
             frame.reset();
             return C2_OK;
         }
+        int64_t sampleTimeUs = 0;
+        uint32_t frameSize = 0;
+        uint32_t sampleRate = 0;
+        uint32_t channelCount = 0;
+        if (mInterface->getDecoderSampleRateAndChannelCount(&sampleRate, &channelCount)) {
+            sampleTimeUs = (1000000u) / (sampleRate * channelCount * 2);
+            frameSize = channelCount * 2;
+            if (mInterface->kind() == C2Component::KIND_DECODER) {
+                frame.mLargeFrameTuning.maxSize =
+                        (frame.mLargeFrameTuning.maxSize / frameSize) * frameSize;
+                frame.mLargeFrameTuning.thresholdSize =
+                        (frame.mLargeFrameTuning.thresholdSize / frameSize) * frameSize;
+            }
+        }
         c2_status_t c2ret = allocateWork(frame, true);
         if (c2ret != C2_OK) {
             return c2ret;
@@ -515,15 +520,7 @@ c2_status_t MultiAccessUnitHelper::processWorklets(MultiAccessUnitInfo &frame,
         outputFramedata.infoBuffers.insert(outputFramedata.infoBuffers.begin(),
                 (*worklet)->output.infoBuffers.begin(),
                 (*worklet)->output.infoBuffers.end());
-        int64_t sampleTimeUs = 0;
-        uint32_t frameSize = 0;
-        uint32_t sampleRate = 0;
-        uint32_t channelCount = 0;
-        mInterface->getDecoderSampleRateAndChannelCount(sampleRate, channelCount);
-        if (sampleRate > 0 && channelCount > 0) {
-            sampleTimeUs = (1000000u) / (sampleRate * channelCount * 2);
-            frameSize = channelCount * 2;
-        }
+
         LOG(DEBUG) << "maxOutSize " << frame.mLargeFrameTuning.maxSize
                 << " threshold " << frame.mLargeFrameTuning.thresholdSize;
         if ((*worklet)->output.buffers.size() > 0) {
