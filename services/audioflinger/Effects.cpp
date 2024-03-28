@@ -31,6 +31,7 @@
 #include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioEffect.h>
+#include <media/EffectClientAsyncProxy.h>
 #include <media/ShmemCompat.h>
 #include <media/TypeConverter.h>
 #include <media/audiohal/EffectHalInterface.h>
@@ -1545,13 +1546,16 @@ status_t EffectModule::setHapticScale_l(int id, os::HapticScale hapticScale) {
         return INVALID_OPERATION;
     }
 
-    std::vector<uint8_t> request(sizeof(effect_param_t) + 3 * sizeof(uint32_t));
+    std::vector<uint8_t> request(sizeof(effect_param_t) + 3 * sizeof(uint32_t) + sizeof(float));
     effect_param_t *param = (effect_param_t*) request.data();
     param->psize = sizeof(int32_t);
-    param->vsize = sizeof(int32_t) * 2;
+    param->vsize = sizeof(int32_t) * 2 + sizeof(float);
     *(int32_t*)param->data = HG_PARAM_HAPTIC_INTENSITY;
-    *((int32_t*)param->data + 1) = id;
-    *((int32_t*)param->data + 2) = static_cast<int32_t>(hapticScale.getLevel());
+    int32_t* hapticScalePtr = reinterpret_cast<int32_t*>(param->data + sizeof(int32_t));
+    hapticScalePtr[0] = id;
+    hapticScalePtr[1] = static_cast<int32_t>(hapticScale.getLevel());
+    float* adaptiveScaleFactorPtr = reinterpret_cast<float*>(param->data + 3 * sizeof(int32_t));
+    *adaptiveScaleFactorPtr = hapticScale.getAdaptiveScaleFactor();
     std::vector<uint8_t> response;
     status_t status = command(EFFECT_CMD_SET_PARAM, request, sizeof(int32_t), &response);
     if (status == NO_ERROR) {
@@ -1726,7 +1730,8 @@ EffectHandle::EffectHandle(const sp<IAfEffectBase>& effect,
                                          const sp<media::IEffectClient>& effectClient,
                                          int32_t priority, bool notifyFramesProcessed)
     : BnEffect(),
-    mEffect(effect), mEffectClient(effectClient), mClient(client), mCblk(NULL),
+    mEffect(effect), mEffectClient(media::EffectClientAsyncProxy::makeIfNeeded(effectClient)),
+    mClient(client), mCblk(nullptr),
     mPriority(priority), mHasControl(false), mEnabled(false), mDisconnected(false),
     mNotifyFramesProcessed(notifyFramesProcessed)
 {

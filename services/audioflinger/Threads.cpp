@@ -2934,7 +2934,6 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
 
             // Set haptic intensity for effect
             if (chain != nullptr) {
-                // TODO(b/324559333): Add adaptive haptics scaling support for the HapticGenerator.
                 chain->setHapticScale_l(track->id(), hapticScale);
             }
         }
@@ -3535,7 +3534,7 @@ void PlaybackThread::checkSilentMode_l()
             char *endptr;
             unsigned long ul = strtoul(value, &endptr, 0);
             if (*endptr == '\0' && ul != 0) {
-                ALOGD("Silence is golden");
+                ALOGW("%s: mute from ro.audio.silent. Silence is golden", __func__);
                 // The setprop command will not allow a property to be changed after
                 // the first time it is set, so we don't have to worry about un-muting.
                 setMasterMute_l(true);
@@ -8015,6 +8014,11 @@ void SpatializerThread::setHalLatencyMode_l() {
     if (mSupportedLatencyModes.empty()) {
         return;
     }
+    // Do not update the HAL latency mode if no track is active
+    if (mActiveTracks.isEmpty()) {
+        return;
+    }
+
     audio_latency_mode_t latencyMode = AUDIO_LATENCY_MODE_FREE;
     if (mSupportedLatencyModes.size() == 1) {
         // If the HAL only support one latency mode currently, confirm the choice
