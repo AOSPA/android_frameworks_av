@@ -14,7 +14,7 @@
  * limitations under the License.
  *
  * Changes from Qualcomm Innovation Center are provided under the following license:
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
@@ -1859,7 +1859,8 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     if (mSpatializerOutput != nullptr
             && canBeSpatializedInt(attr, config, devices.toTypeAddrVector())
             && prefMixerConfigInfo == nullptr
-            && ((*flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0)) {
+            && (((*flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0)
+                  || audio_is_linear_pcm(config->format))) {
         *isSpatialized = true;
         return mSpatializerOutput->mIoHandle;
     }
