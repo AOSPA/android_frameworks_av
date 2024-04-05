@@ -196,7 +196,7 @@ c2_status_t C2IgbaBlockPool::fetchGraphicBlock(
         // SyncFence waiting timeout.
         // Usually HAL treats C2_TIMED_OUT as an irrecoverable error.
         // We want HAL to re-try.
-        return C2_TIMED_OUT;
+        return C2_BLOCKING;
     }
     return res;
 }
