@@ -33,6 +33,7 @@
 #include "util/EglFramebuffer.h"
 #include "util/EglProgram.h"
 #include "util/EglSurfaceTexture.h"
+#include "util/MetadataUtil.h"
 #include "util/Util.h"
 
 namespace android {
@@ -56,8 +57,13 @@ class CaptureRequestBuffer {
 
 struct RequestSettings {
   int jpegQuality = VirtualCameraDevice::kDefaultJpegQuality;
+  int jpegOrientation = VirtualCameraDevice::kDefaultJpegOrientation;
   Resolution thumbnailResolution = Resolution(0, 0);
   int thumbnailJpegQuality = VirtualCameraDevice::kDefaultJpegQuality;
+  std::optional<FpsRange> fpsRange;
+  camera_metadata_enum_android_control_capture_intent_t captureIntent =
+      VirtualCameraDevice::kDefaultCaptureIntent;
+  std::optional<GpsCoordinates> gpsCoordinates;
 };
 
 // Represents single capture request to fill set of buffers.
@@ -149,6 +155,8 @@ class VirtualCameraRenderThread {
   // Always called on render thread.
   ndk::ScopedAStatus renderIntoBlobStreamBuffer(
       const int streamId, const int bufferId,
+      const ::aidl::android::hardware::camera::device::CameraMetadata&
+          resultMetadata,
       const RequestSettings& requestSettings, sp<Fence> fence = nullptr);
 
   // Render current image to the YCbCr buffer.
@@ -162,8 +170,9 @@ class VirtualCameraRenderThread {
   // If fence is specified, this function will block until the fence is cleared
   // before writing to the buffer.
   // Always called on the render thread.
-  ndk::ScopedAStatus renderIntoEglFramebuffer(EglFrameBuffer& framebuffer,
-                                              sp<Fence> fence = nullptr);
+  ndk::ScopedAStatus renderIntoEglFramebuffer(
+      EglFrameBuffer& framebuffer, sp<Fence> fence = nullptr,
+      std::optional<Rect> viewport = std::nullopt);
 
   // Camera callback
   const std::shared_ptr<

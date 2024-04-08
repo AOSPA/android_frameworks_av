@@ -61,6 +61,7 @@ namespace flags = com::android::internal::camera::flags;
 CameraDeviceClientBase::CameraDeviceClientBase(
         const sp<CameraService>& cameraService,
         const sp<hardware::camera2::ICameraDeviceCallbacks>& remoteCallback,
+        std::shared_ptr<AttributionAndPermissionUtils> attributionAndPermissionUtils,
         const std::string& clientPackageName,
         bool systemNativeClient,
         const std::optional<std::string>& clientFeatureId,
@@ -74,6 +75,7 @@ CameraDeviceClientBase::CameraDeviceClientBase(
         bool overrideToPortrait) :
     BasicClient(cameraService,
             IInterface::asBinder(remoteCallback),
+            attributionAndPermissionUtils,
             clientPackageName,
             systemNativeClient,
             clientFeatureId,
@@ -92,6 +94,7 @@ CameraDeviceClientBase::CameraDeviceClientBase(
 CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
         const sp<hardware::camera2::ICameraDeviceCallbacks>& remoteCallback,
         std::shared_ptr<CameraServiceProxyWrapper> cameraServiceProxyWrapper,
+        std::shared_ptr<AttributionAndPermissionUtils> attributionAndPermissionUtils,
         const std::string& clientPackageName,
         bool systemNativeClient,
         const std::optional<std::string>& clientFeatureId,
@@ -104,7 +107,8 @@ CameraDeviceClient::CameraDeviceClient(const sp<CameraService>& cameraService,
         bool overrideForPerfClass,
         bool overrideToPortrait,
         const std::string& originalCameraId) :
-    Camera2ClientBase(cameraService, remoteCallback, cameraServiceProxyWrapper, clientPackageName,
+    Camera2ClientBase(cameraService, remoteCallback, cameraServiceProxyWrapper,
+            attributionAndPermissionUtils, clientPackageName,
             systemNativeClient, clientFeatureId, cameraId, /*API1 camera ID*/ -1, cameraFacing,
             sensorOrientation, clientPid, clientUid, servicePid, overrideForPerfClass,
             overrideToPortrait),
@@ -897,6 +901,11 @@ binder::Status CameraDeviceClient::createStream(
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
+    if (!outputConfiguration.isComplete()) {
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
+                "OutputConfiguration isn't valid!");
+    }
+
     const std::vector<sp<IGraphicBufferProducer>>& bufferProducers =
             outputConfiguration.getGraphicBufferProducers();
     size_t numBufferProducers = bufferProducers.size();
@@ -913,7 +922,7 @@ binder::Status CameraDeviceClient::createStream(
     bool useReadoutTimestamp = outputConfiguration.useReadoutTimestamp();
 
     res = SessionConfigurationUtils::checkSurfaceType(numBufferProducers, deferredConsumer,
-            outputConfiguration.getSurfaceType());
+            outputConfiguration.getSurfaceType(), /*isConfigurationComplete*/true);
     if (!res.isOk()) {
         return res;
     }
@@ -960,6 +969,7 @@ binder::Status CameraDeviceClient::createStream(
                 timestampBase,
                 mirrorMode,
                 colorSpace,
+                /*respectSurfaceSize*/false,
                 mPrivilegedClient);
 
         if (!res.isOk())
@@ -1072,6 +1082,10 @@ binder::Status CameraDeviceClient::createDeferredSurfaceStreamLocked(
 
     if (!mDevice.get()) {
         return STATUS_ERROR(CameraService::ERROR_DISCONNECTED, "Camera device no longer alive");
+    }
+    if (!outputConfiguration.isComplete()) {
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
+                "OutputConfiguration isn't valid!");
     }
 
     // Infer the surface info for deferred surface stream creation.
@@ -1265,6 +1279,10 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
     if (!mDevice.get()) {
         return STATUS_ERROR(CameraService::ERROR_DISCONNECTED, "Camera device no longer alive");
     }
+    if (!outputConfiguration.isComplete()) {
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
+                "OutputConfiguration isn't valid!");
+    }
 
     const std::vector<sp<IGraphicBufferProducer> >& bufferProducers =
             outputConfiguration.getGraphicBufferProducers();
@@ -1336,6 +1354,7 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
                 timestampBase,
                 mirrorMode,
                 colorSpace,
+                /*respectSurfaceSize*/false,
                 mPrivilegedClient);
         if (!res.isOk())
             return res;
@@ -1649,6 +1668,11 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
+    if (!outputConfiguration.isComplete()) {
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT,
+                "OutputConfiguration isn't valid!");
+    }
+
     const std::vector<sp<IGraphicBufferProducer> >& bufferProducers =
             outputConfiguration.getGraphicBufferProducers();
     const std::string &physicalId = outputConfiguration.getPhysicalCameraId();
@@ -1718,6 +1742,7 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
                 timestampBase,
                 mirrorMode,
                 colorSpace,
+                /*respectSurfaceSize*/false,
                 mPrivilegedClient);
 
         if (!res.isOk())
@@ -1921,9 +1946,9 @@ binder::Status CameraDeviceClient::switchToOffline(
     sp<CameraOfflineSessionClient> offlineClient;
     if (offlineSession.get() != nullptr) {
         offlineClient = new CameraOfflineSessionClient(sCameraService,
-                offlineSession, offlineCompositeStreamMap, cameraCb, mClientPackageName,
-                mClientFeatureId, mCameraIdStr, mCameraFacing, mOrientation, mClientPid, mClientUid,
-                mServicePid);
+                offlineSession, offlineCompositeStreamMap, cameraCb, mAttributionAndPermissionUtils,
+                mClientPackageName, mClientFeatureId, mCameraIdStr, mCameraFacing, mOrientation,
+                mClientPid, mClientUid, mServicePid);
         ret = sCameraService->addOfflineClient(mCameraIdStr, offlineClient);
     }
 

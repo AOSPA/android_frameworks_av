@@ -2149,7 +2149,7 @@ typedef enum acamera_metadata_tag {
      * </ul>
      */
     ACAMERA_CONTROL_SETTINGS_OVERRIDE =                         // int32 (acamera_metadata_enum_android_control_settings_override_t)
-            ACAMERA_CONTROL_START + 49,
+            ACAMERA_CONTROL_START + 52,
     /**
      * <p>List of available settings overrides supported by the camera device that can
      * be used to speed up certain controls.</p>
@@ -2175,7 +2175,7 @@ typedef enum acamera_metadata_tag {
      * @see ACAMERA_CONTROL_SETTINGS_OVERRIDE
      */
     ACAMERA_CONTROL_AVAILABLE_SETTINGS_OVERRIDES =              // int32[n]
-            ACAMERA_CONTROL_START + 50,
+            ACAMERA_CONTROL_START + 53,
     /**
      * <p>Automatic crop, pan and zoom to keep objects in the center of the frame.</p>
      *
@@ -2202,7 +2202,7 @@ typedef enum acamera_metadata_tag {
      * @see ACAMERA_SCALER_CROP_REGION
      */
     ACAMERA_CONTROL_AUTOFRAMING =                               // byte (acamera_metadata_enum_android_control_autoframing_t)
-            ACAMERA_CONTROL_START + 52,
+            ACAMERA_CONTROL_START + 55,
     /**
      * <p>Whether the camera device supports ACAMERA_CONTROL_AUTOFRAMING.</p>
      *
@@ -2218,7 +2218,7 @@ typedef enum acamera_metadata_tag {
      * <p>Will be <code>false</code> if auto-framing is not available.</p>
      */
     ACAMERA_CONTROL_AUTOFRAMING_AVAILABLE =                     // byte (acamera_metadata_enum_android_control_autoframing_available_t)
-            ACAMERA_CONTROL_START + 53,
+            ACAMERA_CONTROL_START + 56,
     /**
      * <p>Current state of auto-framing.</p>
      *
@@ -2245,7 +2245,7 @@ typedef enum acamera_metadata_tag {
      * @see ACAMERA_CONTROL_AUTOFRAMING_AVAILABLE
      */
     ACAMERA_CONTROL_AUTOFRAMING_STATE =                         // byte (acamera_metadata_enum_android_control_autoframing_state_t)
-            ACAMERA_CONTROL_START + 54,
+            ACAMERA_CONTROL_START + 57,
     /**
      * <p>The operating luminance range of low light boost measured in lux (lx).</p>
      *
@@ -2258,7 +2258,7 @@ typedef enum acamera_metadata_tag {
      *
      */
     ACAMERA_CONTROL_LOW_LIGHT_BOOST_INFO_LUMINANCE_RANGE =      // float[2]
-            ACAMERA_CONTROL_START + 55,
+            ACAMERA_CONTROL_START + 58,
     /**
      * <p>Current state of the low light boost AE mode.</p>
      *
@@ -2278,7 +2278,7 @@ typedef enum acamera_metadata_tag {
      * 'ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY.</p>
      */
     ACAMERA_CONTROL_LOW_LIGHT_BOOST_STATE =                     // byte (acamera_metadata_enum_android_control_low_light_boost_state_t)
-            ACAMERA_CONTROL_START + 56,
+            ACAMERA_CONTROL_START + 59,
     ACAMERA_CONTROL_END,
 
     /**
@@ -2688,7 +2688,9 @@ typedef enum acamera_metadata_tag {
      * upright.</p>
      * <p>Camera devices may either encode this value into the JPEG EXIF header, or
      * rotate the image data to match this orientation. When the image data is rotated,
-     * the thumbnail data will also be rotated.</p>
+     * the thumbnail data will also be rotated. Additionally, in the case where the image data
+     * is rotated, <a href="https://developer.android.com/reference/android/media/Image.html#getWidth">Image#getWidth</a> and <a href="https://developer.android.com/reference/android/media/Image.html#getHeight">Image#getHeight</a>
+     * will not be updated to reflect the height and width of the rotated image.</p>
      * <p>Note that this orientation is relative to the orientation of the camera sensor, given
      * by ACAMERA_SENSOR_ORIENTATION.</p>
      * <p>To translate from the device orientation given by the Android sensor APIs for camera
@@ -4671,7 +4673,7 @@ typedef enum acamera_metadata_tag {
      * application should leave stream use cases within the session as DEFAULT.</p>
      */
     ACAMERA_SCALER_AVAILABLE_STREAM_USE_CASES =                 // int64[n] (acamera_metadata_enum_android_scaler_available_stream_use_cases_t)
-            ACAMERA_SCALER_START + 25,
+            ACAMERA_SCALER_START + 26,
     /**
      * <p>The region of the sensor that corresponds to the RAW read out for this
      * capture when the stream use case of a RAW stream is set to CROPPED_RAW.</p>
@@ -4727,7 +4729,7 @@ typedef enum acamera_metadata_tag {
      * @see ACAMERA_STATISTICS_HOT_PIXEL_MAP
      */
     ACAMERA_SCALER_RAW_CROP_REGION =                            // int32[4]
-            ACAMERA_SCALER_START + 26,
+            ACAMERA_SCALER_START + 27,
     ACAMERA_SCALER_END,
 
     /**

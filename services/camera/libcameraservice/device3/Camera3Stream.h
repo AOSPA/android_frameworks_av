@@ -343,12 +343,6 @@ class Camera3Stream :
             const std::vector<size_t>& surface_ids = std::vector<size_t>());
 
     /**
-     * Similar to getBuffer() except this method fills multiple buffers.
-     */
-    status_t         getBuffers(std::vector<OutstandingBuffer>* buffers,
-            nsecs_t waitBufferTimeout);
-
-    /**
      * Return a buffer to the stream after use by the HAL.
      *
      * Multiple surfaces could share the same HAL stream, but a request may
@@ -429,7 +423,7 @@ class Camera3Stream :
     /**
      * Debug dump of the stream's state.
      */
-    virtual void     dump(int fd, const Vector<String16> &args) const;
+    virtual void     dump(int fd, const Vector<String16> &args);
 
     /**
      * Add a camera3 buffer listener. Adding the same listener twice has
@@ -535,8 +529,6 @@ class Camera3Stream :
             nsecs_t timestamp, nsecs_t readoutTimestamp, int32_t transform,
             const std::vector<size_t>& surface_ids = std::vector<size_t>());
 
-    virtual status_t getBuffersLocked(std::vector<OutstandingBuffer>*);
-
     virtual status_t getInputBufferLocked(camera_stream_buffer *buffer, Size* size);
 
     virtual status_t returnInputBufferLocked(
@@ -570,7 +562,7 @@ class Camera3Stream :
 
     // Get the usage flags for the other endpoint, or return
     // INVALID_OPERATION if they cannot be obtained.
-    virtual status_t getEndpointUsage(uint64_t *usage) const = 0;
+    virtual status_t getEndpointUsage(uint64_t *usage) = 0;
 
     // Return whether the buffer is in the list of outstanding buffers.
     bool isOutstandingBuffer(const camera_stream_buffer& buffer) const;

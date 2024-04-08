@@ -242,6 +242,8 @@ aidl2legacy_AudioMix(const media::AudioMix& aidl) {
     legacy.mCbFlags = VALUE_OR_RETURN(aidl2legacy_AudioMixCallbackFlag_uint32_t_mask(aidl.cbFlags));
     legacy.mAllowPrivilegedMediaPlaybackCapture = aidl.allowPrivilegedMediaPlaybackCapture;
     legacy.mVoiceCommunicationCaptureAllowed = aidl.voiceCommunicationCaptureAllowed;
+    legacy.mToken = aidl.mToken;
+    legacy.mVirtualDeviceId = aidl.mVirtualDeviceId;
     return legacy;
 }
 
@@ -265,6 +267,8 @@ legacy2aidl_AudioMix(const AudioMix& legacy) {
     aidl.cbFlags = VALUE_OR_RETURN(legacy2aidl_uint32_t_AudioMixCallbackFlag_mask(legacy.mCbFlags));
     aidl.allowPrivilegedMediaPlaybackCapture = legacy.mAllowPrivilegedMediaPlaybackCapture;
     aidl.voiceCommunicationCaptureAllowed = legacy.mVoiceCommunicationCaptureAllowed;
+    aidl.mToken = legacy.mToken;
+    aidl.mVirtualDeviceId = legacy.mVirtualDeviceId;
     return aidl;
 }
 

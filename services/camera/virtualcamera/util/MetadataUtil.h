@@ -59,16 +59,6 @@ class MetadataBuilder {
     int32_t weight = 0;
   };
 
-  struct FpsRange {
-    int32_t minFps;
-    int32_t maxFps;
-
-    bool operator<(const FpsRange& other) const {
-      return maxFps == other.maxFps ? minFps < other.minFps
-                                    : maxFps < other.maxFps;
-    }
-  };
-
   MetadataBuilder() = default;
   ~MetadataBuilder() = default;
 
@@ -149,6 +139,36 @@ class MetadataBuilder {
   MetadataBuilder& setAvailableOutputStreamConfigurations(
       const std::vector<StreamConfiguration>& streamConfigurations);
 
+  // See COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES in CameraCharacteristics.java.
+  MetadataBuilder& setAvailableAberrationCorrectionModes(
+      const std::vector<
+          camera_metadata_enum_android_color_correction_aberration_mode>&
+          aberrationCorectionModes);
+
+  // See COLOR_CORRECTION_ABERRATION_MODE in CaptureRequest.java.
+  MetadataBuilder& setAberrationCorrectionMode(
+      camera_metadata_enum_android_color_correction_aberration_mode
+          aberrationCorrectionMode);
+
+  // See NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES in CameraCharacteristics.java.
+  MetadataBuilder& setAvailableNoiseReductionModes(
+      const std::vector<camera_metadata_enum_android_noise_reduction_mode>&
+          noiseReductionModes);
+
+  // See NOISE_REDUCTION_MODE in CaptureRequest.java.
+  MetadataBuilder& setNoiseReductionMode(
+      camera_metadata_enum_android_noise_reduction_mode noiseReductionMode);
+
+  // See REQUEST_PARTIAL_RESULT_COUNT in CameraCharacteristics.java.
+  MetadataBuilder& setRequestPartialResultCount(int partialResultCount);
+
+  // See SCALER_CROPPING_TYPE in CameraCharacteristics.java.
+  MetadataBuilder& setCroppingType(
+      camera_metadata_enum_android_scaler_cropping_type croppingType);
+
+  // See STATISTICS_INFO_MAX_FACE_COUNT in CameraCharacteristic.java.
+  MetadataBuilder& setMaxFaceCount(int maxFaceCount);
+
   // See ANDROID_CONTROL_AVAILABLE_MODES in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAvailableModes(
       const std::vector<camera_metadata_enum_android_control_mode_t>&
@@ -163,6 +183,10 @@ class MetadataBuilder {
       const std::vector<camera_metadata_enum_android_control_scene_mode>&
           availableSceneModes);
 
+  // See ANDROID_CONTROL_SCENE_MODE in CameraMetadataTag.aidl
+  MetadataBuilder& setControlSceneMode(
+      camera_metadata_enum_android_control_scene_mode sceneMode);
+
   // See ANDROID_CONTROL_AVAILABLE_EFFECTS in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAvailableEffects(
       const std::vector<camera_metadata_enum_android_control_effect_mode>&
@@ -172,11 +196,16 @@ class MetadataBuilder {
   MetadataBuilder& setControlEffectMode(
       camera_metadata_enum_android_control_effect_mode_t effectMode);
 
-  // See ANDROID_CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
+  // See ANDROID_CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAvailableVideoStabilizationModes(
       const std::vector<
           camera_metadata_enum_android_control_video_stabilization_mode_t>&
           videoStabilizationModes);
+
+  // See ANDROID_CONTROL_VIDEO_STABILIZATION_MODE in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlVideoStabilizationMode(
+      camera_metadata_enum_android_control_video_stabilization_mode
+          stabilizationMode);
 
   // See CONTROL_AE_AVAILABLE_ANTIBANDING_MODES in CameraCharacteristics.java.
   MetadataBuilder& setControlAeAvailableAntibandingModes(
@@ -226,7 +255,7 @@ class MetadataBuilder {
       const std::vector<FpsRange>& fpsRanges);
 
   // See ANDROID_CONTROL_AE_TARGET_FPS_RANGE in CaptureRequest.java.
-  MetadataBuilder& setControlAeTargetFpsRange(int32_t min, int32_t max);
+  MetadataBuilder& setControlAeTargetFpsRange(FpsRange fpsRange);
 
   // See ANDROID_CONTROL_CAPTURE_INTENT in CameraMetadataTag.aidl.
   MetadataBuilder& setControlCaptureIntent(
@@ -248,8 +277,20 @@ class MetadataBuilder {
   // See CONTROL_AWB_LOCK_AVAILABLE in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAwbLockAvailable(bool awbLockAvailable);
 
+  // See CONTROL_AWB_LOCK in CameraMetadataTag.aidl
+  MetadataBuilder& setControlAwbLock(
+      camera_metadata_enum_android_control_awb_lock awbLock);
+
   // See CONTROL_AE_LOCK_AVAILABLE in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAeLockAvailable(bool aeLockAvailable);
+
+  // See CONTROL_AE_LOCK in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAeLock(
+      camera_metadata_enum_android_control_ae_lock aeLock);
+
+  // See CONTROL_AE_STATE in CameraMetadataTag.aidl
+  MetadataBuilder& setControlAeState(
+      camera_metadata_enum_android_control_ae_state aeState);
 
   // See ANDROID_CONTROL_AE_REGIONS in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAeRegions(
@@ -259,6 +300,10 @@ class MetadataBuilder {
   MetadataBuilder& setControlAwbRegions(
       const std::vector<ControlRegion>& awbRegions);
 
+  // See ANDROID_CONTROL_AWB_STATE in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAwbState(
+      camera_metadata_enum_android_control_awb_state awbState);
+
   // See ANDROID_SCALER_CROP_REGION in CaptureRequest.java.
   MetadataBuilder& setCropRegion(int32_t x, int32_t y, int32_t width,
                                  int32_t height);
@@ -266,6 +311,10 @@ class MetadataBuilder {
   // See ANDROID_CONTROL_AF_REGIONS in CameraMetadataTag.aidl.
   MetadataBuilder& setControlAfRegions(
       const std::vector<ControlRegion>& afRegions);
+
+  // See ANDROID_CONTROL_AF_STATE in CameraMetadataTag.aidl.
+  MetadataBuilder& setControlAfState(
+      camera_metadata_enum_android_control_af_state aeftate);
 
   // The size of the compressed JPEG image, in bytes.
   //
@@ -278,6 +327,12 @@ class MetadataBuilder {
   // See JPEG_AVAILABLE_THUMBNAIL_SIZES in CameraCharacteristic.java.
   MetadataBuilder& setJpegAvailableThumbnailSizes(
       const std::vector<Resolution>& thumbnailSizes);
+
+  // See ANDROID_JPEG_GPS_COORDINATES.
+  MetadataBuilder& setJpegGpsCoordinates(const GpsCoordinates& gpsCoordinates);
+
+  // See JPEG_ORIENTATION in CaptureRequest.java.
+  MetadataBuilder& setJpegOrientation(int32_t orientation);
 
   // See JPEG_QUALITY in CaptureRequest.java.
   MetadataBuilder& setJpegQuality(uint8_t quality);
@@ -311,6 +366,24 @@ class MetadataBuilder {
 
   // See ANDROID_CONTROL_ZOOM_RATIO_RANGE in CameraMetadataTag.aidl.
   MetadataBuilder& setControlZoomRatioRange(float min, float max);
+
+  // See ANDROID_STATISTICS_SCENE_FLICKER in CameraMetadataTag.aidl.
+  MetadataBuilder& setStatisticsSceneFlicker(
+      camera_metadata_enum_android_statistics_scene_flicker sceneFlicker);
+
+  // See ANDROID_STATISTICS_HOT_PIXEL_MAP_MODE in CameraMetadataTag.aidl.
+  MetadataBuilder& setStatisticsHotPixelMapMode(
+      camera_metadata_enum_android_statistics_hot_pixel_map_mode mode);
+
+  // See ANDROID_STATISTICS_LENS_SHADING_MAP_MODE in CameraMetadataTag.aidl.
+  MetadataBuilder& setStatisticsLensShadingMapMode(
+      camera_metadata_enum_android_statistics_lens_shading_map_mode
+          lensShadingMapMode);
+
+  // See ANDROID_LENS_OPTICAL_STABILIZATION_MODE in CameraMetadataTag.aidl.
+  MetadataBuilder& setLensOpticalStabilizationMode(
+      camera_metadata_enum_android_lens_optical_stabilization_mode_t
+          opticalStabilizationMode);
 
   // See ANDROID_REQUEST_AVAILABLE_CAPABILITIES in CameraMetadataTag.aidl.
   MetadataBuilder& setAvailableRequestCapabilities(
@@ -354,10 +427,11 @@ class MetadataBuilder {
 
  private:
   // Maps metadata tags to vectors of values for the given tag.
-  std::map<camera_metadata_tag_t,
-           std::variant<std::vector<int64_t>, std::vector<int32_t>,
-                        std::vector<uint8_t>, std::vector<float>,
-                        std::vector<camera_metadata_rational_t>>>
+  std::map<
+      camera_metadata_tag_t,
+      std::variant<std::vector<int64_t>, std::vector<int32_t>,
+                   std::vector<uint8_t>, std::vector<float>,
+                   std::vector<camera_metadata_rational_t>, std::vector<double>>>
       mEntryMap;
   // Extend metadata with ANDROID_REQUEST_AVAILABLE_CHARACTERISTICS_KEYS.
   bool mExtendWithAvailableCharacteristicsKeys = false;
@@ -365,6 +439,10 @@ class MetadataBuilder {
 
 // Returns JPEG_QUALITY from metadata, or nullopt if the key is not present.
 std::optional<int32_t> getJpegQuality(
+    const aidl::android::hardware::camera::device::CameraMetadata& metadata);
+
+// Return JPEG_ORIENTATION from metadata, or 0 if the key is not present
+int32_t getJpegOrientation(
     const aidl::android::hardware::camera::device::CameraMetadata& metadata);
 
 // Returns JPEG_THUMBNAIL_SIZE from metadata, or nullopt if the key is not present.
@@ -378,6 +456,17 @@ std::optional<int32_t> getJpegThumbnailQuality(
 // Returns JPEG_AVAILABLE_THUMBNAIL_SIZES from metadata, or nullopt if the key
 // is not present.
 std::vector<Resolution> getJpegAvailableThumbnailSizes(
+    const aidl::android::hardware::camera::device::CameraMetadata& metadata);
+
+std::optional<FpsRange> getFpsRange(
+    const aidl::android::hardware::camera::device::CameraMetadata& metadata);
+
+std::optional<camera_metadata_enum_android_control_capture_intent> getCaptureIntent(
+    const aidl::android::hardware::camera::device::CameraMetadata& metadata);
+
+// Returns ANDROID_JPEG_GPS_COORDINATES in a GpsCoordinate object or nullopt if
+// the key is not present.
+std::optional<GpsCoordinates> getGpsCoordinates(
     const aidl::android::hardware::camera::device::CameraMetadata& metadata);
 
 }  // namespace virtualcamera

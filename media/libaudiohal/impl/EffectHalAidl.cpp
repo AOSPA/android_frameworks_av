@@ -20,6 +20,7 @@
 
 #include <memory>
 
+#include <audio_utils/primitives.h>
 #include <error/expected_utils.h>
 #include <media/AidlConversionCppNdk.h>
 #include <media/AidlConversionEffect.h>
@@ -197,7 +198,7 @@ status_t EffectHalAidl::process() {
                               ::android::OK == efGroup->wait(kEventFlagDataMqUpdate, &efState,
                                                              1 /* ns */, true /* retry */) &&
                               efState & kEventFlagDataMqUpdate) {
-        ALOGI("%s %s V%d receive dataMQUpdate eventFlag from HAL", __func__, effectName.c_str(),
+        ALOGV("%s %s V%d receive dataMQUpdate eventFlag from HAL", __func__, effectName.c_str(),
               halVersion);
         mConversion->reopen();
     }
@@ -240,16 +241,23 @@ status_t EffectHalAidl::process() {
               mOutBuffer->getSize() / sizeof(float), available);
         return INVALID_OPERATION;
     }
+
+    float *outputRawBuffer = mOutBuffer->audioBuffer()->f32;
+    std::vector<float> tempBuffer;
+    if (mConversion->mOutputAccessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE) {
+        tempBuffer.resize(floatsToRead);
+        outputRawBuffer = tempBuffer.data();
+    }
     // always read floating point data for AIDL
-    if (!mOutBuffer->audioBuffer() ||
-        !outputQ->read(mOutBuffer->audioBuffer()->f32, floatsToRead)) {
+    if (!outputQ->read(outputRawBuffer, floatsToRead)) {
         ALOGE("%s failed to read %zu from outputQ to audioBuffer %p", __func__, floatsToRead,
               mOutBuffer->audioBuffer());
         return INVALID_OPERATION;
     }
+    if (mConversion->mOutputAccessMode == EFFECT_BUFFER_ACCESS_ACCUMULATE) {
+        accumulate_float(mOutBuffer->audioBuffer()->f32, outputRawBuffer, floatsToRead);
+    }
 
-    ALOGD("%s %s consumed %zu produced %zu", __func__, effectName.c_str(), floatsToWrite,
-          floatsToRead);
     return OK;
 }
 

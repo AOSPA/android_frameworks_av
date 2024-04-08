@@ -115,6 +115,7 @@ binder::Status createSurfaceFromGbp(
         int timestampBase,
         int mirrorMode,
         int32_t colorSpace,
+        bool respectSurfaceSize,
         bool isPriviledgedClient=false);
 
 //check if format is 10-bit output compatible
@@ -146,10 +147,10 @@ const std::vector<std::string> &physicalCameraIds, const std::string &physicalCa
 const std::string &logicalCameraId);
 
 binder::Status checkSurfaceType(size_t numBufferProducers,
-bool deferredConsumer, int surfaceType);
+        bool deferredConsumer, int surfaceType, bool isConfigurationComplete);
 
 binder::Status checkOperatingMode(int operatingMode,
-const CameraMetadata &staticInfo, const std::string &cameraId);
+        const CameraMetadata &staticInfo, const std::string &cameraId);
 
 binder::Status
 convertToHALStreamCombination(

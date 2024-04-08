@@ -4,6 +4,7 @@
 # Please add flags in alphabetical order.
 
 package: "android.media.audio"
+container: "system"
 
 flag {
     name: "auto_public_volume_api_hardening"
@@ -23,6 +24,7 @@ flag {
 
 flag {
     name: "feature_spatial_audio_headtracking_low_latency"
+    is_exported: true
     namespace: "media_audio"
     description: "Define feature for low latency headtracking for SA"
     bug: "324291076"
@@ -30,6 +32,7 @@ flag {
 
 flag {
     name: "focus_exclusive_with_recording"
+    is_exported: true
     namespace: "media_audio"
     description:
         "Audio focus GAIN_TRANSIENT_EXCLUSIVE only mutes"
@@ -37,18 +40,22 @@ flag {
     bug: "316414750"
 }
 
+# TODO remove
 flag {
     name: "foreground_audio_control"
+    is_exported: true
     namespace: "media_audio"
     description:
         "Audio focus gain requires FGS or delegation to "
-	"take effect"
+        "take effect"
     bug: "296232417"
+    is_fixed_read_only: true
 }
 
 # TODO remove
 flag {
     name: "focus_freeze_test_api"
+    is_exported: true
     namespace: "media_audio"
     description: "\
  AudioManager audio focus test APIs:\
@@ -62,6 +69,7 @@ flag {
 
 flag {
     name: "loudness_configurator_api"
+    is_exported: true
     namespace: "media_audio"
     description: "\
 Enable the API for providing loudness metadata and CTA-2075 \
@@ -71,7 +79,15 @@ support."
 }
 
 flag {
+    name: "mute_background_audio"
+    namespace: "media_audio"
+    description: "mute audio playing in background"
+    bug: "296232417"
+}
+
+flag {
     name: "sco_managed_by_audio"
+    is_exported: true
     namespace: "media_audio"
     description: "\
 Enable new implementation of headset profile device connection and\
@@ -81,14 +97,37 @@ SCO audio activation."
 
 flag {
     name: "supported_device_types_api"
+    is_exported: true
     namespace: "media_audio"
     description: "Surface new API method AudioManager.getSupportedDeviceTypes()"
     bug: "307537538"
 }
 
 flag {
+    name: "ro_foreground_audio_control"
+    is_exported: true
+    namespace: "media_audio"
+    description:
+        "Audio focus gain requires FGS or delegation to "
+        "take effect"
+    bug: "296232417"
+    is_fixed_read_only: true
+}
+
+flag {
+    name: "ro_volume_ringer_api_hardening"
+    namespace: "media_audio"
+    description: "Limit access to volume and ringer SDK APIs in AudioManager"
+    bug: "296232417"
+    is_fixed_read_only: true
+}
+
+
+# TODO remove
+flag {
     name: "volume_ringer_api_hardening"
     namespace: "media_audio"
     description: "Limit access to volume and ringer SDK APIs in AudioManager"
     bug: "296232417"
+    is_fixed_read_only: true
 }

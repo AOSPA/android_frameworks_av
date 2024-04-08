@@ -2916,7 +2916,8 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
                                              audio_input_flags_t flags,
                                              audio_port_handle_t *selectedDeviceId,
                                              input_type_t *inputType,
-                                             audio_port_handle_t *portId)
+                                             audio_port_handle_t *portId,
+                                             uint32_t *virtualDeviceId)
 {
     ALOGV("%s() source %d, sampling rate %d, format %#x, channel mask %#x, session %d, "
           "flags %#x attributes=%s requested device ID %d",
@@ -3027,6 +3028,9 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
         } else {
             *inputType = API_INPUT_MIX_EXT_POLICY_REROUTE;
         }
+        if (virtualDeviceId) {
+            *virtualDeviceId = policyMix->mVirtualDeviceId;
+        }
     } else {
         if (explicitRoutingDevice != nullptr) {
             device = explicitRoutingDevice;
@@ -3050,6 +3054,10 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
             // meaning it receives audio injected into the framework, so the recorder doesn't
             // know about it and is therefore considered "legacy"
             *inputType = API_INPUT_LEGACY;
+
+            if (virtualDeviceId) {
+                *virtualDeviceId = policyMix->mVirtualDeviceId;
+            }
         } else if (audio_is_remote_submix_device(device->type())) {
             *inputType = API_INPUT_MIX_CAPTURE;
         } else if (device->type() == AUDIO_DEVICE_IN_TELEPHONY_RX) {
@@ -3079,6 +3087,11 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
             config->format = profiles[0]->getFormat();
         }
         goto error;
+    }
+
+
+    if (policyMix != nullptr && virtualDeviceId != nullptr) {
+        *virtualDeviceId = policyMix->mVirtualDeviceId;
     }
 
 exit:
@@ -3408,7 +3421,12 @@ void AudioPolicyManager::releaseInput(audio_port_handle_t portId)
     ALOGV("%s %d", __FUNCTION__, input);
 
     inputDesc->removeClient(portId);
-    mEffects.putOrphanEffects(client->session(), input, &mInputs, mpClientInterface);
+
+    // If no more clients are present in this session, park effects to an orphan chain
+    RecordClientVector clientsOnSession = inputDesc->getClientsForSession(client->session());
+    if (clientsOnSession.size() == 0) {
+        mEffects.putOrphanEffects(client->session(), input, &mInputs, mpClientInterface);
+    }
     if (inputDesc->getClientCount() > 0) {
         ALOGV("%s(%d) %zu clients remaining", __func__, portId, inputDesc->getClientCount());
         return;
@@ -3916,6 +3934,7 @@ status_t AudioPolicyManager::registerPolicyMixes(const Vector<AudioMix>& mixes)
     status_t res = NO_ERROR;
     bool checkOutputs = false;
     sp<HwModule> rSubmixModule;
+    Vector<AudioMix> registeredMixes;
     // examine each mix's route type
     for (size_t i = 0; i < mixes.size(); i++) {
         AudioMix mix = mixes[i];
@@ -4039,11 +4058,19 @@ status_t AudioPolicyManager::registerPolicyMixes(const Vector<AudioMix>& mixes)
                 break;
             } else {
                 checkOutputs = true;
+                registeredMixes.add(mix);
             }
         }
     }
     if (res != NO_ERROR) {
-        unregisterPolicyMixes(mixes);
+        if (audio_flags::audio_mix_ownership()) {
+            // Only unregister mixes that were actually registered to not accidentally unregister
+            // mixes that already existed previously.
+            unregisterPolicyMixes(registeredMixes);
+            registeredMixes.clear();
+        } else {
+            unregisterPolicyMixes(mixes);
+        }
     } else if (checkOutputs) {
         checkForDeviceAndOutputChanges();
         updateCallAndOutputRouting();
@@ -4077,15 +4104,22 @@ status_t AudioPolicyManager::unregisterPolicyMixes(Vector<AudioMix> mixes)
                 continue;
             }
 
-            for (auto device : {AUDIO_DEVICE_IN_REMOTE_SUBMIX, AUDIO_DEVICE_OUT_REMOTE_SUBMIX}) {
+            for (auto device: {AUDIO_DEVICE_IN_REMOTE_SUBMIX, AUDIO_DEVICE_OUT_REMOTE_SUBMIX}) {
                 if (getDeviceConnectionState(device, address.c_str()) ==
-                        AUDIO_POLICY_DEVICE_STATE_AVAILABLE)  {
-                    res = setDeviceConnectionStateInt(device, AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
-                                                      address.c_str(), "remote-submix",
-                                                      AUDIO_FORMAT_DEFAULT);
-                    if (res != OK) {
+                    AUDIO_POLICY_DEVICE_STATE_AVAILABLE) {
+                    status_t currentRes =
+                            setDeviceConnectionStateInt(device,
+                                                        AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE,
+                                                        address.c_str(),
+                                                        "remote-submix",
+                                                        AUDIO_FORMAT_DEFAULT);
+                    if (!audio_flags::audio_mix_ownership()) {
+                        res = currentRes;
+                    }
+                    if (currentRes != OK) {
                         ALOGE("Error making RemoteSubmix device unavailable for mix "
                               "with type %d, address %s", device, address.c_str());
+                        res = INVALID_OPERATION;
                     }
                 }
             }
@@ -4101,6 +4135,7 @@ status_t AudioPolicyManager::unregisterPolicyMixes(Vector<AudioMix> mixes)
             }
         }
     }
+
     if (res == NO_ERROR && checkOutputs) {
         checkForDeviceAndOutputChanges();
         updateCallAndOutputRouting();
@@ -4120,9 +4155,11 @@ status_t AudioPolicyManager::getRegisteredPolicyMixes(std::vector<AudioMix>& _ai
                              policyMix->mFormat, policyMix->mRouteFlags, policyMix->mDeviceAddress,
                              policyMix->mCbFlags);
         _aidl_return.back().mDeviceType = policyMix->mDeviceType;
+        _aidl_return.back().mToken = policyMix->mToken;
+        _aidl_return.back().mVirtualDeviceId = policyMix->mVirtualDeviceId;
     }
 
-    ALOGVV("%s() returning %zu registered mixes", __func__, _aidl_return->size());
+    ALOGVV("%s() returning %zu registered mixes", __func__, _aidl_return.size());
     return OK;
 }
 
@@ -7581,7 +7618,6 @@ DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescr
     DeviceVector devices;
     for (const auto &productStrategy : mEngine->getOrderedProductStrategies()) {
         StreamTypeVector streams = mEngine->getStreamTypesForProductStrategy(productStrategy);
-        auto attr = mEngine->getAllAttributesForProductStrategy(productStrategy).front();
         auto hasStreamActive = [&](auto stream) {
             return hasStream(streams, stream) && isStreamActive(stream, 0);
         };
@@ -7608,6 +7644,7 @@ DeviceVector AudioPolicyManager::getNewOutputDevices(const sp<SwAudioOutputDescr
                 mOutputs.isStrategyActiveOnSameModule(productStrategy, outputDesc))) {
             // Retrieval of devices for voice DL is done on primary output profile, cannot
             // check the route (would force modifying configuration file for this profile)
+            auto attr = mEngine->getAllAttributesForProductStrategy(productStrategy).front();
             devices = mEngine->getOutputDevicesForAttributes(attr, nullptr, fromCache);
             break;
         }

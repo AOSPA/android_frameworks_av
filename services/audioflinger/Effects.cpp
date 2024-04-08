@@ -31,6 +31,7 @@
 #include <media/AudioContainers.h>
 #include <media/AudioDeviceTypeAddr.h>
 #include <media/AudioEffect.h>
+#include <media/EffectClientAsyncProxy.h>
 #include <media/ShmemCompat.h>
 #include <media/TypeConverter.h>
 #include <media/audiohal/EffectHalInterface.h>
@@ -1536,7 +1537,7 @@ bool EffectModule::isSpatializer() const {
     return IAfEffectModule::isSpatializer(&mDescriptor.type);
 }
 
-status_t EffectModule::setHapticIntensity_l(int id, os::HapticScale intensity) {
+status_t EffectModule::setHapticScale_l(int id, os::HapticScale hapticScale) {
     if (mStatus != NO_ERROR) {
         return mStatus;
     }
@@ -1545,13 +1546,16 @@ status_t EffectModule::setHapticIntensity_l(int id, os::HapticScale intensity) {
         return INVALID_OPERATION;
     }
 
-    std::vector<uint8_t> request(sizeof(effect_param_t) + 3 * sizeof(uint32_t));
+    std::vector<uint8_t> request(sizeof(effect_param_t) + 3 * sizeof(uint32_t) + sizeof(float));
     effect_param_t *param = (effect_param_t*) request.data();
     param->psize = sizeof(int32_t);
-    param->vsize = sizeof(int32_t) * 2;
+    param->vsize = sizeof(int32_t) * 2 + sizeof(float);
     *(int32_t*)param->data = HG_PARAM_HAPTIC_INTENSITY;
-    *((int32_t*)param->data + 1) = id;
-    *((int32_t*)param->data + 2) = static_cast<int32_t>(intensity);
+    int32_t* hapticScalePtr = reinterpret_cast<int32_t*>(param->data + sizeof(int32_t));
+    hapticScalePtr[0] = id;
+    hapticScalePtr[1] = static_cast<int32_t>(hapticScale.getLevel());
+    float* adaptiveScaleFactorPtr = reinterpret_cast<float*>(param->data + 3 * sizeof(int32_t));
+    *adaptiveScaleFactorPtr = hapticScale.getAdaptiveScaleFactor();
     std::vector<uint8_t> response;
     status_t status = command(EFFECT_CMD_SET_PARAM, request, sizeof(int32_t), &response);
     if (status == NO_ERROR) {
@@ -1726,7 +1730,8 @@ EffectHandle::EffectHandle(const sp<IAfEffectBase>& effect,
                                          const sp<media::IEffectClient>& effectClient,
                                          int32_t priority, bool notifyFramesProcessed)
     : BnEffect(),
-    mEffect(effect), mEffectClient(effectClient), mClient(client), mCblk(NULL),
+    mEffect(effect), mEffectClient(media::EffectClientAsyncProxy::makeIfNeeded(effectClient)),
+    mClient(client), mCblk(nullptr),
     mPriority(priority), mHasControl(false), mEnabled(false), mDisconnected(false),
     mNotifyFramesProcessed(notifyFramesProcessed)
 {
@@ -2487,6 +2492,7 @@ size_t EffectChain::removeEffect_l(const sp<IAfEffectModule>& effect,
     size_t size = mEffects.size();
     uint32_t type = effect->desc().flags & EFFECT_FLAG_TYPE_MASK;
 
+    const bool hasThreadAttached = mEffectCallback->hasThreadAttached();
     for (size_t i = 0; i < size; i++) {
         if (effect == mEffects[i]) {
             // calling stop here will remove pre-processing effect from the audio HAL.
@@ -2499,8 +2505,8 @@ size_t EffectChain::removeEffect_l(const sp<IAfEffectModule>& effect,
             if (release) {
                 mEffects[i]->release_l();
             }
-
-            if (type != EFFECT_FLAG_TYPE_AUXILIARY) {
+            // Skip operation when no thread attached (could lead to sigfpe as framecount is 0...)
+            if (hasThreadAttached && type != EFFECT_FLAG_TYPE_AUXILIARY) {
                 if (i == size - 1 && i != 0) {
                     mEffects[i - 1]->configure_l();
                     mEffects[i - 1]->setOutBuffer(mOutBuffer);
@@ -2512,7 +2518,7 @@ size_t EffectChain::removeEffect_l(const sp<IAfEffectModule>& effect,
             // make sure the input buffer configuration for the new first effect in the chain
             // is updated if needed (can switch from HAL channel mask to mixer channel mask)
             if (type != EFFECT_FLAG_TYPE_AUXILIARY // TODO(b/284522658) breaks for aux FX, why?
-                    && i == 0 && size > 1) {
+                    && hasThreadAttached && i == 0 && size > 1) {
                 mEffects[0]->configure_l();
                 mEffects[0]->setInBuffer(mInBuffer);
                 mEffects[0]->updateAccessMode_l();      // reconfig if needed.
@@ -2674,11 +2680,11 @@ bool EffectChain::containsHapticGeneratingEffect_l()
     return false;
 }
 
-void EffectChain::setHapticIntensity_l(int id, os::HapticScale intensity)
+void EffectChain::setHapticScale_l(int id, os::HapticScale hapticScale)
 {
     audio_utils::lock_guard _l(mutex());
     for (size_t i = 0; i < mEffects.size(); ++i) {
-        mEffects[i]->setHapticIntensity_l(id, intensity);
+        mEffects[i]->setHapticScale_l(id, hapticScale);
     }
 }
 
@@ -3141,11 +3147,11 @@ NO_THREAD_SAFETY_ANALYSIS
 {
     const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
-        return AUDIO_CHANNEL_NONE;
+        return AUDIO_CHANNEL_OUT_STEREO;
     }
     sp<IAfEffectChain> c = chain().promote();
     if (c == nullptr) {
-        return AUDIO_CHANNEL_NONE;
+        return AUDIO_CHANNEL_OUT_STEREO;
     }
 
     if (mThreadType == IAfThreadBase::SPATIALIZER) {
@@ -3180,11 +3186,11 @@ NO_THREAD_SAFETY_ANALYSIS
 {
     const sp<IAfThreadBase> t = thread().promote();
     if (t == nullptr) {
-        return AUDIO_CHANNEL_NONE;
+        return AUDIO_CHANNEL_OUT_STEREO;
     }
     sp<IAfEffectChain> c = chain().promote();
     if (c == nullptr) {
-        return AUDIO_CHANNEL_NONE;
+        return AUDIO_CHANNEL_OUT_STEREO;
     }
 
     if (mThreadType == IAfThreadBase::SPATIALIZER) {

@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -59,7 +61,7 @@ std::vector<To> asVectorOf(const From from) {
 }  // namespace
 
 MetadataBuilder& MetadataBuilder::setSupportedHardwareLevel(
-    camera_metadata_enum_android_info_supported_hardware_level_t hwLevel) {
+    const camera_metadata_enum_android_info_supported_hardware_level_t hwLevel) {
   mEntryMap[ANDROID_INFO_SUPPORTED_HARDWARE_LEVEL] =
       asVectorOf<uint8_t>(hwLevel);
   return *this;
@@ -86,7 +88,7 @@ MetadataBuilder& MetadataBuilder::setFlashMode(
 }
 
 MetadataBuilder& MetadataBuilder::setLensFacing(
-    camera_metadata_enum_android_lens_facing lensFacing) {
+    const camera_metadata_enum_android_lens_facing lensFacing) {
   mEntryMap[ANDROID_LENS_FACING] = asVectorOf<uint8_t>(lensFacing);
   return *this;
 }
@@ -175,6 +177,12 @@ MetadataBuilder& MetadataBuilder::setControlAvailableSceneModes(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setControlSceneMode(
+    const camera_metadata_enum_android_control_scene_mode sceneMode) {
+  mEntryMap[ANDROID_CONTROL_SCENE_MODE] = asVectorOf<uint8_t>(sceneMode);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::setControlAvailableEffects(
     const std::vector<camera_metadata_enum_android_control_effect_mode>&
         availableEffects) {
@@ -198,6 +206,14 @@ MetadataBuilder& MetadataBuilder::setControlAvailableVideoStabilizationModes(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setControlVideoStabilizationMode(
+    const camera_metadata_enum_android_control_video_stabilization_mode
+        stabilizationMode) {
+  mEntryMap[ANDROID_CONTROL_VIDEO_STABILIZATION_MODE] =
+      asVectorOf<uint8_t>(stabilizationMode);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::setControlAfAvailableModes(
     const std::vector<camera_metadata_enum_android_control_af_mode_t>&
         availableModes) {
@@ -209,6 +225,12 @@ MetadataBuilder& MetadataBuilder::setControlAfAvailableModes(
 MetadataBuilder& MetadataBuilder::setControlAfMode(
     const camera_metadata_enum_android_control_af_mode_t mode) {
   mEntryMap[ANDROID_CONTROL_AF_MODE] = asVectorOf<uint8_t>(mode);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setControlAfState(
+    const camera_metadata_enum_android_control_af_state afState) {
+  mEntryMap[ANDROID_CONTROL_AF_STATE] = asVectorOf<uint8_t>(afState);
   return *this;
 }
 
@@ -232,14 +254,14 @@ MetadataBuilder& MetadataBuilder::setControlAeAvailableFpsRanges(
 }
 
 MetadataBuilder& MetadataBuilder::setControlAeTargetFpsRange(
-    const int32_t minFps, const int32_t maxFps) {
+    const FpsRange fpsRange) {
   mEntryMap[ANDROID_CONTROL_AE_TARGET_FPS_RANGE] =
-      std::vector<int32_t>({minFps, maxFps});
+      std::vector<int32_t>({fpsRange.minFps, fpsRange.maxFps});
   return *this;
 }
 
 MetadataBuilder& MetadataBuilder::setControlAeMode(
-    camera_metadata_enum_android_control_ae_mode_t mode) {
+    const camera_metadata_enum_android_control_ae_mode_t mode) {
   mEntryMap[ANDROID_CONTROL_AE_MODE] = asVectorOf<uint8_t>(mode);
   return *this;
 }
@@ -277,6 +299,12 @@ MetadataBuilder& MetadataBuilder::setControlAwbMode(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setControlAwbState(
+    const camera_metadata_enum_android_control_awb_state awbState) {
+  mEntryMap[ANDROID_CONTROL_AWB_STATE] = asVectorOf<uint8_t>(awbState);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::setControlAwbLockAvailable(
     const bool awbLockAvailable) {
   const uint8_t lockAvailable = awbLockAvailable
@@ -284,6 +312,12 @@ MetadataBuilder& MetadataBuilder::setControlAwbLockAvailable(
                                     : ANDROID_CONTROL_AWB_LOCK_AVAILABLE_FALSE;
   mEntryMap[ANDROID_CONTROL_AWB_LOCK_AVAILABLE] =
       std::vector<uint8_t>({lockAvailable});
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setControlAwbLock(
+    const camera_metadata_enum_android_control_awb_lock awbLock) {
+  mEntryMap[ANDROID_CONTROL_AWB_LOCK] = asVectorOf<uint8_t>(awbLock);
   return *this;
 }
 
@@ -310,6 +344,12 @@ MetadataBuilder& MetadataBuilder::setControlAeLockAvailable(
                                     : ANDROID_CONTROL_AE_LOCK_AVAILABLE_FALSE;
   mEntryMap[ANDROID_CONTROL_AE_LOCK_AVAILABLE] =
       asVectorOf<uint8_t>(lockAvailable);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setControlAeLock(
+    const camera_metadata_enum_android_control_ae_lock aeLock) {
+  mEntryMap[ANDROID_CONTROL_AE_LOCK] = asVectorOf<uint8_t>(aeLock);
   return *this;
 }
 
@@ -396,6 +436,29 @@ MetadataBuilder& MetadataBuilder::setJpegAvailableThumbnailSizes(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setJpegGpsCoordinates(
+    const GpsCoordinates& gpsCoordinates) {
+  mEntryMap[ANDROID_JPEG_GPS_COORDINATES] =
+      std::vector<double>({gpsCoordinates.latitude, gpsCoordinates.longitude,
+                           gpsCoordinates.altitude});
+
+  if (!gpsCoordinates.provider.empty()) {
+    mEntryMap[ANDROID_JPEG_GPS_PROCESSING_METHOD] = std::vector<uint8_t>{
+        gpsCoordinates.provider.begin(), gpsCoordinates.provider.end()};
+  }
+
+  if (gpsCoordinates.timestamp.has_value()) {
+    mEntryMap[ANDROID_JPEG_GPS_TIMESTAMP] =
+        asVectorOf<int64_t>(gpsCoordinates.timestamp.value());
+  }
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setJpegOrientation(const int32_t orientation) {
+  mEntryMap[ANDROID_JPEG_ORIENTATION] = asVectorOf<int32_t>(orientation);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::setJpegQuality(const uint8_t quality) {
   mEntryMap[ANDROID_JPEG_QUALITY] = asVectorOf<uint8_t>(quality);
   return *this;
@@ -421,7 +484,7 @@ MetadataBuilder& MetadataBuilder::setMaxNumberOutputStreams(
 }
 
 MetadataBuilder& MetadataBuilder::setSyncMaxLatency(
-    camera_metadata_enum_android_sync_max_latency latency) {
+    const camera_metadata_enum_android_sync_max_latency latency) {
   mEntryMap[ANDROID_SYNC_MAX_LATENCY] = asVectorOf<int32_t>(latency);
   return *this;
 }
@@ -481,6 +544,56 @@ MetadataBuilder& MetadataBuilder::setAvailableOutputStreamConfigurations(
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::setAvailableAberrationCorrectionModes(
+    const std::vector<camera_metadata_enum_android_color_correction_aberration_mode>&
+        aberrationCorectionModes) {
+  mEntryMap[ANDROID_COLOR_CORRECTION_AVAILABLE_ABERRATION_MODES] =
+      convertTo<uint8_t>(aberrationCorectionModes);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setAberrationCorrectionMode(
+    const camera_metadata_enum_android_color_correction_aberration_mode
+        aberrationCorrectionMode) {
+  mEntryMap[ANDROID_COLOR_CORRECTION_ABERRATION_MODE] =
+      asVectorOf<uint8_t>(aberrationCorrectionMode);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setAvailableNoiseReductionModes(
+    const std::vector<camera_metadata_enum_android_noise_reduction_mode>&
+        noiseReductionModes) {
+  mEntryMap[ANDROID_NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES] =
+      convertTo<uint8_t>(noiseReductionModes);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setNoiseReductionMode(
+    const camera_metadata_enum_android_noise_reduction_mode noiseReductionMode) {
+  mEntryMap[ANDROID_NOISE_REDUCTION_MODE] =
+      asVectorOf<uint8_t>(noiseReductionMode);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setRequestPartialResultCount(
+    const int partialResultCount) {
+  mEntryMap[ANDROID_REQUEST_PARTIAL_RESULT_COUNT] =
+      asVectorOf<int32_t>(partialResultCount);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setCroppingType(
+    const camera_metadata_enum_android_scaler_cropping_type croppingType) {
+  mEntryMap[ANDROID_SCALER_CROPPING_TYPE] = asVectorOf<uint8_t>(croppingType);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setMaxFaceCount(const int maxFaceCount) {
+  mEntryMap[ANDROID_STATISTICS_INFO_MAX_FACE_COUNT] =
+      asVectorOf<int32_t>(maxFaceCount);
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::setAvailableMaxDigitalZoom(const float maxZoom) {
   mEntryMap[ANDROID_SCALER_AVAILABLE_MAX_DIGITAL_ZOOM] =
       asVectorOf<float>(maxZoom);
@@ -532,6 +645,43 @@ MetadataBuilder& MetadataBuilder::setControlAeExposureCompensation(
     const int32_t exposureCompensation) {
   mEntryMap[ANDROID_CONTROL_AE_EXPOSURE_COMPENSATION] =
       asVectorOf<int32_t>(exposureCompensation);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setControlAeState(
+    const camera_metadata_enum_android_control_ae_state aeState) {
+  mEntryMap[ANDROID_CONTROL_AE_STATE] = asVectorOf<uint8_t>(aeState);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setStatisticsSceneFlicker(
+    const camera_metadata_enum_android_statistics_scene_flicker sceneFlicker) {
+  mEntryMap[ANDROID_STATISTICS_SCENE_FLICKER] =
+      asVectorOf<uint8_t>(sceneFlicker);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setStatisticsHotPixelMapMode(
+    const camera_metadata_enum_android_statistics_hot_pixel_map_mode
+        hotPixelMapMode) {
+  mEntryMap[ANDROID_STATISTICS_HOT_PIXEL_MAP_MODE] =
+      asVectorOf<uint8_t>(hotPixelMapMode);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setStatisticsLensShadingMapMode(
+    const camera_metadata_enum_android_statistics_lens_shading_map_mode
+        lensShadingMapMode) {
+  mEntryMap[ANDROID_STATISTICS_LENS_SHADING_MAP_MODE] =
+      asVectorOf<uint8_t>(lensShadingMapMode);
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::setLensOpticalStabilizationMode(
+    const camera_metadata_enum_android_lens_optical_stabilization_mode_t
+        opticalStabilizationMode) {
+  mEntryMap[ANDROID_LENS_OPTICAL_STABILIZATION_MODE] =
+      asVectorOf<uint8_t>(opticalStabilizationMode);
   return *this;
 }
 
@@ -627,6 +777,20 @@ std::optional<int32_t> getJpegQuality(
   return *entry.data.i32;
 }
 
+int32_t getJpegOrientation(
+    const aidl::android::hardware::camera::device::CameraMetadata& cameraMetadata) {
+  auto metadata =
+      reinterpret_cast<const camera_metadata_t*>(cameraMetadata.metadata.data());
+
+  camera_metadata_ro_entry_t entry;
+  if (find_camera_metadata_ro_entry(metadata, ANDROID_JPEG_ORIENTATION,
+                                    &entry) != OK) {
+    return 0;
+  }
+
+  return *entry.data.i32;
+}
+
 std::optional<Resolution> getJpegThumbnailSize(
     const aidl::android::hardware::camera::device::CameraMetadata& cameraMetadata) {
   auto metadata =
@@ -672,6 +836,71 @@ std::vector<Resolution> getJpegAvailableThumbnailSizes(
     thumbnailSizes.emplace_back(entry.data.i32[i], entry.data.i32[i + 1]);
   }
   return thumbnailSizes;
+}
+
+std::optional<FpsRange> getFpsRange(
+    const aidl::android::hardware::camera::device::CameraMetadata& cameraMetadata) {
+  auto metadata =
+      reinterpret_cast<const camera_metadata_t*>(cameraMetadata.metadata.data());
+
+  camera_metadata_ro_entry_t entry;
+  if (find_camera_metadata_ro_entry(
+          metadata, ANDROID_CONTROL_AE_TARGET_FPS_RANGE, &entry) != OK ||
+      entry.count != 2) {
+    return {};
+  }
+
+  FpsRange range{.minFps = entry.data.i32[0], .maxFps = entry.data.i32[1]};
+  return range;
+}
+
+std::optional<camera_metadata_enum_android_control_capture_intent>
+getCaptureIntent(const aidl::android::hardware::camera::device::CameraMetadata&
+                     cameraMetadata) {
+  auto metadata =
+      reinterpret_cast<const camera_metadata_t*>(cameraMetadata.metadata.data());
+
+  camera_metadata_ro_entry_t entry;
+  if (find_camera_metadata_ro_entry(metadata, ANDROID_CONTROL_CAPTURE_INTENT,
+                                    &entry) != OK) {
+    return {};
+  }
+
+  return static_cast<camera_metadata_enum_android_control_capture_intent>(
+      entry.data.u8[0]);
+}
+
+std::optional<GpsCoordinates> getGpsCoordinates(
+    const aidl::android::hardware::camera::device::CameraMetadata& cameraMetadata) {
+  auto metadata =
+      reinterpret_cast<const camera_metadata_t*>(cameraMetadata.metadata.data());
+
+  camera_metadata_ro_entry_t entry;
+  if (find_camera_metadata_ro_entry(metadata, ANDROID_JPEG_GPS_COORDINATES,
+                                    &entry) != OK) {
+    return std::nullopt;
+  }
+
+  GpsCoordinates coordinates{.latitude = entry.data.d[0],
+                             .longitude = entry.data.d[1],
+                             .altitude = entry.data.d[2]};
+
+  if (find_camera_metadata_ro_entry(metadata, ANDROID_JPEG_GPS_TIMESTAMP,
+                                    &entry) == OK) {
+    coordinates.timestamp = entry.data.i64[0];
+  }
+
+  // According to types.hal, the string describing the GPS processing method has
+  // a 32 characters size
+  static constexpr float kGpsProviderStringLength = 32;
+  if (find_camera_metadata_ro_entry(
+          metadata, ANDROID_JPEG_GPS_PROCESSING_METHOD, &entry) == OK) {
+    coordinates.provider.assign(
+        reinterpret_cast<const char*>(entry.data.u8),
+        std::min(entry.count, static_cast<size_t>(kGpsProviderStringLength)));
+  }
+
+  return coordinates;
 }
 
 }  // namespace virtualcamera

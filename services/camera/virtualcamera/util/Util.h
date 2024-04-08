@@ -17,8 +17,11 @@
 #ifndef ANDROID_COMPANION_VIRTUALCAMERA_UTIL_H
 #define ANDROID_COMPANION_VIRTUALCAMERA_UTIL_H
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "aidl/android/companion/virtualcamera/Format.h"
 #include "aidl/android/hardware/camera/common/Status.h"
@@ -129,6 +132,10 @@ struct Resolution {
                                      : pixCount < otherPixCount;
   }
 
+  bool operator<=(const Resolution& other) const {
+    return *this == other || *this < other;
+  }
+
   bool operator==(const Resolution& other) const {
     return width == other.width && height == other.height;
   }
@@ -136,6 +143,37 @@ struct Resolution {
   int width = 0;
   int height = 0;
 };
+
+struct FpsRange {
+  int32_t minFps;
+  int32_t maxFps;
+
+  bool operator<(const FpsRange& other) const {
+    return maxFps == other.maxFps ? minFps < other.minFps
+                                  : maxFps < other.maxFps;
+  }
+};
+
+struct GpsCoordinates {
+  // Represented by a double[] in metadata with index 0 for
+  // latitude and index 1 for longitude, 2 for altitude.
+  double_t latitude;
+  double_t longitude;
+  double_t altitude;
+  std::optional<int64_t> timestamp;
+  std::string provider;
+};
+
+inline bool isApproximatellySameAspectRatio(const Resolution r1,
+                                            const Resolution r2) {
+  static constexpr float kAspectRatioEpsilon = 0.05;
+  float aspectRatio1 =
+      static_cast<float>(r1.width) / static_cast<float>(r1.height);
+  float aspectRatio2 =
+      static_cast<float>(r2.width) / static_cast<float>(r2.height);
+
+  return std::abs(aspectRatio1 - aspectRatio2) < kAspectRatioEpsilon;
+}
 
 std::ostream& operator<<(std::ostream& os, const Resolution& resolution);
 
