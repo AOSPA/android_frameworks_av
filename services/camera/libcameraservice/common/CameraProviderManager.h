@@ -646,6 +646,7 @@ private:
             virtual status_t isSessionConfigurationSupported(
                     const SessionConfiguration &/*configuration*/,
                     bool /*overrideForPerfClass*/,
+                    camera3::metadataGetter /*getMetadata*/,
                     bool /*checkSessionParams*/,
                     bool * /*status*/) {
                 return INVALID_OPERATION;
@@ -654,8 +655,7 @@ private:
             virtual status_t getSessionCharacteristics(
                     const SessionConfiguration &/*configuration*/,
                     bool /*overrideForPerfClass*/,
-                    camera3::metadataGetter /*getMetadata*/,
-                    CameraMetadata* /*sessionCharacteristics*/) {
+                    camera3::metadataGetter /*getMetadata*/, CameraMetadata* /*outChars*/) {
                 return INVALID_OPERATION;
             }
 
@@ -663,7 +663,7 @@ private:
             virtual void notifyDeviceStateChange(int64_t /*newState*/) {}
             virtual status_t createDefaultRequest(
                     camera3::camera_request_template_t /*templateId*/,
-                    camera_metadata_t** /*metadata*/) {
+                    CameraMetadata* /*metadata*/) {
                 return INVALID_OPERATION;
             }
 
@@ -737,6 +737,10 @@ private:
             // Only contains characteristics for hidden physical cameras,
             // not for public physical cameras.
             std::unordered_map<std::string, CameraMetadata> mPhysicalCameraCharacteristics;
+            // Value filled in from addSessionConfigQueryVersionTag.
+            // Cached to make lookups faster
+            int mSessionConfigQueryVersion = 0;
+
             void queryPhysicalCameraIds();
             SystemCameraKind getSystemCameraKind();
             status_t fixupMonochromeTags();
@@ -774,8 +778,6 @@ private:
                     std::vector<int64_t>* stallDurations,
                     const camera_metadata_entry& halStreamConfigs,
                     const camera_metadata_entry& halStreamDurations);
-
-            CameraMetadata deviceInfo(const std::string &id);
         };
     protected:
         std::string mType;

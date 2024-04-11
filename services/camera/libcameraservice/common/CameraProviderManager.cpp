@@ -421,8 +421,15 @@ status_t CameraProviderManager::isSessionConfigurationSupported(const std::strin
         return NAME_NOT_FOUND;
     }
 
+    metadataGetter getMetadata = [this](const std::string &id,
+            bool overrideForPerfClass) {
+        CameraMetadata metadata;
+        this->getCameraCharacteristicsLocked(id, overrideForPerfClass,
+                                             &metadata, /*overrideToPortrait*/false);
+        return metadata;
+    };
     return deviceInfo->isSessionConfigurationSupported(configuration,
-            overrideForPerfClass, checkSessionParams, status);
+            overrideForPerfClass, getMetadata, checkSessionParams, status);
 }
 
 status_t  CameraProviderManager::createDefaultRequest(const std::string& cameraId,
@@ -439,9 +446,8 @@ status_t  CameraProviderManager::createDefaultRequest(const std::string& cameraI
         return NAME_NOT_FOUND;
     }
 
-    camera_metadata_t *rawRequest;
     status_t res = deviceInfo->createDefaultRequest(templateId,
-            &rawRequest);
+            metadata);
 
     if (res == BAD_VALUE) {
         ALOGI("%s: template %d is not supported on this camera device",
@@ -452,9 +458,6 @@ status_t  CameraProviderManager::createDefaultRequest(const std::string& cameraI
                 templateId, strerror(-res), res);
         return res;
     }
-
-    set_camera_metadata_vendor_id(rawRequest, deviceInfo->mProviderTagid);
-    metadata->acquire(rawRequest);
 
     return OK;
 }
@@ -1087,20 +1090,6 @@ void CameraProviderManager::ProviderInfo::DeviceInfo3::queryPhysicalCameraIds() 
                 mPhysicalIds.push_back((const char*)ids+start);
             }
             start = i+1;
-        }
-    }
-}
-
-CameraMetadata CameraProviderManager::ProviderInfo::DeviceInfo3::deviceInfo(
-        const std::string &id) {
-    if (id.empty()) {
-        return mCameraCharacteristics;
-    } else {
-        if (mPhysicalCameraCharacteristics.find(id) != mPhysicalCameraCharacteristics.end()) {
-            return mPhysicalCameraCharacteristics.at(id);
-        } else {
-            ALOGE("%s: Invalid physical camera id %s", __FUNCTION__, id.c_str());
-            return mCameraCharacteristics;
         }
     }
 }
@@ -1862,7 +1851,7 @@ status_t CameraProviderManager::ProviderInfo::DeviceInfo3::addSessionConfigQuery
 
     auto& c = mCameraCharacteristics;
     status_t res = c.update(ANDROID_INFO_SESSION_CONFIGURATION_QUERY_VERSION, &versionCode, 1);
-
+    mSessionConfigQueryVersion = versionCode;
     return res;
 }
 

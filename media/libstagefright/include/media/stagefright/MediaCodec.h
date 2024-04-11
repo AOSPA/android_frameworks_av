@@ -96,6 +96,7 @@ struct MediaCodec : public AHandler {
         CONFIGURE_FLAG_ENCODE           = 1,
         CONFIGURE_FLAG_USE_BLOCK_MODEL  = 2,
         CONFIGURE_FLAG_USE_CRYPTO_ASYNC = 4,
+        CONFIGURE_FLAG_DETACHED_SURFACE = 8,
     };
 
     enum BufferFlags {
@@ -276,6 +277,8 @@ struct MediaCodec : public AHandler {
 
     status_t setSurface(const sp<Surface> &nativeWindow);
 
+    status_t detachOutputSurface();
+
     status_t requestIDRFrame();
 
     // Notification will be posted once there "is something to do", i.e.
@@ -370,6 +373,7 @@ private:
         kWhatInit                           = 'init',
         kWhatConfigure                      = 'conf',
         kWhatSetSurface                     = 'sSur',
+        kWhatDetachSurface                  = 'dSur',
         kWhatCreateInputSurface             = 'cisf',
         kWhatSetInputSurface                = 'sisf',
         kWhatStart                          = 'strt',
@@ -475,6 +479,10 @@ private:
     sp<Surface> mSurface;
     uint32_t mSurfaceGeneration = 0;
     SoftwareRenderer *mSoftRenderer;
+
+    // Get the detached BufferQueue surface for a video decoder, and create it
+    // if it did not yet exist.
+    sp<Surface> getOrCreateDetachedSurface();
 
     Mutex mMetricsLock;
     mediametrics_handle_t mMetricsHandle = 0;
@@ -644,6 +652,13 @@ private:
     status_t queueCSDInputBuffer(size_t bufferIndex);
 
     status_t handleSetSurface(const sp<Surface> &surface);
+
+    // Common reimplementation of changing the output surface.
+    // Handles setting null surface, which is used during configure and init.
+    // Set |callCodec| to true if the codec needs to be notified (e.g. during executing state).
+    // Setting |onShutdown| to true will avoid extra work, if this is used for detaching on
+    // delayed release.
+    status_t handleSetSurface(const sp<Surface> &surface, bool callCodec, bool onShutdown = false);
     status_t connectToSurface(const sp<Surface> &surface, uint32_t *generation);
     status_t disconnectFromSurface();
 
@@ -716,7 +731,7 @@ private:
     sp<AMessage> mMsgPollForRenderedBuffers;
 
     class ReleaseSurface;
-    std::unique_ptr<ReleaseSurface> mReleaseSurface;
+    std::unique_ptr<ReleaseSurface> mDetachedSurface;
 
     std::list<sp<AMessage>> mLeftover;
     status_t handleLeftover(size_t index);

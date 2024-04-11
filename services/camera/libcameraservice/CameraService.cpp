@@ -38,6 +38,8 @@
 #include <aidl/AidlCameraService.h>
 #include <android-base/macros.h>
 #include <android-base/parseint.h>
+#include <android_companion_virtualdevice_flags.h>
+#include <android/companion/virtualnative/IVirtualDeviceManagerNative.h>
 #include <binder/ActivityManager.h>
 #include <binder/AppOpsManager.h>
 #include <binder/IPCThreadState.h>
@@ -72,6 +74,7 @@
 #include <system/camera_metadata.h>
 #include <binder/IServiceManager.h>
 #include <binder/IActivityManager.h>
+#include <camera/CameraUtils.h>
 #include <camera/StringUtils.h>
 
 #include <system/camera.h>
@@ -81,7 +84,6 @@
 #include "api2/CameraDeviceClient.h"
 #include "utils/CameraTraces.h"
 #include "utils/TagMonitor.h"
-#include "utils/CameraThreadState.h"
 #include "utils/CameraServiceProxyWrapper.h"
 #include "utils/SessionConfigurationUtils.h"
 
@@ -91,7 +93,18 @@ namespace {
     const char* kSensorPrivacyServiceName = "sensor_privacy";
     const char* kAppopsServiceName = "appops";
     const char* kProcessInfoServiceName = "processinfo";
-}; // namespace anonymous
+    const char* kVirtualDeviceBackCameraId = "0";
+    const char* kVirtualDeviceFrontCameraId = "1";
+
+    int32_t getDeviceId(const android::CameraMetadata& cameraInfo) {
+        if (!cameraInfo.exists(ANDROID_INFO_DEVICE_ID)) {
+            return android::kDefaultDeviceId;
+        }
+
+        const auto &deviceIdEntry = cameraInfo.find(ANDROID_INFO_DEVICE_ID);
+        return deviceIdEntry.data.i32[0];
+    }
+} // namespace anonymous
 
 namespace android {
 
@@ -99,6 +112,7 @@ using namespace camera3;
 using namespace camera3::SessionConfigurationUtils;
 
 using binder::Status;
+using companion::virtualnative::IVirtualDeviceManagerNative;
 using frameworks::cameraservice::service::V2_0::implementation::HidlCameraService;
 using frameworks::cameraservice::service::implementation::AidlCameraService;
 using hardware::ICamera;
@@ -108,7 +122,9 @@ using hardware::camera2::ICameraInjectionCallback;
 using hardware::camera2::ICameraInjectionSession;
 using hardware::camera2::utils::CameraIdAndSessionConfiguration;
 using hardware::camera2::utils::ConcurrentCameraIdCombination;
+
 namespace flags = com::android::internal::camera::flags;
+namespace vd_flags = android::companion::virtualdevice::flags;
 
 // ----------------------------------------------------------------------------
 // Logging support -- this is for debugging only
@@ -174,12 +190,6 @@ CameraService::CameraService(
     }
 }
 
-// The word 'System' here does not refer to clients only on the system
-// partition. They just need to have a android system uid.
-static bool doesClientHaveSystemUid() {
-    return (CameraThreadState::getCallingUid() < AID_APP_START);
-}
-
 // Enable processes with isolated AID to request the binder
 void CameraService::instantiate() {
     CameraService::publish(true);
@@ -196,7 +206,6 @@ void CameraService::onServiceRegistration(const String16& name, const sp<IBinder
 
 void CameraService::onFirstRef()
 {
-
     ALOGI("CameraService process starting");
 
     BnCameraService::onFirstRef();
@@ -268,7 +277,6 @@ status_t CameraService::enumerateProviders() {
             }
         }
 
-
         // Setup vendor tags before we call get_camera_info the first time
         // because HAL might need to setup static vendor keys in get_camera_info
         // TODO: maybe put this into CameraProviderManager::initialize()?
@@ -285,7 +293,6 @@ status_t CameraService::enumerateProviders() {
 
         deviceIds = mCameraProviderManager->getCameraDeviceIds(&unavailPhysicalIds);
     }
-
 
     for (auto& cameraId : deviceIds) {
         if (getCameraState(cameraId) == nullptr) {
@@ -315,6 +322,10 @@ status_t CameraService::enumerateProviders() {
 
 void CameraService::broadcastTorchModeStatus(const std::string& cameraId, TorchModeStatus status,
         SystemCameraKind systemCameraKind) {
+    // Get the device id and app-visible camera id for the given HAL-visible camera id.
+    auto [deviceId, mappedCameraId] =
+            mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(cameraId);
+
     Mutex::Autolock lock(mStatusListenerLock);
     for (auto& i : mListenerList) {
         if (shouldSkipStatusUpdates(systemCameraKind, i->isVendorListener(), i->getListenerPid(),
@@ -323,18 +334,29 @@ void CameraService::broadcastTorchModeStatus(const std::string& cameraId, TorchM
                     __FUNCTION__, cameraId.c_str());
             continue;
         }
+
         auto ret = i->getListener()->onTorchStatusChanged(mapToInterface(status),
-                cameraId);
+                mappedCameraId, deviceId);
         i->handleBinderStatus(ret, "%s: Failed to trigger onTorchStatusChanged for %d:%d: %d",
                 __FUNCTION__, i->getListenerUid(), i->getListenerPid(), ret.exceptionCode());
-        // Also trigger the torch callbacks for cameras that were remapped to the current cameraId
-        // for the specific package that this listener belongs to.
-        std::vector<std::string> remappedCameraIds =
-                findOriginalIdsForRemappedCameraId(cameraId, i->getListenerUid());
-        for (auto& remappedCameraId : remappedCameraIds) {
-            ret = i->getListener()->onTorchStatusChanged(mapToInterface(status), remappedCameraId);
-            i->handleBinderStatus(ret, "%s: Failed to trigger onTorchStatusChanged for %d:%d: %d",
-                    __FUNCTION__, i->getListenerUid(), i->getListenerPid(), ret.exceptionCode());
+
+        // Only cameras of the default device can be remapped to a different camera (using
+        // remapCameraIds method), so do the following only if the camera is associated with the
+        // default device.
+        if (deviceId == kDefaultDeviceId) {
+            // For the default device, also trigger the torch callbacks for cameras that were
+            // remapped to the current cameraId for the specific package that this listener belongs
+            // to.
+            std::vector<std::string> remappedCameraIds =
+                    findOriginalIdsForRemappedCameraId(cameraId, i->getListenerUid());
+            for (auto &remappedCameraId: remappedCameraIds) {
+                ret = i->getListener()->onTorchStatusChanged(mapToInterface(status),
+                        remappedCameraId, kDefaultDeviceId);
+                i->handleBinderStatus(ret,
+                        "%s: Failed to trigger onTorchStatusChanged for %d:%d: %d",
+                        __FUNCTION__, i->getListenerUid(), i->getListenerPid(),
+                        ret.exceptionCode());
+            }
         }
     }
 }
@@ -353,10 +375,28 @@ void CameraService::onNewProviderRegistered() {
 void CameraService::filterAPI1SystemCameraLocked(
         const std::vector<std::string> &normalDeviceIds) {
     mNormalDeviceIdsWithoutSystemCamera.clear();
-    for (auto &deviceId : normalDeviceIds) {
+    for (auto &cameraId : normalDeviceIds) {
+        if (vd_flags::camera_device_awareness()) {
+            CameraMetadata cameraInfo;
+            status_t res = mCameraProviderManager->getCameraCharacteristics(
+                    cameraId, false, &cameraInfo, false);
+            int32_t deviceId = kDefaultDeviceId;
+            if (res != OK) {
+                ALOGW("%s: Not able to get camera characteristics for camera id %s",
+                      __FUNCTION__, cameraId.c_str());
+            } else {
+                deviceId = getDeviceId(cameraInfo);
+            }
+            // Cameras associated with non-default device id's (i.e., virtual cameras) can never be
+            // system cameras, so skip for non-default device id's.
+            if (deviceId != kDefaultDeviceId) {
+                continue;
+            }
+        }
+
         SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
-        if (getSystemCameraKind(deviceId, &deviceKind) != OK) {
-            ALOGE("%s: Invalid camera id %s, skipping", __FUNCTION__, deviceId.c_str());
+        if (getSystemCameraKind(cameraId, &deviceKind) != OK) {
+            ALOGE("%s: Invalid camera id %s, skipping", __FUNCTION__, cameraId.c_str());
             continue;
         }
         if (deviceKind == SystemCameraKind::SYSTEM_ONLY_CAMERA) {
@@ -364,7 +404,7 @@ void CameraService::filterAPI1SystemCameraLocked(
             // device ids as per the HAL interface contract.
             break;
         }
-        mNormalDeviceIdsWithoutSystemCamera.push_back(deviceId);
+        mNormalDeviceIdsWithoutSystemCamera.push_back(cameraId);
     }
     ALOGV("%s: number of API1 compatible public cameras is %zu", __FUNCTION__,
               mNormalDeviceIdsWithoutSystemCamera.size());
@@ -518,10 +558,10 @@ void CameraService::onDeviceStatusChanged(const std::string& cameraId,
     if (newStatus == StatusInternal::NOT_PRESENT) {
         logDeviceRemoved(cameraId, fmt::format("Device status changed from {} to {}",
                 oldStatus, newStatus));
-
         // Set the device status to NOT_PRESENT, clients will no longer be able to connect
         // to this device until the status changes
         updateStatus(StatusInternal::NOT_PRESENT, cameraId);
+        mVirtualDeviceCameraIdMapper.removeCamera(cameraId);
 
         sp<BasicClient> clientToDisconnectOnline, clientToDisconnectOffline;
         {
@@ -603,7 +643,7 @@ void CameraService::onDeviceStatusChanged(const std::string& id,
                 continue;
             }
             auto ret = listener->getListener()->onPhysicalCameraStatusChanged(
-                    mapToInterface(newStatus), id, physicalId);
+                    mapToInterface(newStatus), id, physicalId, kDefaultDeviceId);
             listener->handleBinderStatus(ret,
                     "%s: Failed to trigger onPhysicalCameraStatusChanged for %d:%d: %d",
                     __FUNCTION__, listener->getListenerUid(), listener->getListenerPid(),
@@ -637,7 +677,6 @@ void CameraService::onTorchStatusChanged(const std::string& cameraId,
     onTorchStatusChangedLocked(cameraId, newStatus, systemCameraKind);
 }
 
-
 void CameraService::onTorchStatusChanged(const std::string& cameraId,
         TorchModeStatus newStatus, SystemCameraKind systemCameraKind) {
     Mutex::Autolock al(mTorchStatusMutex);
@@ -646,9 +685,14 @@ void CameraService::onTorchStatusChanged(const std::string& cameraId,
 
 void CameraService::broadcastTorchStrengthLevel(const std::string& cameraId,
         int32_t newStrengthLevel) {
+    // Get the device id and app-visible camera id for the given HAL-visible camera id.
+    auto [deviceId, mappedCameraId] =
+            mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(cameraId);
+
     Mutex::Autolock lock(mStatusListenerLock);
     for (auto& i : mListenerList) {
-        auto ret = i->getListener()->onTorchStrengthLevelChanged(cameraId, newStrengthLevel);
+        auto ret = i->getListener()->onTorchStrengthLevelChanged(mappedCameraId,
+                newStrengthLevel, deviceId);
         i->handleBinderStatus(ret,
                 "%s: Failed to trigger onTorchStrengthLevelChanged for %d:%d: %d", __FUNCTION__,
                 i->getListenerUid(), i->getListenerPid(), ret.exceptionCode());
@@ -753,12 +797,19 @@ bool CameraService::isAutomotiveExteriorSystemCamera(const std::string& cam_id) 
     return true;
 }
 
-Status CameraService::getNumberOfCameras(int32_t type, int32_t* numCameras) {
+Status CameraService::getNumberOfCameras(int32_t type, int32_t deviceId, int32_t devicePolicy,
+        int32_t* numCameras) {
     ATRACE_CALL();
+    if (vd_flags::camera_device_awareness() && (deviceId != kDefaultDeviceId)
+            && (devicePolicy != IVirtualDeviceManagerNative::DEVICE_POLICY_DEFAULT)) {
+        *numCameras = mVirtualDeviceCameraIdMapper.getNumberOfCameras(deviceId);
+        return Status::ok();
+    }
+
     Mutex::Autolock l(mServiceLock);
     bool hasSystemCameraPermissions =
-            hasPermissionsForSystemCamera(std::string(), CameraThreadState::getCallingPid(),
-                    CameraThreadState::getCallingUid());
+            hasPermissionsForSystemCamera(std::string(), getCallingPid(),
+                    getCallingUid());
     switch (type) {
         case CAMERA_TYPE_BACKWARD_COMPATIBLE:
             if (hasSystemCameraPermissions) {
@@ -785,8 +836,8 @@ Status CameraService::getNumberOfCameras(int32_t type, int32_t* numCameras) {
 
 Status CameraService::remapCameraIds(const hardware::CameraIdRemapping& cameraIdRemapping) {
     if (!checkCallingPermission(toString16(sCameraInjectExternalCameraPermission))) {
-        const int pid = CameraThreadState::getCallingPid();
-        const int uid = CameraThreadState::getCallingUid();
+        const int pid = getCallingPid();
+        const int uid = getCallingUid();
         ALOGE("%s: Permission Denial: can't configure camera ID mapping pid=%d, uid=%d",
                 __FUNCTION__, pid, uid);
         return STATUS_ERROR(ERROR_PERMISSION_DENIED,
@@ -802,6 +853,7 @@ Status CameraService::remapCameraIds(const hardware::CameraIdRemapping& cameraId
 }
 
 Status CameraService::createDefaultRequest(const std::string& unresolvedCameraId, int templateId,
+        int32_t deviceId, int32_t devicePolicy,
         /* out */
         hardware::camera2::impl::CameraMetadataNative* request) {
     ATRACE_CALL();
@@ -816,8 +868,15 @@ Status CameraService::createDefaultRequest(const std::string& unresolvedCameraId
         return STATUS_ERROR(ERROR_DISCONNECTED, "Camera subsystem is not available");
     }
 
-    const std::string cameraId = resolveCameraId(unresolvedCameraId,
-            CameraThreadState::getCallingUid());
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, getCallingUid());
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
 
     binder::Status res;
     if (request == nullptr) {
@@ -858,6 +917,7 @@ Status CameraService::createDefaultRequest(const std::string& unresolvedCameraId
 Status CameraService::isSessionConfigurationWithParametersSupported(
         const std::string& unresolvedCameraId,
         const SessionConfiguration& sessionConfiguration,
+        int32_t deviceId, int32_t devicePolicy,
         /*out*/
         bool* supported) {
     ATRACE_CALL();
@@ -872,8 +932,16 @@ Status CameraService::isSessionConfigurationWithParametersSupported(
         return STATUS_ERROR(ERROR_DISCONNECTED, "Camera subsystem is not available");
     }
 
-    const std::string cameraId = resolveCameraId(unresolvedCameraId,
-            CameraThreadState::getCallingUid());
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, getCallingUid());
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
+
     if (supported == nullptr) {
         std::string msg = fmt::sprintf("Camera %s: Invalid 'support' input!",
                 unresolvedCameraId.c_str());
@@ -918,19 +986,10 @@ Status CameraService::isSessionConfigurationWithParametersSupported(
 }
 
 Status CameraService::getSessionCharacteristics(const std::string& unresolvedCameraId,
-                                                int targetSdkVersion, bool overrideToPortrait,
-                                                const SessionConfiguration& sessionConfiguration,
-                                                /*out*/ CameraMetadata* outMetadata) {
+        int targetSdkVersion, bool overrideToPortrait,
+        const SessionConfiguration& sessionConfiguration, int32_t deviceId, int32_t devicePolicy,
+        /*out*/ CameraMetadata* outMetadata) {
     ATRACE_CALL();
-
-    if (!mInitialized) {
-        ALOGE("%s: Camera HAL couldn't be initialized", __FUNCTION__);
-        logServiceError("Camera subsystem is not available", ERROR_DISCONNECTED);
-        return STATUS_ERROR(ERROR_DISCONNECTED, "Camera subsystem is not available");
-    }
-
-    const std::string cameraId =
-            resolveCameraId(unresolvedCameraId, CameraThreadState::getCallingUid());
 
     if (outMetadata == nullptr) {
         std::string msg =
@@ -939,16 +998,35 @@ Status CameraService::getSessionCharacteristics(const std::string& unresolvedCam
         return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
     }
 
+    if (!mInitialized) {
+        ALOGE("%s: Camera HAL couldn't be initialized", __FUNCTION__);
+        logServiceError("Camera subsystem is not available", ERROR_DISCONNECTED);
+        return STATUS_ERROR(ERROR_DISCONNECTED, "Camera subsystem is not available");
+    }
+
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+                                                                  devicePolicy, getCallingUid());
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                                       unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
+
+    if (shouldRejectSystemCameraConnection(cameraId)) {
+        return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION,
+                                "Unable to retrieve camera"
+                                "characteristics for system only device %s: ",
+                                cameraId.c_str());
+    }
+
     bool overrideForPerfClass = SessionConfigurationUtils::targetPerfClassPrimaryCamera(
             mPerfClassPrimaryCameraIds, cameraId, targetSdkVersion);
 
     status_t ret = mCameraProviderManager->getSessionCharacteristics(
             cameraId, sessionConfiguration, overrideForPerfClass, overrideToPortrait, outMetadata);
 
-    // TODO(b/303645857): Remove fingerprintable metadata if the caller process does not have
-    //                    camera access permission.
-
-    Status res = Status::ok();
     switch (ret) {
         case OK:
             // Expected, no handling needed.
@@ -958,18 +1036,90 @@ Status CameraService::getSessionCharacteristics(const std::string& unresolvedCam
                         "Camera %s: Session characteristics query not supported!",
                         cameraId.c_str());
                 ALOGD("%s: %s", __FUNCTION__, msg.c_str());
-                res = STATUS_ERROR(CameraService::ERROR_INVALID_OPERATION, msg.c_str());
+                logServiceError(msg, CameraService::ERROR_INVALID_OPERATION);
+                outMetadata->clear();
+                return STATUS_ERROR(CameraService::ERROR_INVALID_OPERATION, msg.c_str());
+            }
+            break;
+        case NAME_NOT_FOUND: {
+                std::string msg = fmt::sprintf(
+                        "Camera %s: Unknown camera ID.",
+                        cameraId.c_str());
+                ALOGD("%s: %s", __FUNCTION__, msg.c_str());
+                logServiceError(msg, CameraService::ERROR_ILLEGAL_ARGUMENT);
+                outMetadata->clear();
+                return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
             }
             break;
         default: {
-                std::string msg = fmt::sprintf("Camera %s: Error: %s (%d)", cameraId.c_str(),
-                                               strerror(-ret), ret);
+                std::string msg = fmt::sprintf(
+                        "Unable to retrieve session characteristics for camera device %s: "
+                        "Error: %s (%d)",
+                        cameraId.c_str(), strerror(-ret), ret);
                 ALOGE("%s: %s", __FUNCTION__, msg.c_str());
-                res = STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+                logServiceError(msg, CameraService::ERROR_INVALID_OPERATION);
+                outMetadata->clear();
+                return STATUS_ERROR(CameraService::ERROR_INVALID_OPERATION, msg.c_str());
             }
     }
 
-    return res;
+    return filterSensitiveMetadataIfNeeded(cameraId, outMetadata);
+}
+
+Status CameraService::filterSensitiveMetadataIfNeeded(
+        const std::string& cameraId, CameraMetadata* metadata) {
+    int callingPid = getCallingPid();
+    int callingUid = getCallingUid();
+
+    if (callingPid == getpid()) {
+        // Caller is cameraserver; no need to remove keys
+        return Status::ok();
+    }
+
+    SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
+    if (getSystemCameraKind(cameraId, &deviceKind) != OK) {
+        ALOGE("%s: Couldn't get camera kind for camera id %s", __FUNCTION__, cameraId.c_str());
+        metadata->clear();
+        return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION,
+                                "Unable to retrieve camera kind for device %s", cameraId.c_str());
+    }
+    if (deviceKind == SystemCameraKind::SYSTEM_ONLY_CAMERA) {
+        // Attempting to query system only camera without system camera permission would have
+        // failed the shouldRejectSystemCameraConnection in the caller. So if we get here
+        // for a system only camera, then the caller has the required permission.
+        // No need to remove keys
+        return Status::ok();
+    }
+
+    std::vector<int32_t> tagsRemoved;
+    bool hasCameraPermission = hasPermissionsForCamera(cameraId, callingPid, callingUid);
+    if (hasCameraPermission) {
+        // Caller has camera permission; no need to remove keys
+        return Status::ok();
+    }
+
+    status_t ret = metadata->removePermissionEntries(
+            mCameraProviderManager->getProviderTagIdLocked(cameraId), &tagsRemoved);
+    if (ret != OK) {
+        metadata->clear();
+        return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION,
+                                "Failed to remove camera characteristics needing camera permission "
+                                "for device %s:%s (%d)",
+                                cameraId.c_str(), strerror(-ret), ret);
+    }
+
+    if (!tagsRemoved.empty()) {
+        ret = metadata->update(ANDROID_REQUEST_CHARACTERISTIC_KEYS_NEEDING_PERMISSION,
+                                  tagsRemoved.data(), tagsRemoved.size());
+        if (ret != OK) {
+            metadata->clear();
+            return STATUS_ERROR_FMT(
+                    ERROR_INVALID_OPERATION,
+                    "Failed to insert camera keys needing permission for device %s: %s (%d)",
+                    cameraId.c_str(), strerror(-ret), ret);
+        }
+    }
+    return Status::ok();
 }
 
 Status CameraService::parseCameraIdRemapping(
@@ -977,7 +1127,7 @@ Status CameraService::parseCameraIdRemapping(
         /* out */ TCameraIdRemapping* cameraIdRemappingMap) {
     std::string packageName;
     std::string cameraIdToReplace, updatedCameraId;
-    for(const auto& packageIdRemapping: cameraIdRemapping.packageIdRemappings) {
+    for (const auto& packageIdRemapping: cameraIdRemapping.packageIdRemappings) {
         packageName = packageIdRemapping.packageName;
         if (packageName.empty()) {
             return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT,
@@ -989,7 +1139,7 @@ Status CameraService::parseCameraIdRemapping(
                     "CameraIdRemapping: Mismatch in CameraId Remapping lists sizes for package %s",
                     packageName.c_str());
         }
-        for(size_t i = 0; i < packageIdRemapping.cameraIdsToReplace.size(); i++) {
+        for (size_t i = 0; i < packageIdRemapping.cameraIdsToReplace.size(); i++) {
             cameraIdToReplace = packageIdRemapping.cameraIdsToReplace[i];
             updatedCameraId = packageIdRemapping.updatedCameraIds[i];
             if (cameraIdToReplace.empty() || updatedCameraId.empty()) {
@@ -1003,6 +1153,22 @@ Status CameraService::parseCameraIdRemapping(
                         " as updatedCameraId for %s",
                         packageName.c_str());
             }
+
+            // Do not allow any camera remapping that involves a virtual camera.
+            auto [deviceIdForCameraToReplace, _] =
+                    mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(
+                            cameraIdToReplace);
+            if (deviceIdForCameraToReplace != kDefaultDeviceId) {
+                return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT,
+                        "CameraIdRemapping: CameraIdToReplace cannot be a virtual camera");
+            }
+            [[maybe_unused]] auto [deviceIdForUpdatedCamera, unusedMappedCameraId] =
+                    mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(updatedCameraId);
+            if (deviceIdForUpdatedCamera != kDefaultDeviceId) {
+                return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT,
+                        "CameraIdRemapping: UpdatedCameraId cannot be a virtual camera");
+            }
+
             (*cameraIdRemappingMap)[packageName][cameraIdToReplace] = updatedCameraId;
         }
     }
@@ -1047,7 +1213,7 @@ void CameraService::remapCameraIds(const TCameraIdRemapping& cameraIdRemapping) 
     mServiceLock.unlock();
 
     // Clear calling identity for disconnect() PID checks.
-    int64_t token = CameraThreadState::clearCallingIdentity();
+    int64_t token = clearCallingIdentity();
 
     // Disconnect clients.
     for (auto& clientSp : clientsToDisconnect) {
@@ -1059,7 +1225,7 @@ void CameraService::remapCameraIds(const TCameraIdRemapping& cameraIdRemapping) 
     // Invoke destructors (which call disconnect()) now while we don't hold the mServiceLock.
     clientsToDisconnect.clear();
 
-    CameraThreadState::restoreCallingIdentity(token);
+    restoreCallingIdentity(token);
     mServiceLock.lock();
 
     {
@@ -1071,15 +1237,22 @@ void CameraService::remapCameraIds(const TCameraIdRemapping& cameraIdRemapping) 
 }
 
 Status CameraService::injectSessionParams(
-            const std::string& cameraId,
-            const CameraMetadata& sessionParams) {
-   if (!checkCallingPermission(toString16(sCameraInjectExternalCameraPermission))) {
-        const int pid = CameraThreadState::getCallingPid();
-        const int uid = CameraThreadState::getCallingUid();
+        const std::string& cameraId,
+        const CameraMetadata& sessionParams) {
+    if (!checkCallingPermission(toString16(sCameraInjectExternalCameraPermission))) {
+        const int pid = getCallingPid();
+        const int uid = getCallingUid();
         ALOGE("%s: Permission Denial: can't inject session params pid=%d, uid=%d",
                 __FUNCTION__, pid, uid);
         return STATUS_ERROR(ERROR_PERMISSION_DENIED,
                 "Permission Denial: no permission to inject session params");
+    }
+
+    // Do not allow session params injection for a virtual camera.
+    auto [deviceId, _] = mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(cameraId);
+    if (deviceId != kDefaultDeviceId) {
+        return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT,
+                "Cannot inject session params for a virtual camera");
     }
 
     std::unique_ptr<AutoConditionLock> serviceLockWrapper =
@@ -1147,13 +1320,40 @@ std::string CameraService::resolveCameraId(
     return inputCameraId;
 }
 
-Status CameraService::getCameraInfo(int cameraId, bool overrideToPortrait,
-        CameraInfo* cameraInfo) {
+std::optional<std::string> CameraService::resolveCameraId(
+        const std::string& inputCameraId,
+        int32_t deviceId,
+        int32_t devicePolicy,
+        int clientUid,
+        const std::string& packageName) {
+    if ((deviceId == kDefaultDeviceId)
+            || (devicePolicy == IVirtualDeviceManagerNative::DEVICE_POLICY_DEFAULT)) {
+        auto [storedDeviceId, _] =
+                mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(inputCameraId);
+        if (storedDeviceId != kDefaultDeviceId) {
+            // Trying to access a virtual camera from default-policy device context, we should fail.
+            std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                    inputCameraId.c_str(), deviceId);
+            ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+            return std::nullopt;
+        }
+        return resolveCameraId(inputCameraId, clientUid, packageName);
+    }
+
+    return mVirtualDeviceCameraIdMapper.getActualCameraId(deviceId, inputCameraId);
+}
+
+Status CameraService::getCameraInfo(int cameraId, bool overrideToPortrait, int32_t deviceId,
+        int32_t devicePolicy, CameraInfo* cameraInfo) {
     ATRACE_CALL();
     Mutex::Autolock l(mServiceLock);
-    std::string unresolvedCameraId = cameraIdIntToStrLocked(cameraId);
-    std::string cameraIdStr = resolveCameraId(
-            unresolvedCameraId, CameraThreadState::getCallingUid());
+    std::string cameraIdStr = cameraIdIntToStrLocked(cameraId, deviceId, devicePolicy);
+    if (cameraIdStr.empty()) {
+        std::string msg = fmt::sprintf("Camera %d: Invalid camera id for device id %d",
+                cameraId, deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
 
     if (shouldRejectSystemCameraConnection(cameraIdStr)) {
         return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION, "Unable to retrieve camera"
@@ -1166,7 +1366,7 @@ Status CameraService::getCameraInfo(int cameraId, bool overrideToPortrait,
                 "Camera subsystem is not available");
     }
     bool hasSystemCameraPermissions = hasPermissionsForSystemCamera(std::to_string(cameraId),
-            CameraThreadState::getCallingPid(), CameraThreadState::getCallingUid());
+            getCallingPid(), getCallingUid());
     int cameraIdBound = mNumberOfCamerasWithoutSystemCamera;
     if (hasSystemCameraPermissions) {
         cameraIdBound = mNumberOfCameras;
@@ -1191,35 +1391,43 @@ Status CameraService::getCameraInfo(int cameraId, bool overrideToPortrait,
     return ret;
 }
 
-std::string CameraService::cameraIdIntToStrLocked(int cameraIdInt) {
-    const std::vector<std::string> *deviceIds = &mNormalDeviceIdsWithoutSystemCamera;
-    auto callingPid = CameraThreadState::getCallingPid();
-    auto callingUid = CameraThreadState::getCallingUid();
+std::string CameraService::cameraIdIntToStrLocked(int cameraIdInt,
+        int32_t deviceId, int32_t devicePolicy) {
+    if (vd_flags::camera_device_awareness() && (deviceId != kDefaultDeviceId)
+            && (devicePolicy != IVirtualDeviceManagerNative::DEVICE_POLICY_DEFAULT)) {
+        std::optional<std::string> cameraIdOptional =
+                mVirtualDeviceCameraIdMapper.getActualCameraId(cameraIdInt, deviceId);
+        return cameraIdOptional.has_value() ? cameraIdOptional.value() : std::string{};
+    }
+
+    const std::vector<std::string> *cameraIds = &mNormalDeviceIdsWithoutSystemCamera;
+    auto callingPid = getCallingPid();
+    auto callingUid = getCallingUid();
     bool systemCameraPermissions = hasPermissionsForSystemCamera(std::to_string(cameraIdInt),
             callingPid, callingUid, /* checkCameraPermissions= */ false);
     if (systemCameraPermissions || getpid() == callingPid) {
-        deviceIds = &mNormalDeviceIds;
+        cameraIds = &mNormalDeviceIds;
     }
-    if (cameraIdInt < 0 || cameraIdInt >= static_cast<int>(deviceIds->size())) {
-        ALOGE("%s: input id %d invalid: valid range  (0, %zu)",
-                __FUNCTION__, cameraIdInt, deviceIds->size());
+    if (cameraIdInt < 0 || cameraIdInt >= static_cast<int>(cameraIds->size())) {
+        ALOGE("%s: input id %d invalid: valid range (0, %zu)",
+                __FUNCTION__, cameraIdInt, cameraIds->size());
         return std::string{};
     }
 
-    return (*deviceIds)[cameraIdInt];
+    std::string unresolvedCameraId = (*cameraIds)[cameraIdInt];
+    return resolveCameraId(unresolvedCameraId, getCallingUid());
 }
 
-std::string CameraService::cameraIdIntToStr(int cameraIdInt) {
+std::string CameraService::cameraIdIntToStr(int cameraIdInt, int32_t deviceId,
+        int32_t devicePolicy) {
     Mutex::Autolock lock(mServiceLock);
-    return cameraIdIntToStrLocked(cameraIdInt);
+    return cameraIdIntToStrLocked(cameraIdInt, deviceId, devicePolicy);
 }
 
 Status CameraService::getCameraCharacteristics(const std::string& unresolvedCameraId,
-        int targetSdkVersion, bool overrideToPortrait, CameraMetadata* cameraInfo) {
+        int targetSdkVersion, bool overrideToPortrait, int32_t deviceId, int32_t devicePolicy,
+        CameraMetadata* cameraInfo) {
     ATRACE_CALL();
-
-    const std::string cameraId = resolveCameraId(unresolvedCameraId,
-            CameraThreadState::getCallingUid());
 
     if (!cameraInfo) {
         ALOGE("%s: cameraInfo is NULL", __FUNCTION__);
@@ -1233,12 +1441,20 @@ Status CameraService::getCameraCharacteristics(const std::string& unresolvedCame
                 "Camera subsystem is not available");;
     }
 
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, getCallingUid());
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
+
     if (shouldRejectSystemCameraConnection(cameraId)) {
         return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION, "Unable to retrieve camera"
                 "characteristics for system only device %s: ", cameraId.c_str());
     }
-
-    Status ret{};
 
     bool overrideForPerfClass =
             SessionConfigurationUtils::targetPerfClassPrimaryCamera(mPerfClassPrimaryCameraIds,
@@ -1258,60 +1474,31 @@ Status CameraService::getCameraCharacteristics(const std::string& unresolvedCame
                     strerror(-res), res);
         }
     }
-    SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
-    if (getSystemCameraKind(cameraId, &deviceKind) != OK) {
-        ALOGE("%s: Invalid camera id %s, skipping", __FUNCTION__, cameraId.c_str());
-        return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION, "Unable to retrieve camera kind "
-                "for device %s", cameraId.c_str());
-    }
-    int callingPid = CameraThreadState::getCallingPid();
-    int callingUid = CameraThreadState::getCallingUid();
-    std::vector<int32_t> tagsRemoved;
-    // If it's not calling from cameraserver, check the permission only if
-    // android.permission.CAMERA is required. If android.permission.SYSTEM_CAMERA was needed,
-    // it would've already been checked in shouldRejectSystemCameraConnection.
-    bool checkPermissionForCamera = hasPermissionsForCamera(cameraId, callingPid, callingUid);
-    if ((callingPid != getpid()) &&
-            (deviceKind != SystemCameraKind::SYSTEM_ONLY_CAMERA) &&
-            !checkPermissionForCamera) {
-        res = cameraInfo->removePermissionEntries(
-                mCameraProviderManager->getProviderTagIdLocked(cameraId),
-                &tagsRemoved);
-        if (res != OK) {
-            cameraInfo->clear();
-            return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION, "Failed to remove camera"
-                    " characteristics needing camera permission for device %s: %s (%d)",
-                    cameraId.c_str(), strerror(-res), res);
-        }
-    }
 
-    if (!tagsRemoved.empty()) {
-        res = cameraInfo->update(ANDROID_REQUEST_CHARACTERISTIC_KEYS_NEEDING_PERMISSION,
-                tagsRemoved.data(), tagsRemoved.size());
-        if (res != OK) {
-            cameraInfo->clear();
-            return STATUS_ERROR_FMT(ERROR_INVALID_OPERATION, "Failed to insert camera "
-                    "keys needing permission for device %s: %s (%d)", cameraId.c_str(),
-                    strerror(-res), res);
-        }
-    }
-
-    return ret;
+    return filterSensitiveMetadataIfNeeded(cameraId, cameraInfo);
 }
 
-Status CameraService::getTorchStrengthLevel(const std::string& unresolvedCameraId,
-        int32_t* torchStrength) {
+Status CameraService::getTorchStrengthLevel(const std::string& unresolvedCameraId, int32_t deviceId,
+        int32_t devicePolicy, int32_t* torchStrength) {
     ATRACE_CALL();
     Mutex::Autolock l(mServiceLock);
 
-    const std::string cameraId = resolveCameraId(
-        unresolvedCameraId, CameraThreadState::getCallingUid());
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, getCallingUid());
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
+
     if (!mInitialized) {
         ALOGE("%s: Camera HAL couldn't be initialized.", __FUNCTION__);
         return STATUS_ERROR(ERROR_DISCONNECTED, "Camera HAL couldn't be initialized.");
     }
 
-    if(torchStrength == NULL) {
+    if (torchStrength == NULL) {
         ALOGE("%s: strength level must not be null.", __FUNCTION__);
         return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT, "Strength level should not be null.");
     }
@@ -1551,7 +1738,7 @@ int32_t CameraService::mapToInterface(StatusInternal status) {
 }
 
 Status CameraService::initializeShimMetadata(int cameraId) {
-    int uid = CameraThreadState::getCallingUid();
+    int uid = getCallingUid();
 
     std::string cameraIdStr = std::to_string(cameraId);
     Status ret = Status::ok();
@@ -1583,7 +1770,7 @@ Status CameraService::getLegacyParametersLazy(int cameraId,
 
     std::string unresolvedCameraId = std::to_string(cameraId);
     std::string cameraIdStr = resolveCameraId(unresolvedCameraId,
-            CameraThreadState::getCallingUid());
+            getCallingUid());
 
     // Check if we already have parameters
     {
@@ -1602,9 +1789,9 @@ Status CameraService::getLegacyParametersLazy(int cameraId,
         }
     }
 
-    int64_t token = CameraThreadState::clearCallingIdentity();
+    int64_t token = clearCallingIdentity();
     ret = initializeShimMetadata(cameraId);
-    CameraThreadState::restoreCallingIdentity(token);
+    restoreCallingIdentity(token);
     if (!ret.isOk()) {
         // Error already logged by callee
         return ret;
@@ -1649,7 +1836,7 @@ Status CameraService::validateConnectLocked(const std::string& cameraId,
     }
 #endif  // __BRILLO__
 
-    int callingPid = CameraThreadState::getCallingPid();
+    int callingPid = getCallingPid();
 
     if (!mInitialized) {
         ALOGE("CameraService::connect X (PID %d) rejected (camera HAL module not loaded)",
@@ -1683,8 +1870,8 @@ Status CameraService::validateConnectLocked(const std::string& cameraId,
 Status CameraService::validateClientPermissionsLocked(const std::string& cameraId,
         const std::string& clientName, int& clientUid, int& clientPid,
         /*out*/int& originalClientPid) const {
-    int callingPid = CameraThreadState::getCallingPid();
-    int callingUid = CameraThreadState::getCallingUid();
+    int callingPid = getCallingPid();
+    int callingUid = getCallingUid();
 
     // Check if we can trust clientUid
     if (clientUid == USE_CALLING_UID) {
@@ -1772,7 +1959,7 @@ Status CameraService::validateClientPermissionsLocked(const std::string& cameraI
 
     // For non-system clients : Only allow clients who are being used by the current foreground
     // device user, unless calling from our own process.
-    if (!doesClientHaveSystemUid() && callingPid != getpid() &&
+    if (!callerHasSystemUid() && callingPid != getpid() &&
             (mAllowedUsers.find(clientUserId) == mAllowedUsers.end())) {
         ALOGE("CameraService::connect X (PID %d) rejected (cannot connect from "
                 "device user %d, currently allowed device users: %s)", callingPid, clientUserId,
@@ -1802,7 +1989,7 @@ Status CameraService::validateClientPermissionsLocked(const std::string& cameraI
 
 status_t CameraService::checkIfDeviceIsUsable(const std::string& cameraId) const {
     auto cameraState = getCameraState(cameraId);
-    int callingPid = CameraThreadState::getCallingPid();
+    int callingPid = getCallingPid();
     if (cameraState == nullptr) {
         ALOGE("CameraService::connect X (PID %d) rejected (invalid camera ID %s)", callingPid,
                 cameraId.c_str());
@@ -1900,7 +2087,7 @@ status_t CameraService::handleEvictionsLocked(const std::string& cameraId, int c
 
         sp<IServiceManager> sm = defaultServiceManager();
         sp<IBinder> binder = sm->checkService(String16(kProcessInfoServiceName));
-        if (!binder && isAutomotivePrivilegedClient(CameraThreadState::getCallingUid())) {
+        if (!binder && isAutomotivePrivilegedClient(getCallingUid())) {
             // If processinfo service is not available and the client is automotive privileged
             // client used for safety critical uses cases such as rear-view and surround-view which
             // needs to be available before android boot completes, then use the hardcoded values
@@ -2033,7 +2220,7 @@ status_t CameraService::handleEvictionsLocked(const std::string& cameraId, int c
     mServiceLock.unlock();
 
     // Clear caller identity temporarily so client disconnect PID checks work correctly
-    int64_t token = CameraThreadState::clearCallingIdentity();
+    int64_t token = clearCallingIdentity();
 
     // Destroy evicted clients
     for (auto& i : evictedClients) {
@@ -2041,7 +2228,7 @@ status_t CameraService::handleEvictionsLocked(const std::string& cameraId, int c
         i->getValue()->disconnect(); // Clients will remove themselves from the active client list
     }
 
-    CameraThreadState::restoreCallingIdentity(token);
+    restoreCallingIdentity(token);
 
     for (const auto& i : evictedClients) {
         ALOGV("%s: Waiting for disconnect to complete for client for device %s (PID %" PRId32 ")",
@@ -2084,15 +2271,20 @@ Status CameraService::connect(
         int targetSdkVersion,
         bool overrideToPortrait,
         bool forceSlowJpegMode,
+        int32_t deviceId,
+        int32_t devicePolicy,
         /*out*/
         sp<ICamera>* device) {
-
     ATRACE_CALL();
     Status ret = Status::ok();
 
-    std::string unresolvedCameraId = cameraIdIntToStr(api1CameraId);
-    std::string cameraIdStr = resolveCameraId(unresolvedCameraId,
-            CameraThreadState::getCallingUid());
+    std::string cameraIdStr = cameraIdIntToStr(api1CameraId, deviceId, devicePolicy);
+    if (cameraIdStr.empty()) {
+        std::string msg = fmt::sprintf("Camera %d: Invalid camera id for device id %d",
+                api1CameraId, deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
 
     sp<Client> client = nullptr;
     ret = connectHelper<ICameraClient,Client>(cameraClient, cameraIdStr, api1CameraId,
@@ -2100,9 +2292,8 @@ Status CameraService::connect(
             /*shimUpdateOnly*/ false, /*oomScoreOffset*/ 0, targetSdkVersion,
             overrideToPortrait, forceSlowJpegMode, cameraIdStr, /*out*/client);
 
-    if(!ret.isOk()) {
-        logRejected(cameraIdStr, CameraThreadState::getCallingPid(), clientPackageName,
-                toStdString(ret.toString8()));
+    if (!ret.isOk()) {
+        logRejected(cameraIdStr, getCallingPid(), clientPackageName, toStdString(ret.toString8()));
         return ret;
     }
 
@@ -2112,8 +2303,8 @@ Status CameraService::connect(
     const auto& mActivityManager = getActivityManager();
     if (mActivityManager) {
         mActivityManager->logFgsApiBegin(LOG_FGS_CAMERA_API,
-            CameraThreadState::getCallingUid(),
-            CameraThreadState::getCallingPid());
+            getCallingUid(),
+            getCallingPid());
     }
 
     return ret;
@@ -2143,9 +2334,9 @@ bool CameraService::shouldRejectSystemCameraConnection(const std::string& camera
     //    and the serving thread is a non hwbinder thread, the client must have
     //    android.permission.SYSTEM_CAMERA permissions to connect.
 
-    int cPid = CameraThreadState::getCallingPid();
-    int cUid = CameraThreadState::getCallingUid();
-    bool systemClient = doesClientHaveSystemUid();
+    int cPid = getCallingPid();
+    int cUid = getCallingUid();
+    bool systemClient = callerHasSystemUid();
     SystemCameraKind systemCameraKind = SystemCameraKind::PUBLIC;
     if (getSystemCameraKind(cameraId, &systemCameraKind) != OK) {
         // This isn't a known camera ID, so it's not a system camera
@@ -2182,27 +2373,31 @@ Status CameraService::connectDevice(
         const std::string& clientPackageName,
         const std::optional<std::string>& clientFeatureId,
         int clientUid, int oomScoreOffset, int targetSdkVersion,
-        bool overrideToPortrait,
+        bool overrideToPortrait, int32_t deviceId, int32_t devicePolicy,
         /*out*/
         sp<hardware::camera2::ICameraDeviceUser>* device) {
-
     ATRACE_CALL();
     Status ret = Status::ok();
     sp<CameraDeviceClient> client = nullptr;
     std::string clientPackageNameAdj = clientPackageName;
-    int callingPid = CameraThreadState::getCallingPid();
-    int callingUid = CameraThreadState::getCallingUid();
+    int callingPid = getCallingPid();
+    int callingUid = getCallingUid();
     bool systemNativeClient = false;
-    if (doesClientHaveSystemUid() && (clientPackageNameAdj.size() == 0)) {
+    if (callerHasSystemUid() && (clientPackageNameAdj.size() == 0)) {
         std::string systemClient = fmt::sprintf("client.pid<%d>", callingPid);
         clientPackageNameAdj = systemClient;
         systemNativeClient = true;
     }
 
-    const std::string cameraId = resolveCameraId(
-            unresolvedCameraId,
-            callingUid,
-            clientPackageNameAdj);
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, callingUid, clientPackageNameAdj);
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
 
     if (oomScoreOffset < 0) {
         std::string msg =
@@ -2245,7 +2440,7 @@ Status CameraService::connectDevice(
             targetSdkVersion, overrideToPortrait, /*forceSlowJpegMode*/false, unresolvedCameraId,
             /*out*/client);
 
-    if(!ret.isOk()) {
+    if (!ret.isOk()) {
         logRejected(cameraId, callingPid, clientPackageNameAdj, toStdString(ret.toString8()));
         return ret;
     }
@@ -2363,7 +2558,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const std::str
     bool isNonSystemNdk = false;
     std::string clientPackageName;
     int packageUid = (clientUid == USE_CALLING_UID) ?
-            CameraThreadState::getCallingUid() : clientUid;
+            getCallingUid() : clientUid;
     if (clientPackageNameMaybe.size() <= 0) {
         // NDK calls don't come with package names, but we need one for various cases.
         // Generally, there's a 1:1 mapping between UID and package name, but shared UIDs
@@ -2379,7 +2574,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const std::str
     int originalClientPid = 0;
 
     int packagePid = (clientPid == USE_CALLING_PID) ?
-        CameraThreadState::getCallingPid() : clientPid;
+        getCallingPid() : clientPid;
     ALOGI("CameraService::connect call (PID %d \"%s\", camera ID %s) and "
             "Camera API version %d", packagePid, clientPackageName.c_str(), cameraId.c_str(),
             static_cast<int>(effectiveApiLevel));
@@ -2404,7 +2599,7 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const std::str
         }
 
         // Enforce client permissions and do basic validity checks
-        if(!(ret = validateConnectLocked(cameraId, clientPackageName,
+        if (!(ret = validateConnectLocked(cameraId, clientPackageName,
                 /*inout*/clientUid, /*inout*/clientPid, /*out*/originalClientPid)).isOk()) {
             return ret;
         }
@@ -2616,11 +2811,11 @@ Status CameraService::connectHelper(const sp<CALLBACK>& cameraCb, const std::str
             mServiceLock.unlock();
             // Clear caller identity temporarily so client disconnect PID
             // checks work correctly
-            int64_t token = CameraThreadState::clearCallingIdentity();
+            int64_t token = clearCallingIdentity();
             // Note AppOp to trigger the "Unblock" dialog
             client->noteAppOp();
             client->disconnect();
-            CameraThreadState::restoreCallingIdentity(token);
+            restoreCallingIdentity(token);
             // Reacquire mServiceLock
             mServiceLock.lock();
 
@@ -2762,7 +2957,8 @@ status_t CameraService::addOfflineClient(const std::string &cameraId,
 }
 
 Status CameraService::turnOnTorchWithStrengthLevel(const std::string& unresolvedCameraId,
-        int32_t torchStrength, const sp<IBinder>& clientBinder) {
+        int32_t torchStrength, const sp<IBinder>& clientBinder, int32_t deviceId,
+        int32_t devicePolicy) {
     Mutex::Autolock lock(mServiceLock);
 
     ATRACE_CALL();
@@ -2772,8 +2968,17 @@ Status CameraService::turnOnTorchWithStrengthLevel(const std::string& unresolved
                 "Torch client binder in null.");
     }
 
-    int uid = CameraThreadState::getCallingUid();
-    const std::string cameraId = resolveCameraId(unresolvedCameraId, uid);
+    int uid = getCallingUid();
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, uid);
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
+
     if (shouldRejectSystemCameraConnection(cameraId)) {
         return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT, "Unable to change the strength level"
                 "for system only device %s: ", cameraId.c_str());
@@ -2880,7 +3085,7 @@ Status CameraService::turnOnTorchWithStrengthLevel(const std::string& unresolved
         clientBinder->linkToDeath(this);
     }
 
-    int clientPid = CameraThreadState::getCallingPid();
+    int clientPid = getCallingPid();
     ALOGI("%s: Torch strength for camera id %s changed to %d for client PID %d",
             __FUNCTION__, cameraId.c_str(), torchStrength, clientPid);
     if (!shouldSkipTorchStrengthUpdates) {
@@ -2890,7 +3095,7 @@ Status CameraService::turnOnTorchWithStrengthLevel(const std::string& unresolved
 }
 
 Status CameraService::setTorchMode(const std::string& unresolvedCameraId, bool enabled,
-        const sp<IBinder>& clientBinder) {
+        const sp<IBinder>& clientBinder, int32_t deviceId, int32_t devicePolicy) {
     Mutex::Autolock lock(mServiceLock);
 
     ATRACE_CALL();
@@ -2900,8 +3105,16 @@ Status CameraService::setTorchMode(const std::string& unresolvedCameraId, bool e
                 "Torch client Binder is null");
     }
 
-    int uid = CameraThreadState::getCallingUid();
-    const std::string cameraId = resolveCameraId(unresolvedCameraId, uid);
+    int uid = getCallingUid();
+    std::optional<std::string> cameraIdOptional = resolveCameraId(unresolvedCameraId, deviceId,
+            devicePolicy, uid);
+    if (!cameraIdOptional.has_value()) {
+        std::string msg = fmt::sprintf("Camera %s: Invalid camera id for device id %d",
+                unresolvedCameraId.c_str(), deviceId);
+        ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+        return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, msg.c_str());
+    }
+    std::string cameraId = cameraIdOptional.value();
 
     if (shouldRejectSystemCameraConnection(cameraId)) {
         return STATUS_ERROR_FMT(ERROR_ILLEGAL_ARGUMENT, "Unable to set torch mode"
@@ -3008,7 +3221,7 @@ Status CameraService::setTorchMode(const std::string& unresolvedCameraId, bool e
         }
     }
 
-    int clientPid = CameraThreadState::getCallingPid();
+    int clientPid = getCallingPid();
     std::string torchState = enabled ? "on" : "off";
     ALOGI("Torch for camera id %s turned %s for client PID %d", cameraId.c_str(),
             torchState.c_str(), clientPid);
@@ -3028,7 +3241,7 @@ void CameraService::updateTorchUidMapLocked(const std::string& cameraId, int uid
 
 Status CameraService::notifySystemEvent(int32_t eventId,
         const std::vector<int32_t>& args) {
-    const int pid = CameraThreadState::getCallingPid();
+    const int pid = getCallingPid();
     const int selfPid = getpid();
 
     // Permission checks
@@ -3036,7 +3249,7 @@ Status CameraService::notifySystemEvent(int32_t eventId,
         // Ensure we're being called by system_server, or similar process with
         // permissions to notify the camera service about system events
         if (!checkCallingPermission(toString16(sCameraSendSystemEventsPermission))) {
-            const int uid = CameraThreadState::getCallingUid();
+            const int uid = getCallingUid();
             ALOGE("Permission Denial: cannot send updates to camera service about system"
                     " events from pid=%d, uid=%d", pid, uid);
             return STATUS_ERROR_FMT(ERROR_PERMISSION_DENIED,
@@ -3102,7 +3315,7 @@ void CameraService::notifyMonitoredUids(const std::unordered_set<uid_t> &notifyU
 }
 
 Status CameraService::notifyDeviceStateChange(int64_t newState) {
-    const int pid = CameraThreadState::getCallingPid();
+    const int pid = getCallingPid();
     const int selfPid = getpid();
 
     // Permission checks
@@ -3110,7 +3323,7 @@ Status CameraService::notifyDeviceStateChange(int64_t newState) {
         // Ensure we're being called by system_server, or similar process with
         // permissions to notify the camera service about system events
         if (!checkCallingPermission(toString16(sCameraSendSystemEventsPermission))) {
-            const int uid = CameraThreadState::getCallingUid();
+            const int uid = getCallingUid();
             ALOGE("Permission Denial: cannot send updates to camera service about device"
                     " state changes from pid=%d, uid=%d", pid, uid);
             return STATUS_ERROR_FMT(ERROR_PERMISSION_DENIED,
@@ -3133,7 +3346,7 @@ Status CameraService::notifyDeviceStateChange(int64_t newState) {
 
 Status CameraService::notifyDisplayConfigurationChange() {
     ATRACE_CALL();
-    const int callingPid = CameraThreadState::getCallingPid();
+    const int callingPid = getCallingPid();
     const int selfPid = getpid();
 
     // Permission checks
@@ -3141,7 +3354,7 @@ Status CameraService::notifyDisplayConfigurationChange() {
         // Ensure we're being called by system_server, or similar process with
         // permissions to notify the camera service about system events
         if (!checkCallingPermission(toString16(sCameraSendSystemEventsPermission))) {
-            const int uid = CameraThreadState::getCallingUid();
+            const int uid = getCallingUid();
             ALOGE("Permission Denial: cannot send updates to camera service about orientation"
                     " changes from pid=%d, uid=%d", callingPid, uid);
             return STATUS_ERROR_FMT(ERROR_PERMISSION_DENIED,
@@ -3172,6 +3385,7 @@ Status CameraService::notifyDisplayConfigurationChange() {
     return Status::ok();
 }
 
+// TODO(b/291736219): This to be made device-aware.
 Status CameraService::getConcurrentCameraIds(
         std::vector<ConcurrentCameraIdCombination>* concurrentCameraIds) {
     ATRACE_CALL();
@@ -3230,8 +3444,8 @@ Status CameraService::isConcurrentSessionConfigurationSupported(
     }
 
     // Check for camera permissions
-    int callingPid = CameraThreadState::getCallingPid();
-    int callingUid = CameraThreadState::getCallingUid();
+    int callingPid = getCallingPid();
+    int callingUid = getCallingUid();
     bool hasCameraPermission = ((callingPid == getpid()) ||
             hasPermissionsForCamera(callingPid, callingUid));
     if (!hasCameraPermission) {
@@ -3268,7 +3482,6 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
         /*out*/
         std::vector<hardware::CameraStatus> *cameraStatuses,
         bool isVendorListener, bool isProcessLocalTest) {
-
     ATRACE_CALL();
 
     ALOGV("%s: Add listener %p", __FUNCTION__, listener.get());
@@ -3278,8 +3491,8 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
         return STATUS_ERROR(ERROR_ILLEGAL_ARGUMENT, "Null listener given to addListener");
     }
 
-    auto clientPid = CameraThreadState::getCallingPid();
-    auto clientUid = CameraThreadState::getCallingUid();
+    auto clientPid = getCallingPid();
+    auto clientUid = getCallingUid();
     bool openCloseCallbackAllowed = hasPermissionsForOpenCloseListener(clientPid, clientUid);
 
     Mutex::Autolock lock(mServiceLock);
@@ -3316,9 +3529,14 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
     {
         Mutex::Autolock lock(mCameraStatesLock);
         for (auto& i : mCameraStates) {
-            cameraStatuses->emplace_back(i.first,
+            // Get the device id and app-visible camera id for the given HAL-visible camera id.
+            auto [deviceId, mappedCameraId] =
+                    mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(i.first);
+
+            cameraStatuses->emplace_back(mappedCameraId,
                     mapToInterface(i.second->getStatus()), i.second->getUnavailablePhysicalIds(),
-                    openCloseCallbackAllowed ? i.second->getClientPackage() : std::string());
+                    openCloseCallbackAllowed ? i.second->getClientPackage() : std::string(),
+                    deviceId);
         }
     }
     // Remove the camera statuses that should be hidden from the client, we do
@@ -3327,19 +3545,38 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
     // the same time.
     cameraStatuses->erase(std::remove_if(cameraStatuses->begin(), cameraStatuses->end(),
                 [this, &isVendorListener, &clientPid, &clientUid](const hardware::CameraStatus& s) {
-                    SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
-                    if (getSystemCameraKind(s.cameraId, &deviceKind) != OK) {
-                        ALOGE("%s: Invalid camera id %s, skipping status update",
-                                __FUNCTION__, s.cameraId.c_str());
-                        return true;
-                    }
-                    return shouldSkipStatusUpdates(deviceKind, isVendorListener, clientPid,
-                            clientUid);}), cameraStatuses->end());
+                        std::string cameraId = s.cameraId;
+                        std::optional<std::string> cameraIdOptional = resolveCameraId(s.cameraId,
+                                s.deviceId, IVirtualDeviceManagerNative::DEVICE_POLICY_CUSTOM,
+                                clientUid);
+                        if (!cameraIdOptional.has_value()) {
+                            std::string msg =
+                                    fmt::sprintf(
+                                            "Camera %s: Invalid camera id for device id %d",
+                                            s.cameraId.c_str(), s.deviceId);
+                            ALOGE("%s: %s", __FUNCTION__, msg.c_str());
+                            return true;
+                        }
+                        cameraId = cameraIdOptional.value();
+                        SystemCameraKind deviceKind = SystemCameraKind::PUBLIC;
+                        if (getSystemCameraKind(cameraId, &deviceKind) != OK) {
+                            ALOGE("%s: Invalid camera id %s, skipping status update",
+                                    __FUNCTION__, s.cameraId.c_str());
+                            return true;
+                        }
+                        return shouldSkipStatusUpdates(deviceKind, isVendorListener, clientPid,
+                                clientUid);
+                     }), cameraStatuses->end());
 
-    //cameraStatuses will have non-eligible camera ids removed.
+    // cameraStatuses will have non-eligible camera ids removed.
     std::set<std::string> idsChosenForCallback;
     for (const auto &s : *cameraStatuses) {
-        idsChosenForCallback.insert(s.cameraId);
+        // Add only default device cameras here, as virtual cameras currently don't support torch
+        // anyway. Note that this is a simplification of the implementation here, and we should
+        // change this when virtual cameras support torch.
+        if (s.deviceId == kDefaultDeviceId) {
+            idsChosenForCallback.insert(s.cameraId);
+        }
     }
 
     /*
@@ -3353,7 +3590,8 @@ Status CameraService::addListenerHelper(const sp<ICameraServiceListener>& listen
             // The camera id is visible to the client. Fine to send torch
             // callback.
             if (idsChosenForCallback.find(id) != idsChosenForCallback.end()) {
-                listener->onTorchStatusChanged(mapToInterface(mTorchStatusMap.valueAt(i)), id);
+                listener->onTorchStatusChanged(mapToInterface(mTorchStatusMap.valueAt(i)), id,
+                        kDefaultDeviceId);
             }
         }
     }
@@ -3421,7 +3659,7 @@ Status CameraService::supportsCameraApi(const std::string& unresolvedCameraId, i
     ATRACE_CALL();
 
     const std::string cameraId = resolveCameraId(
-            unresolvedCameraId, CameraThreadState::getCallingUid());
+            unresolvedCameraId, getCallingUid());
 
     ALOGV("%s: for camera ID = %s", __FUNCTION__, cameraId.c_str());
 
@@ -3486,7 +3724,7 @@ Status CameraService::isHiddenPhysicalCamera(const std::string& unresolvedCamera
     ATRACE_CALL();
 
     const std::string cameraId = resolveCameraId(unresolvedCameraId,
-            CameraThreadState::getCallingUid());
+            getCallingUid());
 
     ALOGV("%s: for camera ID = %s", __FUNCTION__, cameraId.c_str());
     *isSupported = mCameraProviderManager->isHiddenPhysicalCamera(cameraId);
@@ -3503,11 +3741,25 @@ Status CameraService::injectCamera(
     ATRACE_CALL();
 
     if (!checkCallingPermission(toString16(sCameraInjectExternalCameraPermission))) {
-        const int pid = CameraThreadState::getCallingPid();
-        const int uid = CameraThreadState::getCallingUid();
+        const int pid = getCallingPid();
+        const int uid = getCallingUid();
         ALOGE("Permission Denial: can't inject camera pid=%d, uid=%d", pid, uid);
         return STATUS_ERROR(ERROR_PERMISSION_DENIED,
-                        "Permission Denial: no permission to inject camera");
+                "Permission Denial: no permission to inject camera");
+    }
+
+    // Do not allow any camera injection that injects or replaces a virtual camera.
+    auto [deviceIdForInternalCamera, _] =
+            mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(internalCamId);
+    if (deviceIdForInternalCamera != kDefaultDeviceId) {
+        return STATUS_ERROR(ICameraInjectionCallback::ERROR_INJECTION_UNSUPPORTED,
+                "Cannot replace a virtual camera");
+    }
+    [[maybe_unused]] auto [deviceIdForExternalCamera, unusedMappedCameraId] =
+            mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(externalCamId);
+    if (deviceIdForExternalCamera != kDefaultDeviceId) {
+        return STATUS_ERROR(ICameraInjectionCallback::ERROR_INJECTION_UNSUPPORTED,
+                "Cannot inject a virtual camera to replace an internal camera");
     }
 
     ALOGV(
@@ -3537,7 +3789,7 @@ Status CameraService::injectCamera(
                         mInjectionExternalCamId.c_str());
             }
             res = clientSp->injectCamera(mInjectionExternalCamId, mCameraProviderManager);
-            if(res != OK) {
+            if (res != OK) {
                 mInjectionStatusListener->notifyInjectionError(mInjectionExternalCamId, res);
             }
         } else {
@@ -3573,7 +3825,6 @@ bool CameraService::evictClientIdByRemote(const wp<IBinder>& remote) {
         // Acquire mServiceLock and prevent other clients from connecting
         std::unique_ptr<AutoConditionLock> lock =
                 AutoConditionLock::waitAndAcquire(mServiceLockWrapper);
-
 
         std::vector<sp<BasicClient>> evicted;
         for (auto& i : mActiveClientManager.getAll()) {
@@ -3707,13 +3958,13 @@ void CameraService::doUserSwitch(const std::vector<int32_t>& newUserIds) {
     mServiceLock.unlock();
 
     // Clear caller identity temporarily so client disconnect PID checks work correctly
-    int64_t token = CameraThreadState::clearCallingIdentity();
+    int64_t token = clearCallingIdentity();
 
     for (auto& i : evicted) {
         i->disconnect();
     }
 
-    CameraThreadState::restoreCallingIdentity(token);
+    restoreCallingIdentity(token);
 
     // Reacquire mServiceLock
     mServiceLock.lock();
@@ -3844,7 +4095,6 @@ status_t CameraService::onTransact(uint32_t code, const Parcel& data, Parcel* re
 // We share the media players for shutter and recording sound for all clients.
 // A reference count is kept to determine when we will actually release the
 // media players.
-
 sp<MediaPlayer> CameraService::newMediaPlayer(const char *file) {
     sp<MediaPlayer> mp = new MediaPlayer();
     status_t error;
@@ -3940,7 +4190,7 @@ CameraService::Client::Client(const sp<CameraService>& cameraService,
                 servicePid, overrideToPortrait),
         mCameraId(api1CameraId)
 {
-    int callingPid = CameraThreadState::getCallingPid();
+    int callingPid = getCallingPid();
     LOG1("Client::Client E (pid %d, id %d)", callingPid, mCameraId);
 
     mRemoteCallback = cameraClient;
@@ -4039,8 +4289,8 @@ binder::Status CameraService::BasicClient::disconnect() {
     const auto& mActivityManager = getActivityManager();
     if (mActivityManager) {
         mActivityManager->logFgsApiEnd(LOG_FGS_CAMERA_API,
-            CameraThreadState::getCallingUid(),
-            CameraThreadState::getCallingPid());
+            getCallingUid(),
+            getCallingPid());
     }
 
     return res;
@@ -4050,7 +4300,7 @@ status_t CameraService::BasicClient::dump(int, const Vector<String16>&) {
     // No dumping of clients directly over Binder,
     // must go through CameraService::dump
     android_errorWriteWithInfoLog(SN_EVENT_LOG_ID, "26265403",
-            CameraThreadState::getCallingUid(), NULL, 0);
+            getCallingUid(), NULL, 0);
     return OK;
 }
 
@@ -4383,7 +4633,7 @@ void CameraService::BasicClient::block() {
 
     // Reset the client PID to allow server-initiated disconnect,
     // and to prevent further calls by client.
-    mClientPid = CameraThreadState::getCallingPid();
+    mClientPid = getCallingPid();
     CaptureResultExtras resultExtras; // a dummy result (invalid)
     notifyError(hardware::camera2::ICameraDeviceCallbacks::ERROR_CAMERA_DISABLED, resultExtras);
     disconnect();
@@ -4973,7 +5223,6 @@ void CameraService::ClientEventListener::onClientRemoved(
     }
 }
 
-
 // ----------------------------------------------------------------------------
 //                  CameraClientManager
 // ----------------------------------------------------------------------------
@@ -5215,8 +5464,8 @@ status_t CameraService::dump(int fd, const Vector<String16>& args) {
 
     if (checkCallingPermission(toString16(sDumpPermission)) == false) {
         dprintf(fd, "Permission Denial: can't dump CameraService from pid=%d, uid=%d\n",
-                CameraThreadState::getCallingPid(),
-                CameraThreadState::getCallingUid());
+                getCallingPid(),
+                getCallingUid());
         return NO_ERROR;
     }
     bool locked = tryLock(mServiceLock);
@@ -5465,7 +5714,7 @@ void CameraService::handleTorchClientBinderDied(const wp<IBinder> &who) {
       * binder driver
       */
     // PID here is approximate and can be wrong.
-    logClientDied(CameraThreadState::getCallingPid(), "Binder died unexpectedly");
+    logClientDied(getCallingPid(), "Binder died unexpectedly");
 
     // check torch client
     handleTorchClientBinderDied(who);
@@ -5504,6 +5753,36 @@ void CameraService::updateStatus(StatusInternal status, const std::string& camer
         return;
     }
 
+    if (vd_flags::camera_device_awareness() && status == StatusInternal::PRESENT) {
+        CameraMetadata cameraInfo;
+        status_t res = mCameraProviderManager->getCameraCharacteristics(
+                cameraId, false, &cameraInfo, false);
+        if (res != OK) {
+            ALOGW("%s: Not able to get camera characteristics for camera id %s",
+                  __FUNCTION__, cameraId.c_str());
+        } else {
+            int32_t deviceId = getDeviceId(cameraInfo);
+            if (deviceId != kDefaultDeviceId) {
+                const auto &lensFacingEntry = cameraInfo.find(ANDROID_LENS_FACING);
+                camera_metadata_enum_android_lens_facing_t androidLensFacing =
+                        static_cast<camera_metadata_enum_android_lens_facing_t>(
+                                lensFacingEntry.data.u8[0]);
+                std::string mappedCameraId;
+                if (androidLensFacing == ANDROID_LENS_FACING_BACK) {
+                    mappedCameraId = kVirtualDeviceBackCameraId;
+                } else if (androidLensFacing == ANDROID_LENS_FACING_FRONT) {
+                    mappedCameraId = kVirtualDeviceFrontCameraId;
+                } else {
+                    ALOGD("%s: Not adding entry for an external camera of a virtual device",
+                          __func__);
+                }
+                if (!mappedCameraId.empty()) {
+                    mVirtualDeviceCameraIdMapper.addCamera(cameraId, deviceId, mappedCameraId);
+                }
+            }
+        }
+    }
+
     // Collect the logical cameras without holding mStatusLock in updateStatus
     // as that can lead to a deadlock(b/162192331).
     auto logicalCameraIds = getLogicalCameras(cameraId);
@@ -5512,55 +5791,67 @@ void CameraService::updateStatus(StatusInternal status, const std::string& camer
     state->updateStatus(status, cameraId, rejectSourceStates, [this, &deviceKind,
                         &logicalCameraIds]
             (const std::string& cameraId, StatusInternal status) {
+                // Get the device id and app-visible camera id for the given HAL-visible camera id.
+                auto [deviceId, mappedCameraId] =
+                        mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(cameraId);
 
-            if (status != StatusInternal::ENUMERATING) {
-                // Update torch status if it has a flash unit.
-                Mutex::Autolock al(mTorchStatusMutex);
-                TorchModeStatus torchStatus;
-                if (getTorchStatusLocked(cameraId, &torchStatus) !=
-                        NAME_NOT_FOUND) {
-                    TorchModeStatus newTorchStatus =
-                            status == StatusInternal::PRESENT ?
-                            TorchModeStatus::AVAILABLE_OFF :
-                            TorchModeStatus::NOT_AVAILABLE;
-                    if (torchStatus != newTorchStatus) {
-                        onTorchStatusChangedLocked(cameraId, newTorchStatus, deviceKind);
+                if (status != StatusInternal::ENUMERATING) {
+                    // Update torch status if it has a flash unit.
+                    Mutex::Autolock al(mTorchStatusMutex);
+                    TorchModeStatus torchStatus;
+                    if (getTorchStatusLocked(cameraId, &torchStatus) !=
+                            NAME_NOT_FOUND) {
+                        TorchModeStatus newTorchStatus =
+                                status == StatusInternal::PRESENT ?
+                                TorchModeStatus::AVAILABLE_OFF :
+                                TorchModeStatus::NOT_AVAILABLE;
+                        if (torchStatus != newTorchStatus) {
+                            onTorchStatusChangedLocked(cameraId, newTorchStatus, deviceKind);
+                        }
                     }
                 }
-            }
 
-            Mutex::Autolock lock(mStatusListenerLock);
-            notifyPhysicalCameraStatusLocked(mapToInterface(status), cameraId,
-                    logicalCameraIds, deviceKind);
+                Mutex::Autolock lock(mStatusListenerLock);
+                notifyPhysicalCameraStatusLocked(mapToInterface(status), mappedCameraId,
+                        logicalCameraIds, deviceKind, deviceId);
 
-            for (auto& listener : mListenerList) {
-                bool isVendorListener = listener->isVendorListener();
-                if (shouldSkipStatusUpdates(deviceKind, isVendorListener,
-                        listener->getListenerPid(), listener->getListenerUid())) {
-                    ALOGV("Skipping discovery callback for system-only camera device %s",
-                            cameraId.c_str());
-                    continue;
-                }
-                auto ret = listener->getListener()->onStatusChanged(mapToInterface(status),
-                        cameraId);
-                listener->handleBinderStatus(ret,
-                         "%s: Failed to trigger onStatusChanged callback for %d:%d: %d",
-                        __FUNCTION__, listener->getListenerUid(), listener->getListenerPid(),
-                        ret.exceptionCode());
-                // Also trigger the callbacks for cameras that were remapped to the current
-                // cameraId for the specific package that this listener belongs to.
-                std::vector<std::string> remappedCameraIds =
-                        findOriginalIdsForRemappedCameraId(cameraId, listener->getListenerUid());
-                for (auto& remappedCameraId : remappedCameraIds) {
-                    ret = listener->getListener()->onStatusChanged(
-                            mapToInterface(status), remappedCameraId);
+                for (auto& listener : mListenerList) {
+                    bool isVendorListener = listener->isVendorListener();
+                    if (shouldSkipStatusUpdates(deviceKind, isVendorListener,
+                            listener->getListenerPid(), listener->getListenerUid())) {
+                        ALOGV("Skipping discovery callback for system-only camera device %s",
+                              cameraId.c_str());
+                        continue;
+                    }
+
+                    auto ret = listener->getListener()->onStatusChanged(mapToInterface(status),
+                            mappedCameraId, deviceId);
                     listener->handleBinderStatus(ret,
-                             "%s: Failed to trigger onStatusChanged callback for %d:%d: %d",
+                            "%s: Failed to trigger onStatusChanged callback for %d:%d: %d",
                             __FUNCTION__, listener->getListenerUid(), listener->getListenerPid(),
                             ret.exceptionCode());
+
+                    // Only cameras of the default device can be remapped to a different camera
+                    // (using remapCameraIds method), so do the following only if the camera is
+                    // associated with the default device.
+                    if (deviceId == kDefaultDeviceId) {
+                        // For the default device, also trigger the callbacks for cameras that were
+                        // remapped to the current cameraId for the specific package that this
+                        // listener belongs to.
+                        std::vector<std::string> remappedCameraIds =
+                                findOriginalIdsForRemappedCameraId(cameraId,
+                                        listener->getListenerUid());
+                        for (auto &remappedCameraId: remappedCameraIds) {
+                            ret = listener->getListener()->onStatusChanged(
+                                    mapToInterface(status), remappedCameraId, kDefaultDeviceId);
+                            listener->handleBinderStatus(ret,
+                                    "%s: Failed to trigger onStatusChanged callback for %d:%d: %d",
+                                    __FUNCTION__, listener->getListenerUid(),
+                                    listener->getListenerPid(), ret.exceptionCode());
+                        }
+                    }
                 }
-            }
-        });
+            });
 }
 
 void CameraService::updateOpenCloseStatus(const std::string& cameraId, bool open,
@@ -5577,6 +5868,10 @@ void CameraService::updateOpenCloseStatus(const std::string& cameraId, bool open
         state->setClientPackage(std::string());
     }
 
+    // Get the device id and app-visible camera id for the given HAL-visible camera id.
+    auto [deviceId, mappedCameraId] =
+            mVirtualDeviceCameraIdMapper.getDeviceIdAndMappedCameraIdPair(cameraId);
+
     Mutex::Autolock lock(mStatusListenerLock);
 
     for (const auto& it : mListenerList) {
@@ -5586,9 +5881,10 @@ void CameraService::updateOpenCloseStatus(const std::string& cameraId, bool open
 
         binder::Status ret;
         if (open) {
-            ret = it->getListener()->onCameraOpened(cameraId, clientPackageName);
+            ret = it->getListener()->onCameraOpened(mappedCameraId, clientPackageName,
+                    deviceId);
         } else {
-            ret = it->getListener()->onCameraClosed(cameraId);
+            ret = it->getListener()->onCameraClosed(mappedCameraId, deviceId);
         }
 
         it->handleBinderStatus(ret,
@@ -5681,7 +5977,7 @@ std::list<std::string> CameraService::getLogicalCameras(
 
 void CameraService::notifyPhysicalCameraStatusLocked(int32_t status,
         const std::string& physicalCameraId, const std::list<std::string>& logicalCameraIds,
-        SystemCameraKind deviceKind) {
+        SystemCameraKind deviceKind, int32_t deviceId) {
     // mStatusListenerLock is expected to be locked
     for (const auto& logicalCameraId : logicalCameraIds) {
         for (auto& listener : mListenerList) {
@@ -5695,7 +5991,7 @@ void CameraService::notifyPhysicalCameraStatusLocked(int32_t status,
                 continue;
             }
             auto ret = listener->getListener()->onPhysicalCameraStatusChanged(status,
-                    logicalCameraId, physicalCameraId);
+                    logicalCameraId, physicalCameraId, deviceId);
             listener->handleBinderStatus(ret,
                     "%s: Failed to trigger onPhysicalCameraStatusChanged for %d:%d: %d",
                     __FUNCTION__, listener->getListenerUid(), listener->getListenerPid(),
@@ -5703,7 +5999,6 @@ void CameraService::notifyPhysicalCameraStatusLocked(int32_t status,
         }
     }
 }
-
 
 void CameraService::blockClientsForUid(uid_t uid) {
     const auto clients = mActiveClientManager.getAll();
@@ -6094,7 +6389,7 @@ status_t CameraService::handleWatchCommand(const Vector<String16>& args, int inF
                  "        prints the monitored information in real time\n"
                  "        Hit return to exit\n"
                  "  clear clears all buffers storing information for watch command");
-  return BAD_VALUE;
+    return BAD_VALUE;
 }
 
 status_t CameraService::startWatchingTags(const Vector<String16> &args, int outFd) {
@@ -6481,9 +6776,9 @@ status_t CameraService::checkIfInjectionCameraIsPresent(const std::string& exter
         mServiceLock.unlock();
 
         // Clear caller identity temporarily so client disconnect PID checks work correctly
-        int64_t token = CameraThreadState::clearCallingIdentity();
+        int64_t token = clearCallingIdentity();
         clientSp->disconnect();
-        CameraThreadState::restoreCallingIdentity(token);
+        restoreCallingIdentity(token);
 
         // Reacquire mServiceLock
         mServiceLock.lock();
@@ -6502,4 +6797,4 @@ void CameraService::clearInjectionParameters() {
     mInjectionStatusListener->removeListener();
 }
 
-}; // namespace android
+} // namespace android
