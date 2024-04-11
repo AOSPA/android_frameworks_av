@@ -681,8 +681,9 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::query(
                 status = C2_BAD_INDEX;
                 continue;
             }
-            if (!stackParams[i++]->updateFrom(*paramPointer)) {
+            if (stackParams[i++]->updateFrom(*paramPointer)) {
                 ++numQueried;
+            } else {
                 LOG(WARNING) << "query -- param update failed: "
                                 "index = "
                              << paramPointer->index() << ".";
