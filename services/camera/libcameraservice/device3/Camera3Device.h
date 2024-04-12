@@ -47,6 +47,7 @@
 #include "device3/Camera3OutputInterface.h"
 #include "device3/Camera3OfflineSession.h"
 #include "device3/Camera3StreamInterface.h"
+#include "utils/AttributionAndPermissionUtils.h"
 #include "utils/TagMonitor.h"
 #include "utils/IPCTransport.h"
 #include "utils/LatencyHistogram.h"
@@ -79,12 +80,14 @@ class Camera3Device :
             public camera3::SetErrorInterface,
             public camera3::InflightRequestUpdateInterface,
             public camera3::RequestBufferInterface,
-            public camera3::FlushBufferInterface {
+            public camera3::FlushBufferInterface,
+            public AttributionAndPermissionUtilsEncapsulator {
   friend class HidlCamera3Device;
   friend class AidlCamera3Device;
   public:
 
     explicit Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraServiceProxyWrapper,
+            std::shared_ptr<AttributionAndPermissionUtils> attributionAndPermissionUtils,
             const std::string& id, bool overrideForPerfClass, bool overrideToPortrait,
             bool legacyClient = false);
 
@@ -303,6 +306,15 @@ class Camera3Device :
      * When muted, black image data is output on all output streams.
      */
     status_t setCameraMute(bool enabled);
+
+    /**
+     * Mute the camera.
+     *
+     * When muted, black image data is output on all output streams.
+     * This method assumes the caller already acquired the 'mInterfaceLock'
+     * and 'mLock' locks.
+     */
+    status_t setCameraMuteLocked(bool enabled);
 
     /**
      * Enables/disables camera service watchdog
@@ -1509,6 +1521,10 @@ class Camera3Device :
 
     // Auto framing override value
     camera_metadata_enum_android_control_autoframing mAutoframingOverride;
+
+    // Initial camera mute state stored before the request thread
+    // is active.
+    bool mCameraMuteInitial = false;
 
     // Settings override value
     int32_t mSettingsOverride; // -1 = use original, otherwise

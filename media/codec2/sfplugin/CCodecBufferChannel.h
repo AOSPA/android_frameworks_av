@@ -228,6 +228,14 @@ public:
 
     void resetBuffersPixelFormat(bool isEncoder);
 
+    /**
+     * Queue a C2 info buffer that will be sent to codec in the subsequent
+     * queueInputBuffer
+     *
+     * @param buffer C2 info buffer
+     */
+    void setInfoBuffer(const std::shared_ptr<C2InfoBuffer> &buffer);
+
 private:
     uint32_t getInputBuffersPixelFormat();
 
@@ -406,6 +414,8 @@ private:
     std::atomic_bool mSendEncryptedInfoBuffer;
 
     std::atomic_bool mTunneled;
+
+    std::vector<std::shared_ptr<C2InfoBuffer>> mInfoBuffers;
 };
 
 // Conversion of a c2_status_t value to a status_t value may depend on the
