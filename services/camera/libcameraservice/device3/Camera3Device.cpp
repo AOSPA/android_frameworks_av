@@ -2027,9 +2027,10 @@ void Camera3Device::notifyStatus(bool idle) {
             // Get session stats from the builder, and notify the listener.
             int64_t requestCount, resultErrorCount;
             bool deviceError;
+            std::pair<int32_t, int32_t> mostRequestedFpsRange;
             std::map<int, StreamStats> streamStatsMap;
             mSessionStatsBuilder.buildAndReset(&requestCount, &resultErrorCount,
-                    &deviceError, &streamStatsMap);
+                    &deviceError, &mostRequestedFpsRange, &streamStatsMap);
             for (size_t i = 0; i < streamIds.size(); i++) {
                 int streamId = streamIds[i];
                 auto stats = streamStatsMap.find(streamId);
@@ -2047,7 +2048,8 @@ void Camera3Device::notifyStatus(bool idle) {
                            stats->second.mCaptureLatencyHistogram.end());
                 }
             }
-            listener->notifyIdle(requestCount, resultErrorCount, deviceError, streamStats);
+            listener->notifyIdle(requestCount, resultErrorCount, deviceError,
+                mostRequestedFpsRange, streamStats);
         } else {
             res = listener->notifyActive(sessionMaxPreviewFps);
         }
@@ -3031,6 +3033,16 @@ void Camera3Device::monitorMetadata(TagMonitor::eventSource source,
             physicalMetadata, outputBuffers, numOutputBuffers, inputStreamId);
 }
 
+void Camera3Device::collectRequestStats(int64_t frameNumber, const CameraMetadata &request) {
+    if (flags::analytics_24q3()) {
+        auto entry = request.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE);
+        if (entry.count >= 2) {
+            mSessionStatsBuilder.incFpsRequestedCount(
+                entry.data.i32[0], entry.data.i32[1], frameNumber);
+        }
+    }
+}
+
 void Camera3Device::cleanupNativeHandles(
         std::vector<native_handle_t*> *handles, bool closeFd) {
     if (handles == nullptr) {
@@ -3577,7 +3589,8 @@ bool Camera3Device::RequestThread::skipHFRTargetFPSUpdate(int32_t tag,
 void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
     // Update the latest request sent to HAL
     camera_capture_request_t& halRequest = nextRequest.halRequest;
-    if (halRequest.settings != NULL) { // Don't update if they were unchanged
+    sp<Camera3Device> parent = mParent.promote();
+    if (halRequest.settings != nullptr) { // Don't update if they were unchanged
         Mutex::Autolock al(mLatestRequestMutex);
 
         camera_metadata_t* cloned = clone_camera_metadata(halRequest.settings);
@@ -3590,8 +3603,7 @@ void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
                     CameraMetadata(cloned));
         }
 
-        sp<Camera3Device> parent = mParent.promote();
-        if (parent != NULL) {
+        if (parent != nullptr) {
             int32_t inputStreamId = -1;
             if (halRequest.input_buffer != nullptr) {
               inputStreamId = Camera3Stream::cast(halRequest.input_buffer->stream)->getId();
@@ -3603,8 +3615,11 @@ void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
                     halRequest.num_output_buffers, inputStreamId);
         }
     }
+    if (parent != nullptr) {
+        parent->collectRequestStats(halRequest.frame_number, mLatestRequest);
+    }
 
-    if (halRequest.settings != NULL) {
+    if (halRequest.settings != nullptr) {
         nextRequest.captureRequest->mSettingsList.begin()->metadata.unlock(
                 halRequest.settings);
     }

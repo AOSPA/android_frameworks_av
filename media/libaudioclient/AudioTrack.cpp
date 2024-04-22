@@ -236,26 +236,10 @@ status_t AudioTrack::getMetrics(mediametrics::Item * &item)
     return NO_ERROR;
 }
 
-AudioTrack::AudioTrack() : AudioTrack(AttributionSourceState())
-{
-}
-
 AudioTrack::AudioTrack(const AttributionSourceState& attributionSource)
-    : mStatus(NO_INIT),
-      mState(STATE_STOPPED),
-      mPreviousPriority(ANDROID_PRIORITY_NORMAL),
-      mPreviousSchedulingGroup(SP_DEFAULT),
-      mPausedPosition(0),
-      mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
-      mRoutedDeviceId(AUDIO_PORT_HANDLE_NONE),
-      mPauseTimeRealUs(0),
-      mClientAttributionSource(attributionSource),
-      mAudioTrackCallback(new AudioTrackCallback())
+    : mClientAttributionSource(attributionSource),
+      mPauseTimeRealUs(0)
 {
-    mAttributes.content_type = AUDIO_CONTENT_TYPE_UNKNOWN;
-    mAttributes.usage = AUDIO_USAGE_UNKNOWN;
-    mAttributes.flags = AUDIO_FLAG_NONE;
-    strcpy(mAttributes.tags, "");
 }
 
 AudioTrack::AudioTrack(
@@ -275,21 +259,12 @@ AudioTrack::AudioTrack(
         bool doNotReconnect,
         float maxRequiredSpeed,
         audio_port_handle_t selectedDeviceId)
-    : mStatus(NO_INIT),
-      mState(STATE_STOPPED),
-      mPreviousPriority(ANDROID_PRIORITY_NORMAL),
-      mPreviousSchedulingGroup(SP_DEFAULT),
-      mPausedPosition(0),
-      mAudioTrackCallback(new AudioTrackCallback())
 {
-    mAttributes = AUDIO_ATTRIBUTES_INITIALIZER;
-
-    // make_unique does not aggregate init until c++20
-    mSetParams = std::unique_ptr<SetParams>{
-            new SetParams{streamType, sampleRate, format, channelMask, frameCount, flags, callback,
-                          notificationFrames, 0 /*sharedBuffer*/, false /*threadCanCallJava*/,
-                          sessionId, transferType, offloadInfo, attributionSource, pAttributes,
-                          doNotReconnect, maxRequiredSpeed, selectedDeviceId}};
+    mSetParams = std::make_unique<SetParams>(
+        streamType, sampleRate, format, channelMask, frameCount, flags, callback,
+        notificationFrames, nullptr /*sharedBuffer*/, false /*threadCanCallJava*/,
+        sessionId, transferType, offloadInfo, attributionSource, pAttributes,
+        doNotReconnect, maxRequiredSpeed, selectedDeviceId);
 }
 
 namespace {
@@ -462,9 +437,6 @@ void AudioTrack::createDummyAudioSessionForBluetooth() {
    ALOGD("split_a2dp dummy track stop completed");
 }
 void AudioTrack::stopAndJoinCallbacks() {
-    // Prevent nullptr crash if it did not open properly.
-    if (mStatus != NO_ERROR) return;
-
     // Make sure that callback function exits in the case where
     // it is looping on buffer full condition in obtainBuffer().
     // Otherwise the callback thread will never exit.
@@ -986,6 +958,7 @@ void AudioTrack::stop()
     const int64_t beginNs = systemTime();
 
     AutoMutex lock(mLock);
+    if (mProxy == nullptr) return;  // not successfully initialized.
     mediametrics::Defer defer([&]() {
         mediametrics::LogItem(mMetricsId)
             .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_STOP)
