@@ -88,6 +88,26 @@ flag {
 }
 
 flag {
+  name: "set_callback_stall"
+  namespace: "codec_fwk"
+  description: "Bugfix flag for setCallback stall"
+  bug: "326010604"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}
+
+flag {
+  name: "set_state_early"
+  namespace: "codec_fwk"
+  description: "Bugfix flag for setting state early to avoid a race condition"
+  bug: "298613711"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}
+
+flag {
   name: "teamfood"
   namespace: "codec_fwk"
   description: "Feature flag to track teamfood population"
