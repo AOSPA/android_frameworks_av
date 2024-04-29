@@ -6082,6 +6082,10 @@ void MediaCodec::setState(State newState) {
         mErrorLog.clear();
     }
 
+    if (android::media::codec::provider_->set_state_early()) {
+        mState = newState;
+    }
+
     if (newState == UNINITIALIZED) {
         // return any straggling buffers, e.g. if we got here on an error
         returnBuffersToCodec();
@@ -6092,7 +6096,9 @@ void MediaCodec::setState(State newState) {
         mFlags &= ~kFlagSawMediaServerDie;
     }
 
-    mState = newState;
+    if (!android::media::codec::provider_->set_state_early()) {
+        mState = newState;
+    }
 
     if (mBatteryChecker != nullptr) {
         mBatteryChecker->setExecuting(isExecuting());
