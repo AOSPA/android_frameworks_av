@@ -45,7 +45,7 @@ class TimeCheck {
     // The default timeout is chosen to be less than system server watchdog timeout
     // Note: kDefaultTimeOutMs should be no less than 2 seconds, otherwise spurious timeouts
     // may occur with system suspend.
-    static constexpr TimeCheck::Duration kDefaultTimeoutDuration = std::chrono::milliseconds(3000);
+    static TimeCheck::Duration kDefaultTimeoutDuration;
 
     // Due to suspend abort not incrementing the monotonic clock,
     // we allow another second chance timeout after the first timeout expires.
@@ -98,6 +98,7 @@ class TimeCheck {
     static void setAudioHalPids(const std::vector<pid_t>& pids);
     static std::vector<pid_t> getAudioHalPids();
     static void setSystemReady();
+    static void setTimecheckTimeoutMs(uint32_t timeOutMs);
 
   private:
     // Helper class for handling events.

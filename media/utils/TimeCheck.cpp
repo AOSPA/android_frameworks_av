@@ -150,7 +150,12 @@ TimerThread& TimeCheck::getTimeCheckThread() {
 }
 
 static bool sSystemReady = false;
+TimeCheck::Duration TimeCheck::kDefaultTimeoutDuration = std::chrono::milliseconds(3000);
 
+void TimeCheck::setTimecheckTimeoutMs(uint32_t timeOutMs) {
+   ALOGD("vendor timecheck timeout value is %d", timeOutMs);
+   kDefaultTimeoutDuration =  std::chrono::milliseconds(timeOutMs);
+}
 void TimeCheck::setSystemReady() {
     sSystemReady = true;
 }

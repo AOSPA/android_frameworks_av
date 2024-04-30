@@ -35,6 +35,7 @@
 #include <hidl/HidlTransportSupport.h>
 #include <mediautils/LimitProcessMemory.h>
 #include <utils/Log.h>
+#include <mediautils/TimeCheck.h>
 
 // from include_dirs
 #include "AudioFlinger.h"
@@ -100,6 +101,8 @@ int main(int argc __unused, char **argv)
 #else
     bool doLog = (bool) property_get_bool("ro.test_harness", 0);
 #endif
+    uint32_t timeOutMs = (uint32_t)property_get_int32("vendor.audio.timecheck_timeoutMs", 8000);
+    mediautils::TimeCheck::setTimecheckTimeoutMs(timeOutMs);
 
     pid_t childPid;
     // FIXME The advantage of making the process containing media.log service the parent process of
