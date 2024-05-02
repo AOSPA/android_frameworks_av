@@ -19,6 +19,7 @@
 #include <android/content/AttributionSourceState.h>
 #include <android/permission/PermissionChecker.h>
 #include <binder/BinderService.h>
+#include <private/android_filesystem_config.h>
 
 namespace android {
 
@@ -39,6 +40,12 @@ class AttributionAndPermissionUtils {
     void setCameraService(wp<CameraService> cameraService) {
         mCameraService = cameraService;
     }
+
+    // Utilities handling Binder calling identities (previously in CameraThreadState)
+    virtual int getCallingUid();
+    virtual int getCallingPid();
+    virtual int64_t clearCallingIdentity();
+    virtual void restoreCallingIdentity(int64_t token);
 
     /**
      * Pre-grants the permission if the attribution source uid is for an automotive
@@ -123,30 +130,63 @@ public:
     }
 
     static AttributionSourceState buildAttributionSource(int callingPid, int callingUid,
-            const std::string& packageName) {
+            int32_t deviceId) {
         AttributionSourceState attributionSource = buildAttributionSource(callingPid, callingUid);
+        attributionSource.deviceId = deviceId;
+        return attributionSource;
+    }
+
+    static AttributionSourceState buildAttributionSource(int callingPid, int callingUid,
+            const std::string& packageName, int32_t deviceId) {
+        AttributionSourceState attributionSource = buildAttributionSource(callingPid, callingUid,
+                deviceId);
         attributionSource.packageName = packageName;
         return attributionSource;
     }
 
-    bool hasPermissionsForCamera(int callingPid, int callingUid) const {
-        return hasPermissionsForCamera(std::string(), callingPid, callingUid);
+    int getCallingUid() const {
+        return mAttributionAndPermissionUtils->getCallingUid();
+    }
+
+    int getCallingPid() const {
+        return mAttributionAndPermissionUtils->getCallingPid();
+    }
+
+    int64_t clearCallingIdentity() const {
+        return mAttributionAndPermissionUtils->clearCallingIdentity();
+    }
+
+    void restoreCallingIdentity(int64_t token) const {
+        mAttributionAndPermissionUtils->restoreCallingIdentity(token);
+    }
+
+    // The word 'System' here does not refer to callers only on the system
+    // partition. They just need to have an android system uid.
+    bool callerHasSystemUid() const {
+        return (getCallingUid() < AID_APP_START);
+    }
+
+    bool hasPermissionsForCamera(int callingPid, int callingUid, int32_t deviceId) const {
+        return hasPermissionsForCamera(std::string(), callingPid, callingUid, deviceId);
     }
 
     bool hasPermissionsForCamera(int callingPid, int callingUid,
-            const std::string& packageName) const {
-        return hasPermissionsForCamera(std::string(), callingPid, callingUid, packageName);
+            const std::string& packageName, int32_t deviceId) const {
+        return hasPermissionsForCamera(std::string(), callingPid, callingUid, packageName,
+                deviceId);
     }
 
     bool hasPermissionsForCamera(const std::string& cameraId, int callingPid,
-            int callingUid) const {
-        auto attributionSource = buildAttributionSource(callingPid, callingUid);
+            int callingUid, int32_t deviceId) const {
+        auto attributionSource = buildAttributionSource(callingPid, callingUid,
+                deviceId);
         return mAttributionAndPermissionUtils->hasPermissionsForCamera(cameraId, attributionSource);
     }
 
     bool hasPermissionsForCamera(const std::string& cameraId, int callingPid, int callingUid,
-            const std::string& packageName) const {
-        auto attributionSource = buildAttributionSource(callingPid, callingUid, packageName);
+            const std::string& packageName, int32_t deviceId) const {
+        auto attributionSource = buildAttributionSource(callingPid, callingUid, packageName,
+                deviceId);
         return mAttributionAndPermissionUtils->hasPermissionsForCamera(cameraId, attributionSource);
     }
 

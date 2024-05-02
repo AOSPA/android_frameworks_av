@@ -99,7 +99,6 @@
 #include "device3/Camera3InputStream.h"
 #include "device3/Camera3OutputStream.h"
 #include "device3/Camera3SharedOutputStream.h"
-#include "utils/CameraThreadState.h"
 #include "utils/CameraTraces.h"
 #include "utils/SchedulingPolicyUtils.h"
 #include "utils/SessionConfigurationUtils.h"
@@ -119,8 +118,10 @@ namespace flags = com::android::internal::camera::flags;
 namespace android {
 
 Camera3Device::Camera3Device(std::shared_ptr<CameraServiceProxyWrapper>& cameraServiceProxyWrapper,
+        std::shared_ptr<AttributionAndPermissionUtils> attributionAndPermissionUtils,
         const std::string &id, bool overrideForPerfClass, bool overrideToPortrait,
         bool legacyClient):
+        AttributionAndPermissionUtilsEncapsulator(attributionAndPermissionUtils),
         mCameraServiceProxyWrapper(cameraServiceProxyWrapper),
         mId(id),
         mLegacyClient(legacyClient),
@@ -230,6 +231,8 @@ status_t Camera3Device::initializeCommonLocked() {
         mRequestThread.clear();
         return res;
     }
+
+    setCameraMuteLocked(mCameraMuteInitial);
 
     mPreparerThread = new PreparerThread();
 
@@ -1416,7 +1419,8 @@ status_t Camera3Device::configureStreams(const CameraMetadata& sessionParams, in
 status_t Camera3Device::filterParamsAndConfigureLocked(const CameraMetadata& params,
         int operatingMode) {
     CameraMetadata filteredParams;
-    SessionConfigurationUtils::filterParameters(params, mDeviceInfo, mVendorTagId, filteredParams);
+    SessionConfigurationUtils::filterParameters(params, mDeviceInfo,
+            /*additionalKeys*/{}, mVendorTagId, filteredParams);
 
     camera_metadata_entry_t availableSessionKeys = mDeviceInfo.find(
             ANDROID_REQUEST_AVAILABLE_SESSION_KEYS);
@@ -1486,7 +1490,7 @@ status_t Camera3Device::createDefaultRequest(camera_request_template_t templateI
 
     if (templateId <= 0 || templateId >= CAMERA_TEMPLATE_COUNT) {
         android_errorWriteWithInfoLog(CameraService::SN_EVENT_LOG_ID, "26866110",
-                CameraThreadState::getCallingUid(), nullptr, 0);
+                getCallingUid(), nullptr, 0);
         return BAD_VALUE;
     }
 
@@ -1537,27 +1541,11 @@ status_t Camera3Device::createDefaultRequest(camera_request_template_t templateI
         set_camera_metadata_vendor_id(rawRequest, mVendorTagId);
         mRequestTemplateCache[templateId].acquire(rawRequest);
 
-        // Override the template request with zoomRatioMapper
-        res = mZoomRatioMappers[mId].initZoomRatioInTemplate(
-                &mRequestTemplateCache[templateId]);
+        res = overrideDefaultRequestKeys(&mRequestTemplateCache[templateId]);
         if (res != OK) {
-            CLOGE("Failed to update zoom ratio for template %d: %s (%d)",
+            CLOGE("Failed to overrideDefaultRequestKeys for template %d: %s (%d)",
                     templateId, strerror(-res), res);
             return res;
-        }
-
-        // Fill in JPEG_QUALITY if not available
-        if (!mRequestTemplateCache[templateId].exists(ANDROID_JPEG_QUALITY)) {
-            static const uint8_t kDefaultJpegQuality = 95;
-            mRequestTemplateCache[templateId].update(ANDROID_JPEG_QUALITY,
-                    &kDefaultJpegQuality, 1);
-        }
-
-        // Fill in AUTOFRAMING if not available
-        if (!mRequestTemplateCache[templateId].exists(ANDROID_CONTROL_AUTOFRAMING)) {
-            static const uint8_t kDefaultAutoframingMode = ANDROID_CONTROL_AUTOFRAMING_OFF;
-            mRequestTemplateCache[templateId].update(ANDROID_CONTROL_AUTOFRAMING,
-                    &kDefaultAutoframingMode, 1);
         }
 
         *request = mRequestTemplateCache[templateId];
@@ -2039,9 +2027,10 @@ void Camera3Device::notifyStatus(bool idle) {
             // Get session stats from the builder, and notify the listener.
             int64_t requestCount, resultErrorCount;
             bool deviceError;
+            std::pair<int32_t, int32_t> mostRequestedFpsRange;
             std::map<int, StreamStats> streamStatsMap;
             mSessionStatsBuilder.buildAndReset(&requestCount, &resultErrorCount,
-                    &deviceError, &streamStatsMap);
+                    &deviceError, &mostRequestedFpsRange, &streamStatsMap);
             for (size_t i = 0; i < streamIds.size(); i++) {
                 int streamId = streamIds[i];
                 auto stats = streamStatsMap.find(streamId);
@@ -2059,7 +2048,8 @@ void Camera3Device::notifyStatus(bool idle) {
                            stats->second.mCaptureLatencyHistogram.end());
                 }
             }
-            listener->notifyIdle(requestCount, resultErrorCount, deviceError, streamStats);
+            listener->notifyIdle(requestCount, resultErrorCount, deviceError,
+                mostRequestedFpsRange, streamStats);
         } else {
             res = listener->notifyActive(sessionMaxPreviewFps);
         }
@@ -3043,6 +3033,16 @@ void Camera3Device::monitorMetadata(TagMonitor::eventSource source,
             physicalMetadata, outputBuffers, numOutputBuffers, inputStreamId);
 }
 
+void Camera3Device::collectRequestStats(int64_t frameNumber, const CameraMetadata &request) {
+    if (flags::analytics_24q3()) {
+        auto entry = request.find(ANDROID_CONTROL_AE_TARGET_FPS_RANGE);
+        if (entry.count >= 2) {
+            mSessionStatsBuilder.incFpsRequestedCount(
+                entry.data.i32[0], entry.data.i32[1], frameNumber);
+        }
+    }
+}
+
 void Camera3Device::cleanupNativeHandles(
         std::vector<native_handle_t*> *handles, bool closeFd) {
     if (handles == nullptr) {
@@ -3589,7 +3589,8 @@ bool Camera3Device::RequestThread::skipHFRTargetFPSUpdate(int32_t tag,
 void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
     // Update the latest request sent to HAL
     camera_capture_request_t& halRequest = nextRequest.halRequest;
-    if (halRequest.settings != NULL) { // Don't update if they were unchanged
+    sp<Camera3Device> parent = mParent.promote();
+    if (halRequest.settings != nullptr) { // Don't update if they were unchanged
         Mutex::Autolock al(mLatestRequestMutex);
 
         camera_metadata_t* cloned = clone_camera_metadata(halRequest.settings);
@@ -3602,8 +3603,7 @@ void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
                     CameraMetadata(cloned));
         }
 
-        sp<Camera3Device> parent = mParent.promote();
-        if (parent != NULL) {
+        if (parent != nullptr) {
             int32_t inputStreamId = -1;
             if (halRequest.input_buffer != nullptr) {
               inputStreamId = Camera3Stream::cast(halRequest.input_buffer->stream)->getId();
@@ -3615,8 +3615,11 @@ void Camera3Device::RequestThread::updateNextRequest(NextRequest& nextRequest) {
                     halRequest.num_output_buffers, inputStreamId);
         }
     }
+    if (parent != nullptr) {
+        parent->collectRequestStats(halRequest.frame_number, mLatestRequest);
+    }
 
-    if (halRequest.settings != NULL) {
+    if (halRequest.settings != nullptr) {
         nextRequest.captureRequest->mSettingsList.begin()->metadata.unlock(
                 halRequest.settings);
     }
@@ -5673,10 +5676,19 @@ status_t Camera3Device::setCameraMute(bool enabled) {
     ATRACE_CALL();
     Mutex::Autolock il(mInterfaceLock);
     Mutex::Autolock l(mLock);
+    return setCameraMuteLocked(enabled);
+}
 
-    if (mRequestThread == nullptr || !mSupportCameraMute) {
+status_t Camera3Device::setCameraMuteLocked(bool enabled) {
+    if (mRequestThread == nullptr) {
+        mCameraMuteInitial = enabled;
+        return OK;
+    }
+
+    if (!mSupportCameraMute) {
         return INVALID_OPERATION;
     }
+
     int32_t muteMode =
             !enabled                      ? ANDROID_SENSOR_TEST_PATTERN_MODE_OFF :
             mSupportTestPatternSolidColor ? ANDROID_SENSOR_TEST_PATTERN_MODE_SOLID_COLOR :

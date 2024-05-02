@@ -66,6 +66,9 @@ class MetadataBuilder {
   MetadataBuilder& setSupportedHardwareLevel(
       camera_metadata_enum_android_info_supported_hardware_level_t hwLevel);
 
+  // See ANDROID_INFO_DEVICE_ID in CameraMetadataTag.aidl.
+  MetadataBuilder& setDeviceId(int32_t deviceId);
+
   // Whether this camera device has a flash unit
   // See ANDROID_FLASH_INFO_AVAILABLE in CameraMetadataTag.aidl.
   MetadataBuilder& setFlashAvailable(bool flashAvailable);
@@ -125,6 +128,11 @@ class MetadataBuilder {
   MetadataBuilder& setAvailableTestPatternModes(
       const std::vector<camera_metadata_enum_android_sensor_test_pattern_mode>&
           testPatternModes);
+
+  // See ANDROID_SCALER_AVAILABLE_STREAM_USE_CASES in CameraCharacteristics.java
+  MetadataBuilder& setAvailableStreamUseCases(
+      const std::vector<
+          camera_metadata_enum_android_scaler_available_stream_use_cases>& availableUseCases);
 
   // See ANDROID_STATISTICS_FACE_DETECT_MODE in CaptureRequest.java.
   MetadataBuilder& setFaceDetectMode(
@@ -468,6 +476,17 @@ std::optional<camera_metadata_enum_android_control_capture_intent> getCaptureInt
 // the key is not present.
 std::optional<GpsCoordinates> getGpsCoordinates(
     const aidl::android::hardware::camera::device::CameraMetadata& metadata);
+
+std::optional<camera_metadata_enum_android_lens_facing> getLensFacing(
+    const aidl::android::hardware::camera::device::CameraMetadata& metadata);
+
+std::optional<camera_metadata_enum_android_control_ae_precapture_trigger>
+getPrecaptureTrigger(
+    const aidl::android::hardware::camera::device::CameraMetadata& cameraMetadata);
+
+// Returns the virtual device id. This is not the camera id.
+std::optional<int32_t> getDeviceId(
+    const aidl::android::hardware::camera::device::CameraMetadata& cameraMetadata);
 
 }  // namespace virtualcamera
 }  // namespace companion

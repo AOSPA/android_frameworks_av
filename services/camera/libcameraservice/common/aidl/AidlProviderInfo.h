@@ -127,20 +127,21 @@ struct AidlProviderInfo : public CameraProviderManager::ProviderInfo {
 
         virtual status_t isSessionConfigurationSupported(
                 const SessionConfiguration &/*configuration*/,
-                bool overrideForPerfClass, bool checkSessionParams,
-                bool *status/*status*/);
+                bool overrideForPerfClass, camera3::metadataGetter getMetadata,
+                bool checkSessionParams, bool *status/*status*/);
 
         virtual status_t createDefaultRequest(
                     camera3::camera_request_template_t templateId,
-                    camera_metadata_t** metadata) override;
+                    CameraMetadata* metadata) override;
 
         virtual status_t getSessionCharacteristics(
                 const SessionConfiguration &/*configuration*/,
                 bool overrideForPerfClass, camera3::metadataGetter /*getMetadata*/,
-                CameraMetadata *sessionCharacteristics /*sessionCharacteristics*/);
+                CameraMetadata */*outChars*/);
 
         std::shared_ptr<aidl::android::hardware::camera::device::ICameraDevice>
                 startDeviceInterface();
+        std::vector<int32_t> mAdditionalKeysForFeatureQuery;
     };
 
  private:

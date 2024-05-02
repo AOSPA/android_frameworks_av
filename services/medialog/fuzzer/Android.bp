@@ -31,12 +31,12 @@ cc_fuzz {
         "frameworks/av/services/medialog",
     ],
     cflags: [
-        "-Werror",
         "-Wall",
+        "-Werror",
     ],
     fuzz_config: {
         cc: [
-            "android-media-fuzzing-reports@google.com",
+            "android-audio-fuzzing-reports@google.com",
         ],
         componentid: 155276,
         hotlists: [

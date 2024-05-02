@@ -82,7 +82,12 @@ StreamHalAidl::StreamHalAidl(
           mConfig(configToBase(config)),
           mContext(std::move(context)),
           mStream(stream),
-          mVendorExt(vext) {
+          mVendorExt(vext),
+          mLastReplyLifeTimeNs(
+                  std::min(static_cast<size_t>(100),
+                          2 * mContext.getBufferDurationMs(mConfig.sample_rate))
+                  * NANOS_PER_MILLISECOND)
+{
     ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
     {
         std::lock_guard l(mLock);
@@ -285,8 +290,7 @@ status_t StreamHalAidl::getHardwarePosition(int64_t *frames, int64_t *timestamp)
     ALOGV("%p %s::%s", this, getClassName().c_str(), __func__);
     if (!mStream) return NO_INIT;
     StreamDescriptor::Reply reply;
-    // TODO: switch to updateCountersIfNeeded once we sort out mWorkerTid initialization
-    RETURN_STATUS_IF_ERROR(sendCommand(makeHalCommand<HalCommand::Tag::getStatus>(), &reply, true));
+    RETURN_STATUS_IF_ERROR(updateCountersIfNeeded(&reply));
     *frames = std::max<int64_t>(0, reply.hardware.frames);
     *timestamp = std::max<int64_t>(0, reply.hardware.timeNs);
     return OK;
@@ -409,6 +413,41 @@ status_t StreamHalAidl::exit() {
     return statusTFromBinderStatus(mStream->prepareToClose());
 }
 
+void StreamHalAidl::onAsyncTransferReady() {
+    if (auto state = getState(); state == StreamDescriptor::State::TRANSFERRING) {
+        // Retrieve the current state together with position counters unconditionally
+        // to ensure that the state on our side gets updated.
+        sendCommand(makeHalCommand<HalCommand::Tag::getStatus>(),
+                nullptr, true /*safeFromNonWorkerThread */);
+    } else {
+        ALOGW("%s: unexpected onTransferReady in the state %s", __func__, toString(state).c_str());
+    }
+}
+
+void StreamHalAidl::onAsyncDrainReady() {
+    if (auto state = getState(); state == StreamDescriptor::State::DRAINING) {
+        // Retrieve the current state together with position counters unconditionally
+        // to ensure that the state on our side gets updated.
+        sendCommand(makeHalCommand<HalCommand::Tag::getStatus>(),
+                nullptr, true /*safeFromNonWorkerThread */);
+    } else {
+        ALOGW("%s: unexpected onDrainReady in the state %s", __func__, toString(state).c_str());
+    }
+}
+
+void StreamHalAidl::onAsyncError() {
+    std::lock_guard l(mLock);
+    if (mLastReply.state == StreamDescriptor::State::IDLE ||
+        mLastReply.state == StreamDescriptor::State::DRAINING ||
+        mLastReply.state == StreamDescriptor::State::TRANSFERRING) {
+        mLastReply.state = StreamDescriptor::State::ERROR;
+        ALOGW("%s: onError received", __func__);
+    } else {
+        ALOGW("%s: unexpected onError in the state %s", __func__,
+                toString(mLastReply.state).c_str());
+    }
+}
+
 status_t StreamHalAidl::createMmapBuffer(int32_t minSizeFrames __unused,
                                          struct audio_mmap_buffer_info *info) {
     ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
@@ -467,26 +506,31 @@ status_t StreamHalAidl::sendCommand(
                 "%s %s: must be invoked from the worker thread (%d)",
                 __func__, command.toString().c_str(), workerTid);
     }
-    if (!mContext.getCommandMQ()->writeBlocking(&command, 1)) {
-        ALOGE("%s: failed to write command %s to MQ", __func__, command.toString().c_str());
-        return NOT_ENOUGH_DATA;
-    }
     StreamDescriptor::Reply localReply{};
-    if (reply == nullptr) {
-        reply = &localReply;
-    }
-    if (!mContext.getReplyMQ()->readBlocking(reply, 1)) {
-        ALOGE("%s: failed to read from reply MQ, command %s", __func__, command.toString().c_str());
-        return NOT_ENOUGH_DATA;
-    }
     {
-        std::lock_guard l(mLock);
-        // Not every command replies with 'latencyMs' field filled out, substitute the last
-        // returned value in that case.
-        if (reply->latencyMs <= 0) {
-            reply->latencyMs = mLastReply.latencyMs;
+        std::lock_guard l(mCommandReplyLock);
+        if (!mContext.getCommandMQ()->writeBlocking(&command, 1)) {
+            ALOGE("%s: failed to write command %s to MQ", __func__, command.toString().c_str());
+            return NOT_ENOUGH_DATA;
         }
-        mLastReply = *reply;
+        if (reply == nullptr) {
+            reply = &localReply;
+        }
+        if (!mContext.getReplyMQ()->readBlocking(reply, 1)) {
+            ALOGE("%s: failed to read from reply MQ, command %s",
+                    __func__, command.toString().c_str());
+            return NOT_ENOUGH_DATA;
+        }
+        {
+            std::lock_guard l(mLock);
+            // Not every command replies with 'latencyMs' field filled out, substitute the last
+            // returned value in that case.
+            if (reply->latencyMs <= 0) {
+                reply->latencyMs = mLastReply.latencyMs;
+            }
+            mLastReply = *reply;
+            mLastReplyExpirationNs = uptimeNanos() + mLastReplyLifeTimeNs;
+        }
     }
     switch (reply->status) {
         case STATUS_OK: return OK;
@@ -502,14 +546,17 @@ status_t StreamHalAidl::sendCommand(
 
 status_t StreamHalAidl::updateCountersIfNeeded(
         ::aidl::android::hardware::audio::core::StreamDescriptor::Reply* reply) {
-    if (mWorkerTid.load(std::memory_order_acquire) == gettid()) {
-        if (const auto state = getState(); state != StreamDescriptor::State::ACTIVE &&
-                state != StreamDescriptor::State::DRAINING &&
-                state != StreamDescriptor::State::TRANSFERRING) {
-            return sendCommand(makeHalCommand<HalCommand::Tag::getStatus>(), reply);
-        }
+    bool doUpdate = false;
+    {
+        std::lock_guard l(mLock);
+        doUpdate = uptimeNanos() > mLastReplyExpirationNs;
     }
-    if (reply != nullptr) {
+    if (doUpdate) {
+        // Since updates are paced, it is OK to perform them from any thread, they should
+        // not interfere with I/O operations of the worker.
+        return sendCommand(makeHalCommand<HalCommand::Tag::getStatus>(),
+                reply, true /*safeFromNonWorkerThread */);
+    } else if (reply != nullptr) {  // provide cached reply
         std::lock_guard l(mLock);
         *reply = mLastReply;
     }
@@ -545,7 +592,7 @@ StreamOutHalAidl::StreamOutHalAidl(
 
 StreamOutHalAidl::~StreamOutHalAidl() {
     if (auto broker = mCallbackBroker.promote(); broker != nullptr) {
-        broker->clearCallbacks(this);
+        broker->clearCallbacks(static_cast<StreamOutHalInterface*>(this));
     }
 }
 
@@ -569,7 +616,19 @@ status_t StreamOutHalAidl::getLatency(uint32_t *latency) {
 status_t StreamOutHalAidl::setVolume(float left, float right) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    return statusTFromBinderStatus(mStream->setHwVolume({left, right}));
+    size_t channelCount = audio_channel_out_mask_from_count(mConfig.channel_mask);
+    if (channelCount == 0) channelCount = 2;
+    std::vector<float> volumes(channelCount);
+    if (channelCount == 1) {
+        volumes[0] = (left + right) / 2;
+    } else {
+        volumes[0] = left;
+        volumes[1] = right;
+        for (size_t i = 2; i < channelCount; ++i) {
+            volumes[i] = (left + right) / 2;
+        }
+    }
+    return statusTFromBinderStatus(mStream->setHwVolume(volumes));
 }
 
 status_t StreamOutHalAidl::selectPresentation(int presentationId, int programId) {
@@ -602,21 +661,14 @@ status_t StreamOutHalAidl::getNextWriteTimestamp(int64_t *timestamp __unused) {
 }
 
 status_t StreamOutHalAidl::setCallback(wp<StreamOutHalInterfaceCallback> callback) {
+    ALOGD("%p %s", this, __func__);
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (!mContext.isAsynchronous()) {
         ALOGE("%s: the callback is intended for asynchronous streams only", __func__);
         return INVALID_OPERATION;
     }
-    if (auto broker = mCallbackBroker.promote(); broker != nullptr) {
-        if (auto cb = callback.promote(); cb != nullptr) {
-            broker->setStreamOutCallback(this, cb);
-        } else {
-            // It is expected that the framework never passes a null pointer.
-            // In the AIDL model callbacks can't be "unregistered".
-            LOG_ALWAYS_FATAL("%s: received an expired or null callback pointer", __func__);
-        }
-    }
+    mClientCallback = callback;
     return OK;
 }
 
@@ -739,7 +791,7 @@ status_t StreamOutHalAidl::setEventCallback(
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (auto broker = mCallbackBroker.promote(); broker != nullptr) {
-        broker->setStreamOutEventCallback(this, callback);
+        broker->setStreamOutEventCallback(static_cast<StreamOutHalInterface*>(this), callback);
     }
     return OK;
 }
@@ -773,13 +825,35 @@ status_t StreamOutHalAidl::setLatencyModeCallback(
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (auto broker = mCallbackBroker.promote(); broker != nullptr) {
-        broker->setStreamOutLatencyModeCallback(this, callback);
+        broker->setStreamOutLatencyModeCallback(
+                static_cast<StreamOutHalInterface*>(this), callback);
     }
     return OK;
 };
 
 status_t StreamOutHalAidl::exit() {
     return StreamHalAidl::exit();
+}
+
+void StreamOutHalAidl::onWriteReady() {
+    onAsyncTransferReady();
+    if (auto clientCb = mClientCallback.load().promote(); clientCb != nullptr) {
+        clientCb->onWriteReady();
+    }
+}
+
+void StreamOutHalAidl::onDrainReady() {
+    onAsyncDrainReady();
+    if (auto clientCb = mClientCallback.load().promote(); clientCb != nullptr) {
+        clientCb->onDrainReady();
+    }
+}
+
+void StreamOutHalAidl::onError() {
+    onAsyncError();
+    if (auto clientCb = mClientCallback.load().promote(); clientCb != nullptr) {
+        clientCb->onError();
+    }
 }
 
 status_t StreamOutHalAidl::filterAndUpdateOffloadMetadata(AudioParameter &parameters) {
@@ -866,7 +940,9 @@ StreamInHalAidl::StreamInHalAidl(
 status_t StreamInHalAidl::setGain(float gain) {
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    return statusTFromBinderStatus(mStream->setHwGain({gain}));
+    const size_t channelCount = audio_channel_count_from_in_mask(mConfig.channel_mask);
+    std::vector<float> gains(channelCount != 0 ? channelCount : 1, gain);
+    return statusTFromBinderStatus(mStream->setHwGain(gains));
 }
 
 status_t StreamInHalAidl::read(void *buffer, size_t bytes, size_t *read) {

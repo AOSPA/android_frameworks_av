@@ -2289,6 +2289,8 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
     // matching criteria values in priority order for best matching output so far
     std::vector<uint32_t> bestMatchCriteria(8, 0);
 
+    const bool hasOrphanHaptic =
+            mEffects.hasOrphanEffectsForSessionAndType(sessionId, FX_IID_HAPTICGENERATOR);
     const uint32_t channelCount = audio_channel_count_from_out_mask(channelMask);
     const uint32_t hapticChannelCount = audio_channel_count_from_out_mask(
         channelMask & AUDIO_CHANNEL_HAPTIC_ALL);
@@ -2309,13 +2311,20 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
         // When using haptic output, same audio format and sample rate are required.
         const uint32_t outputHapticChannelCount = audio_channel_count_from_out_mask(
             outputDesc->getChannelMask() & AUDIO_CHANNEL_HAPTIC_ALL);
-        if ((hapticChannelCount == 0) != (outputHapticChannelCount == 0)) {
+        // skip if haptic channel specified but output does not support it, or output support haptic
+        // but there is no haptic channel requested AND no orphan haptic effect exist
+        if ((hapticChannelCount != 0 && outputHapticChannelCount == 0) ||
+            (hapticChannelCount == 0 && outputHapticChannelCount != 0 && !hasOrphanHaptic)) {
             continue;
         }
-        if (outputHapticChannelCount >= hapticChannelCount
-            && format == outputDesc->getFormat()
-            && samplingRate == outputDesc->getSamplingRate()) {
-                currentMatchCriteria[0] = outputHapticChannelCount;
+        // In the case of audio-coupled-haptic playback, there is no format conversion and
+        // resampling in the framework, same format/channel/sampleRate for client and the output
+        // thread is required. In the case of HapticGenerator effect, do not require format
+        // matching.
+        if ((outputHapticChannelCount >= hapticChannelCount && format == outputDesc->getFormat() &&
+             samplingRate == outputDesc->getSamplingRate()) ||
+            (hapticChannelCount == 0 && hasOrphanHaptic)) {
+            currentMatchCriteria[0] = outputHapticChannelCount;
         }
 
         // functional flags match
@@ -3834,7 +3843,7 @@ status_t AudioPolicyManager::registerEffect(const effect_descriptor_t *desc,
                                 int session,
                                 int id)
 {
-    if (session != AUDIO_SESSION_DEVICE) {
+    if (session != AUDIO_SESSION_DEVICE && io != AUDIO_IO_HANDLE_NONE) {
         ssize_t index = mOutputs.indexOfKey(io);
         if (index < 0) {
             index = mInputs.indexOfKey(io);
@@ -8205,9 +8214,17 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(const sp<DeviceDescriptor> &de
 float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
                                         VolumeSource volumeSource,
                                         int index,
-                                        const DeviceTypeSet& deviceTypes)
+                                        const DeviceTypeSet& deviceTypes,
+                                        bool computeInternalInteraction)
 {
     float volumeDb = curves.volIndexToDb(Volume::getDeviceCategory(deviceTypes), index);
+
+    ALOGV("%s volume source %d, index %d,  devices %s, compute internal %b ", __func__,
+          volumeSource, index, dumpDeviceTypes(deviceTypes).c_str(), computeInternalInteraction);
+
+    if (!computeInternalInteraction) {
+        return volumeDb;
+    }
 
     // handle the case of accessibility active while a ringtone is playing: if the ringtone is much
     // louder than the accessibility prompt, the prompt cannot be heard, thus masking the touch
@@ -8218,14 +8235,11 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
     const auto musicVolumeSrc = toVolumeSource(AUDIO_STREAM_MUSIC, false);
     const auto alarmVolumeSrc = toVolumeSource(AUDIO_STREAM_ALARM, false);
     const auto a11yVolumeSrc = toVolumeSource(AUDIO_STREAM_ACCESSIBILITY, false);
-    // Verify that the current volume source is not the ringer volume to prevent recursively
-    // calling to compute volume. This could happen in cases where a11y and ringer sounds belong
-    // to the same volume group.
-    if (volumeSource != ringVolumeSrc && volumeSource == a11yVolumeSrc
-            && (AUDIO_MODE_RINGTONE == mEngine->getPhoneState()) &&
+    if (AUDIO_MODE_RINGTONE == mEngine->getPhoneState() &&
             mOutputs.isActive(ringVolumeSrc, 0)) {
         auto &ringCurves = getVolumeCurves(AUDIO_STREAM_RING);
-        const float ringVolumeDb = computeVolume(ringCurves, ringVolumeSrc, index, deviceTypes);
+        const float ringVolumeDb = computeVolume(ringCurves, ringVolumeSrc, index, deviceTypes,
+                /* computeInternalInteraction= */ false);
         return ringVolumeDb - 4 > volumeDb ? ringVolumeDb - 4 : volumeDb;
     }
 
@@ -8242,7 +8256,8 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
         auto &voiceCurves = getVolumeCurves(callVolumeSrc);
         int voiceVolumeIndex = voiceCurves.getVolumeIndex(deviceTypes);
         const float maxVoiceVolDb =
-                computeVolume(voiceCurves, callVolumeSrc, voiceVolumeIndex, deviceTypes)
+                computeVolume(voiceCurves, callVolumeSrc, voiceVolumeIndex, deviceTypes,
+                              /* computeInternalInteraction= */ false)
                 + IN_CALL_EARPIECE_HEADROOM_DB;
         // FIXME: Workaround for call screening applications until a proper audio mode is defined
         // to support this scenario : Exempt the RING stream from the audio cap if the audio was
@@ -8284,12 +8299,8 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
         // when the phone is ringing we must consider that music could have been paused just before
         // by the music application and behave as if music was active if the last music track was
         // just stopped
-        // Verify that the current volume source is not the music volume to prevent recursively
-        // calling to compute volume. This could happen in cases where music and
-        // (alarm, ring, notification, system, etc.) sounds belong to the same volume group.
-        if (volumeSource != musicVolumeSrc &&
-            (isStreamActive(AUDIO_STREAM_MUSIC, SONIFICATION_HEADSET_MUSIC_DELAY)
-                || mLimitRingtoneVolume)) {
+        if (isStreamActive(AUDIO_STREAM_MUSIC, SONIFICATION_HEADSET_MUSIC_DELAY)
+                || mLimitRingtoneVolume) {
             volumeDb += SONIFICATION_HEADSET_VOLUME_FACTOR_DB;
             DeviceTypeSet musicDevice =
                     mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_MEDIA),
@@ -8298,7 +8309,8 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
             float musicVolDb = computeVolume(musicCurves,
                                              musicVolumeSrc,
                                              musicCurves.getVolumeIndex(musicDevice),
-                                             musicDevice);
+                                             musicDevice,
+                                             /* computeInternalInteraction= */ false);
             float minVolDb = (musicVolDb > SONIFICATION_HEADSET_VOLUME_MIN_DB) ?
                         musicVolDb : SONIFICATION_HEADSET_VOLUME_MIN_DB;
             if (volumeDb > minVolDb) {

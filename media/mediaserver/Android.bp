@@ -75,38 +75,7 @@ cc_defaults {
         "-Wall",
     ],
 
-    // AIDL is only used when release_aidl_use_unfrozen is true
-    // because the swcodec mainline module is a prebuilt from an
-    // Android U branch in that case.
-    // TODO(b/327508501)
-    vintf_fragments: ["manifest_media_c2_software_hidl.xml"],
-    product_variables: {
-        release_aidl_use_unfrozen: {
-            vintf_fragments: ["manifest_media_c2_software_aidl.xml"],
-        },
-    },
-    // TODO(b/244769449) re-enable this block
-    // soong_config_variables: {
-    //     TARGET_DYNAMIC_64_32_MEDIASERVER: {
-    //         compile_multilib: "both",
-    //         multilib: {
-    //             lib32: {
-    //                 suffix: "32",
-    //             },
-    //             lib64: {
-    //                 suffix: "64",
-    //             },
-    //         },
-    //         required: [
-    //             "mediaserver.zygote64_32.rc",
-    //             "mediaserver.zygote64.rc",
-    //         ],
-    //         init_rc: ["mediaserver_dynamic.rc"],
-    //         conditions_default: {
-    //             init_rc: ["mediaserver.rc"],
-    //         },
-    //     },
-    // },
+    vintf_fragments: ["manifest_media_c2_software.xml"],
 
 }
 

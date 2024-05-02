@@ -53,6 +53,15 @@ flag {
 }
 
 flag {
+    name: "set_stream_volume_order"
+    namespace: "media_audio"
+    description:
+        "Fix race condition by adjusting the order when"
+        "setStreamVolume is calling into the BT stack"
+    bug: "329202581"
+}
+
+flag {
     name: "spatializer_offload"
     namespace: "media_audio"
     description: "Enable spatializer offload"
@@ -71,6 +80,15 @@ flag {
     namespace: "media_audio"
     description: "Enable stereo channel mask for spatialization."
     bug: "303920722"
+}
+
+flag {
+    name: "vgs_vss_sync_mute_order"
+    namespace: "media_audio"
+    description:
+        "When syncing the VGS to VSS we need to first adjust the"
+        "mute state before the index."
+    bug: "331849188"
 }
 
 flag {

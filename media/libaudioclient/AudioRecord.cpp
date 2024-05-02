@@ -131,11 +131,7 @@ status_t AudioRecord::getMetrics(mediametrics::Item * &item)
 }
 
 AudioRecord::AudioRecord(const AttributionSourceState &client)
-    : mActive(false), mStatus(NO_INIT), mClientAttributionSource(client),
-      mSessionId(AUDIO_SESSION_ALLOCATE), mPreviousPriority(ANDROID_PRIORITY_NORMAL),
-      mPreviousSchedulingGroup(SP_DEFAULT), mSelectedDeviceId(AUDIO_PORT_HANDLE_NONE),
-      mRoutedDeviceId(AUDIO_PORT_HANDLE_NONE), mSelectedMicDirection(MIC_DIRECTION_UNSPECIFIED),
-      mSelectedMicFieldDimension(MIC_FIELD_DIMENSION_DEFAULT)
+    : mClientAttributionSource(client)
 {
 }
 
@@ -155,13 +151,7 @@ AudioRecord::AudioRecord(
         audio_port_handle_t selectedDeviceId,
         audio_microphone_direction_t selectedMicDirection,
         float microphoneFieldDimension)
-    : mActive(false),
-      mStatus(NO_INIT),
-      mClientAttributionSource(client),
-      mSessionId(AUDIO_SESSION_ALLOCATE),
-      mPreviousPriority(ANDROID_PRIORITY_NORMAL),
-      mPreviousSchedulingGroup(SP_DEFAULT),
-      mProxy(nullptr)
+    : mClientAttributionSource(client)
 {
     uid_t uid = VALUE_OR_FATAL(aidl2legacy_int32_t_uid_t(mClientAttributionSource.uid));
     pid_t pid = VALUE_OR_FATAL(aidl2legacy_int32_t_pid_t(mClientAttributionSource.pid));
@@ -200,9 +190,6 @@ AudioRecord::~AudioRecord()
 }
 
 void AudioRecord::stopAndJoinCallbacks() {
-    // Prevent nullptr crash if it did not open properly.
-    if (mStatus != NO_ERROR) return;
-
     // Make sure that callback function exits in the case where
     // it is looping on buffer empty condition in obtainBuffer().
     // Otherwise the callback thread will never exit.
@@ -700,16 +687,27 @@ status_t AudioRecord::setInputDevice(audio_port_handle_t deviceId) {
     AutoMutex lock(mLock);
     ALOGV("%s(%d): deviceId=%d mSelectedDeviceId=%d",
             __func__, mPortId, deviceId, mSelectedDeviceId);
+
     if (mSelectedDeviceId != deviceId) {
         mSelectedDeviceId = deviceId;
         if (mStatus == NO_ERROR) {
-            // stop capture so that audio policy manager does not reject the new instance start request
-            // as only one capture can be active at a time.
-            if (mAudioRecord != 0 && mActive) {
-                mAudioRecord->stop();
+            if (mActive) {
+                if (mSelectedDeviceId != mRoutedDeviceId) {
+                    // stop capture so that audio policy manager does not reject the new instance
+                    // start request as only one capture can be active at a time.
+                    if (mAudioRecord != 0) {
+                        mAudioRecord->stop();
+                    }
+                    android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
+                    mProxy->interrupt();
+                }
+            } else {
+                // if the track is idle, try to restore now and
+                // defer to next start if not possible
+                if (restoreRecord_l("setInputDevice") != OK) {
+                    android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
+                }
             }
-            android_atomic_or(CBLK_INVALID, &mCblk->mFlags);
-            mProxy->interrupt();
         }
     }
     return NO_ERROR;
@@ -1546,7 +1544,7 @@ status_t AudioRecord::restoreRecord_l(const char *from)
             .set(AMEDIAMETRICS_PROP_WHERE, from)
             .record(); });
 
-    ALOGW("%s(%d): dead IAudioRecord, creating a new one from %s()", __func__, mPortId, from);
+    ALOGW("%s(%d) called from %s()", __func__, mPortId, from);
     ++mSequence;
 
     const int INITIAL_RETRIES = 3;

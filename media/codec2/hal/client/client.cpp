@@ -681,8 +681,9 @@ c2_status_t Codec2ConfigurableClient::AidlImpl::query(
                 status = C2_BAD_INDEX;
                 continue;
             }
-            if (!stackParams[i++]->updateFrom(*paramPointer)) {
+            if (stackParams[i++]->updateFrom(*paramPointer)) {
                 ++numQueried;
+            } else {
                 LOG(WARNING) << "query -- param update failed: "
                                 "index = "
                              << paramPointer->index() << ".";
@@ -1869,6 +1870,10 @@ std::shared_ptr<Codec2Client::InputSurface> Codec2Client::CreateInputSurface(
     LOG(WARNING) << "CreateInputSurface -- failed to create an input surface "
                     "from all services";
     return nullptr;
+}
+
+bool Codec2Client::IsAidlSelected() {
+    return c2_aidl::utils::IsSelected();
 }
 
 // Codec2Client::Interface

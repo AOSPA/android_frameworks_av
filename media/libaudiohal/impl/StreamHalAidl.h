@@ -32,6 +32,7 @@
 #include <media/audiohal/StreamHalInterface.h>
 #include <media/AidlConversionUtil.h>
 #include <media/AudioParameter.h>
+#include <mediautils/Synchronization.h>
 
 #include "ConversionHelperAidl.h"
 #include "StreamPowerLog.h"
@@ -93,6 +94,9 @@ class StreamContextAidl {
     }
     size_t getBufferSizeBytes() const { return mFrameSizeBytes * mBufferSizeFrames; }
     size_t getBufferSizeFrames() const { return mBufferSizeFrames; }
+    size_t getBufferDurationMs(int32_t sampleRate) const {
+        return sampleRate != 0 ? mBufferSizeFrames * MILLIS_PER_SECOND / sampleRate : 0;
+    }
     CommandMQ* getCommandMQ() const { return mCommandMQ.get(); }
     DataMQ* getDataMQ() const { return mDataMQ.get(); }
     size_t getFrameSizeBytes() const { return mFrameSizeBytes; }
@@ -232,9 +236,22 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
 
     status_t exit();
 
+    void onAsyncTransferReady();
+    void onAsyncDrainReady();
+    void onAsyncError();
+
     const bool mIsInput;
     const audio_config_base_t mConfig;
     const StreamContextAidl mContext;
+    // This lock is used to make sending of a command and receiving a reply an atomic
+    // operation. Otherwise, when two threads are trying to send a command, they may both advance to
+    // reading of the reply once the HAL has consumed the command from the MQ, and that creates a
+    // race condition between them.
+    //
+    // Note that only access to command and reply MQs needs to be protected because the data MQ is
+    // only accessed by the I/O thread. Also, there is no need to protect lookup operations on the
+    // queues as they are thread-safe, only send/receive operation must be protected.
+    std::mutex mCommandReplyLock;
 
   private:
     static audio_config_base_t configToBase(const audio_config& config) {
@@ -248,6 +265,8 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
         std::lock_guard l(mLock);
         return mLastReply.state;
     }
+    // Note: Since `sendCommand` takes mLock while holding mCommandReplyLock, never call
+    // it with `mLock` being held.
     status_t sendCommand(
             const ::aidl::android::hardware::audio::core::StreamDescriptor::Command &command,
             ::aidl::android::hardware::audio::core::StreamDescriptor::Reply* reply = nullptr,
@@ -257,8 +276,10 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
 
     const std::shared_ptr<::aidl::android::hardware::audio::core::IStreamCommon> mStream;
     const std::shared_ptr<::aidl::android::media::audio::IHalAdapterVendorExtension> mVendorExt;
+    const int64_t mLastReplyLifeTimeNs;
     std::mutex mLock;
     ::aidl::android::hardware::audio::core::StreamDescriptor::Reply mLastReply GUARDED_BY(mLock);
+    int64_t mLastReplyExpirationNs GUARDED_BY(mLock) = 0;
     // mStreamPowerLog is used for audio signal power logging.
     StreamPowerLog mStreamPowerLog;
     std::atomic<pid_t> mWorkerTid = -1;
@@ -266,7 +287,9 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
 
 class CallbackBroker;
 
-class StreamOutHalAidl : public StreamOutHalInterface, public StreamHalAidl {
+class StreamOutHalAidl : public virtual StreamOutHalInterface,
+                         public virtual StreamOutHalInterfaceCallback,
+                         public StreamHalAidl {
   public:
     // Extract the output stream parameters and set by AIDL APIs.
     status_t setParameters(const String8& kvPairs) override;
@@ -344,6 +367,11 @@ class StreamOutHalAidl : public StreamOutHalInterface, public StreamHalAidl {
 
     status_t exit() override;
 
+    // StreamOutHalInterfaceCallback
+    void onWriteReady() override;
+    void onDrainReady() override;
+    void onError() override;
+
   private:
     friend class sp<StreamOutHalAidl>;
 
@@ -352,6 +380,7 @@ class StreamOutHalAidl : public StreamOutHalInterface, public StreamHalAidl {
 
     const std::shared_ptr<::aidl::android::hardware::audio::core::IStreamOut> mStream;
     const wp<CallbackBroker> mCallbackBroker;
+    mediautils::atomic_wp<StreamOutHalInterfaceCallback> mClientCallback;
 
     AudioOffloadMetadata mOffloadMetadata;
 
