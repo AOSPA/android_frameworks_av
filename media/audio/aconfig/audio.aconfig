@@ -20,6 +20,13 @@ flag {
 }
 
 flag {
+    name: "audioserver_permissions"
+    namespace: "media_audio"
+    description: "Refactoring permission management in audioserver"
+    bug: "338089555"
+}
+
+flag {
     name: "bluetooth_mac_address_anonymization"
     namespace: "media_audio"
     description:
@@ -42,6 +49,14 @@ flag {
     description:
         "Enable dynamic spatial audio over Bluetooth LE Audio."
     bug: "307588546"
+}
+
+flag {
+    name: "port_to_piid_simplification"
+    namespace: "media_audio"
+    description: "PAM only needs for each piid the last portId mapping"
+    bug: "335747248"
+
 }
 
 flag {

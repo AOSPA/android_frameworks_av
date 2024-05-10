@@ -1489,8 +1489,8 @@ status_t PlaybackThread::checkEffectCompatibility_l(
     }
 
     if (IAfEffectModule::isHapticGenerator(&desc->type) && mHapticChannelCount == 0) {
-        ALOGW("%s: thread doesn't support haptic playback while the effect is HapticGenerator",
-                __func__);
+        ALOGW("%s: thread (%s) doesn't support haptic playback while the effect is HapticGenerator",
+              __func__, threadTypeToString(mType));
         return BAD_VALUE;
     }
 
@@ -6197,8 +6197,8 @@ PlaybackThread::mixer_state MixerThread::prepareTracks_l(
                 // No buffers for this track. Give it a few chances to
                 // fill a buffer, then remove it from active list.
                 if (--(track->retryCount()) <= 0) {
-                    ALOGI("BUFFER TIMEOUT: remove(%d) from active list on thread %p",
-                            trackId, this);
+                    ALOGI("%s BUFFER TIMEOUT: remove track(%d) from active list due to underrun"
+                          " on thread %d", __func__, trackId, mId);
                     tracksToRemove->add(track);
                     // indicate to client process that the track was disabled because of underrun;
                     // it will then automatically call start() when data is available
@@ -6965,7 +6965,8 @@ PlaybackThread::mixer_state DirectOutputThread::prepareTracks_l(
                     if (isTimestampAdvancing) { // HAL is still playing audio, give us more time.
                         track->retryCount() = kMaxTrackRetriesOffload;
                     } else {
-                        ALOGV("BUFFER TIMEOUT: remove track(%d) from active list", trackId);
+                        ALOGI("%s BUFFER TIMEOUT: remove track(%d) from active list due to"
+                              " underrun on thread %d", __func__, trackId, mId);
                         tracksToRemove->add(track);
                         // indicate to client process that the track was disabled because of
                         // underrun; it will then automatically call start() when data is available
@@ -7090,6 +7091,7 @@ bool DirectOutputThread::shouldStandby_l()
 
     bool trackPaused = false;
     bool trackStopped = false;
+    bool trackDisabled = false;
 
     if (mStandby) {
         return false; // already in standby
@@ -7098,14 +7100,17 @@ bool DirectOutputThread::shouldStandby_l()
     // allowing DIRECT linear pcm track to be in standby even when active
     standbyForDirectPcm = (mType == DIRECT) && audio_is_linear_pcm(mFormat) && !usesHwAvSync();
 
-    // do not put the HAL in standby when paused. AwesomePlayer clear the offloaded AudioTrack
+    // do not put the HAL in standby when paused. NuPlayer clear the offloaded AudioTrack
     // after a timeout and we will enter standby then.
+    // On offload threads, do not enter standby if the main track is still underrunning.
     if (mTracks.size() > 0) {
-        trackPaused = mTracks[mTracks.size() - 1]->isPaused();
-        trackStopped = mTracks[mTracks.size() - 1]->isStopped() ||
-                           mTracks[mTracks.size() - 1]->state() == IAfTrackBase::IDLE;
+        const auto& mainTrack = mTracks[mTracks.size() - 1];
+
+        trackPaused = mainTrack->isPaused();
+        trackStopped = mainTrack->isStopped() || mainTrack->state() == IAfTrackBase::IDLE;
+        trackDisabled = (mType == OFFLOAD) && mainTrack->isDisabled();
     }
-    standbyWhenIdle = trackStopped || (!trackPaused && !mHwPaused);
+    standbyWhenIdle = trackStopped || (!trackPaused && !mHwPaused) || trackDisabled;
     // store position when entering standby in idle/stopped state for DIRECT linear pcm tracks.
     // This is required because presentation position for a DIRECT linear pcm track is not reset
     // on standby, and must be reset on track stop.
@@ -7219,7 +7224,6 @@ void DirectOutputThread::flushHw_l()
 {
     PlaybackThread::flushHw_l();
     mOutput->flush();
-    mHwPaused = false;
     mFlushPending = false;
     mFramesWritten = 0;
     mFramesWrittenAtStandby = 0;
@@ -7227,6 +7231,10 @@ void DirectOutputThread::flushHw_l()
     mTimestampVerifier.discontinuity(discontinuityForStandbyOrFlush());
     mTimestamp.clear();
     mMonotonicFrameCounter.onFlush();
+    // We do not reset mHwPaused which is hidden from the Track client.
+    // Note: the client track in Tracks.cpp and AudioTrack.cpp
+    // has a FLUSHED state but the DirectOutputThread does not;
+    // those tracks will continue to show isStopped().
 }
 
 status_t DirectOutputThread::getTimestamp_l(AudioTimestamp& timestamp)
@@ -7595,8 +7603,8 @@ PlaybackThread::mixer_state OffloadThread::prepareTracks_l(
                     if (isTimestampAdvancing) { // HAL is still playing audio, give us more time.
                         track->retryCount() = kMaxTrackRetriesOffload;
                     } else {
-                        ALOGV("OffloadThread: BUFFER TIMEOUT: remove track(%d) from active list",
-                                track->id());
+                        ALOGI("%s BUFFER TIMEOUT: remove track(%d) from active list due to"
+                              " underrun on thread %d", __func__, track->id(), mId);
                         tracksToRemove->add(track);
                         // tell client process that the track was disabled because of underrun;
                         // it will then automatically call start() when data is available
@@ -9287,7 +9295,7 @@ bool RecordThread::stop(IAfRecordTrack* recordTrack) {
     // This is needed for proper patchRecord peer release.
     while (recordTrack->state() == IAfTrackBase::PAUSING && !recordTrack->isInvalid()) {
         mWaitWorkCV.notify_all(); // signal thread to stop
-        mStartStopCV.wait(_l);
+        mStartStopCV.wait(_l, getTid());
     }
 
     if (recordTrack->state() == IAfTrackBase::PAUSED) { // successful stop

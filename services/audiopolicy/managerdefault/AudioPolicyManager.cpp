@@ -1854,12 +1854,14 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     }
 
     // Use the spatializer output if the content can be spatialized, no preferred mixer
-    // was specified and offload or direct playback is not explicitly requested.
+    // was specified and offload or direct playback is not explicitly requested, and there is no
+    // haptic channel included in playback
     *isSpatialized = false;
-    if (mSpatializerOutput != nullptr
-            && canBeSpatializedInt(attr, config, devices.toTypeAddrVector())
-            && prefMixerConfigInfo == nullptr
-            && (((*flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0)
+    if (mSpatializerOutput != nullptr &&
+        canBeSpatializedInt(attr, config, devices.toTypeAddrVector()) &&
+        prefMixerConfigInfo == nullptr &&
+        ((((*flags & (AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT)) == 0) &&
+        checkHapticCompatibilityOnSpatializerOutput(config, session))
                   || audio_is_linear_pcm(config->format))) {
         *isSpatialized = true;
         return mSpatializerOutput->mIoHandle;
@@ -2323,7 +2325,7 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
         // matching.
         if ((outputHapticChannelCount >= hapticChannelCount && format == outputDesc->getFormat() &&
              samplingRate == outputDesc->getSamplingRate()) ||
-            (hapticChannelCount == 0 && hasOrphanHaptic)) {
+            (outputHapticChannelCount != 0 && hasOrphanHaptic)) {
             currentMatchCriteria[0] = outputHapticChannelCount;
         }
 
@@ -6421,6 +6423,34 @@ bool AudioPolicyManager::canBeSpatializedInt(const audio_attributes_t *attr,
     return true;
 }
 
+// The Spatializer output is compatible with Haptic use cases if:
+// 1. the Spatializer output thread supports Haptic, and format/sampleRate are same
+// with client if client haptic channel bits were set, or
+// 2. the Spatializer output thread does not support Haptic, and client did not ask haptic by
+// including the haptic bits or creating the HapticGenerator effect for same session.
+bool AudioPolicyManager::checkHapticCompatibilityOnSpatializerOutput(
+        const audio_config_t* config, audio_session_t sessionId) const {
+    const auto clientHapticChannel =
+            audio_channel_count_from_out_mask(config->channel_mask & AUDIO_CHANNEL_HAPTIC_ALL);
+    const auto threadOutputHapticChannel = audio_channel_count_from_out_mask(
+            mSpatializerOutput->getChannelMask() & AUDIO_CHANNEL_HAPTIC_ALL);
+
+    if (threadOutputHapticChannel) {
+        // check format and sampleRate match if client haptic channel mask exist
+        if (clientHapticChannel) {
+            return mSpatializerOutput->getFormat() == config->format &&
+                   mSpatializerOutput->getSamplingRate() == config->sample_rate;
+        }
+        return true;
+    } else {
+        // in the case of the Spatializer output channel mask does not have haptic channel bits, it
+        // means haptic use cases (either the client channelmask includes haptic bits, or created a
+        // HapticGenerator effect for this session) are not supported.
+        return clientHapticChannel == 0 &&
+               !mEffects.hasOrphanEffectsForSessionAndType(sessionId, FX_IID_HAPTICGENERATOR);
+    }
+}
+
 void AudioPolicyManager::checkVirtualizerClientRoutes() {
     std::set<audio_stream_type_t> streamsToInvalidate;
     for (size_t i = 0; i < mOutputs.size(); i++) {
@@ -6805,6 +6835,15 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
         if ((desc->mFlags & AUDIO_OUTPUT_FLAG_SPATIALIZER) != 0
                 && !isOutputOnlyAvailableRouteToSomeDevice(desc)) {
             outputsClosed.push_back(desc->mIoHandle);
+            nextAudioPortGeneration();
+            ssize_t index = mAudioPatches.indexOfKey(desc->getPatchHandle());
+            if (index >= 0) {
+                sp<AudioPatch> patchDesc = mAudioPatches.valueAt(index);
+                (void) /*status_t status*/ mpClientInterface->releaseAudioPatch(
+                            patchDesc->getAfHandle(), 0);
+                mAudioPatches.removeItemsAt(index);
+                mpClientInterface->onAudioPatchListUpdate();
+            }
             desc->close();
         }
     }
