@@ -168,8 +168,8 @@ void AudioPolicyManager::broadcastDeviceConnectionState(const sp<DeviceDescripto
     device->toAudioPort(&devicePort);
     if (status_t status = mpClientInterface->setDeviceConnectedState(&devicePort, state);
             status != OK) {
-        ALOGE("Error %d while setting connected state for device %s",
-                static_cast<int>(state),
+        ALOGE("Error %d while setting connected state %d for device %s",
+                status, static_cast<int>(state),
                 device->getDeviceTypeAddr().toString(false).c_str());
     }
 }
@@ -257,9 +257,9 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
             if (checkOutputsForDevice(device, state, outputs) != NO_ERROR) {
                 mAvailableOutputDevices.remove(device);
 
-                mHwModules.cleanUpForDevice(device);
-
                 broadcastDeviceConnectionState(device, media::DeviceConnectedState::DISCONNECTED);
+
+                mHwModules.cleanUpForDevice(device);
                 return INVALID_OPERATION;
             }
 
@@ -2350,7 +2350,14 @@ audio_io_handle_t AudioPolicyManager::selectOutput(const SortedVector<audio_io_h
 
         // sampling rate match
         if (samplingRate > SAMPLE_RATE_HZ_DEFAULT) {
-            currentMatchCriteria[4] = outputDesc->getSamplingRate();
+            int diff;  // avoid unsigned integer overflow.
+            __builtin_sub_overflow(outputDesc->getSamplingRate(), samplingRate, &diff);
+
+            // prefer the closest output sampling rate greater than or equal to target
+            // if none exists, prefer the closest output sampling rate less than target.
+            //
+            // criteria is offset to make non-negative.
+            currentMatchCriteria[4] = diff >= 0 ? -diff + 200'000'000 : diff + 100'000'000;
         }
 
         // performance flags match

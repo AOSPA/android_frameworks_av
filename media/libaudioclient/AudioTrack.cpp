@@ -1758,14 +1758,14 @@ status_t AudioTrack::setOutputDevice(audio_port_handle_t deviceId) {
         mSelectedDeviceId = deviceId;
         if (mStatus == NO_ERROR) {
             if (isOffloadedOrDirect_l()) {
-                if (mState == STATE_STOPPED || mState == STATE_FLUSHED) {
-                    ALOGD("%s(%d): creating a new AudioTrack", __func__, mPortId);
-                    result = restoreTrack_l("setOutputDevice", true /* forceRestore */);
-                } else {
+                if (isPlaying_l()) {
                     ALOGW("%s(%d). Offloaded or Direct track is not STOPPED or FLUSHED. "
                           "State: %s.",
                             __func__, mPortId, stateToString(mState));
                     result = INVALID_OPERATION;
+                } else {
+                    ALOGD("%s(%d): creating a new AudioTrack", __func__, mPortId);
+                    result = restoreTrack_l("setOutputDevice", true /* forceRestore */);
                 }
             } else {
                 // allow track invalidation when track is not playing to propagate
@@ -3272,7 +3272,7 @@ status_t AudioTrack::getTimestamp_l(AudioTimestamp& timestamp)
     // To avoid a race, read the presented frames first.  This ensures that presented <= consumed.
 
     status_t status;
-    if (isAfTrackOffloadedOrDirect_l()) {
+    if (isOffloadedOrDirect_l()) {
         // use Binder to get timestamp
         media::AudioTimestampInternal ts;
         mAudioTrack->getTimestamp(&ts, &status);
@@ -3384,7 +3384,7 @@ status_t AudioTrack::getTimestamp_l(AudioTimestamp& timestamp)
         ALOGV_IF(status != WOULD_BLOCK, "%s(%d): getTimestamp error:%#x", __func__, mPortId, status);
         return status;
     }
-    if (isAfTrackOffloadedOrDirect_l()) {
+    if (isOffloadedOrDirect_l()) {
         if (isOffloaded_l() && (mState == STATE_PAUSED || mState == STATE_PAUSED_STOPPING)) {
             // use cached paused position in case another offloaded track is running.
             timestamp.mPosition = mPausedPosition;
