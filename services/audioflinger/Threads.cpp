@@ -3427,9 +3427,9 @@ status_t PlaybackThread::getRenderPosition(
         return NO_ERROR;
     } else {
         status_t status;
-        uint32_t frames;
+        uint64_t frames = 0;
         status = mOutput->getRenderPosition(&frames);
-        *dspFrames = (size_t)frames;
+        *dspFrames = (uint32_t)frames;
         return status;
     }
 }
@@ -6008,7 +6008,7 @@ PlaybackThread::mixer_state MixerThread::prepareTracks_l(
                 vaf = v * sendLevel * (1. / MAX_GAIN_INT);
             }
 
-            track->setFinalVolume(vrf, vlf);
+            track->setFinalVolume(vlf, vrf);
 
             // Delegate volume control to effect in track effect chain if needed
             if (chain != 0 && chain->setVolume(&vl, &vr)) {

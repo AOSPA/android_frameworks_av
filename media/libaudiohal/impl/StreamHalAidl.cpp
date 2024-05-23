@@ -202,8 +202,12 @@ status_t StreamHalAidl::standby() {
     StreamDescriptor::Reply reply;
     switch (state) {
         case StreamDescriptor::State::ACTIVE:
+        case StreamDescriptor::State::DRAINING:
+        case StreamDescriptor::State::TRANSFERRING:
             RETURN_STATUS_IF_ERROR(pause(&reply));
-            if (reply.state != StreamDescriptor::State::PAUSED) {
+            if (reply.state != StreamDescriptor::State::PAUSED &&
+                    reply.state != StreamDescriptor::State::DRAIN_PAUSED &&
+                    reply.state != StreamDescriptor::State::TRANSFER_PAUSED) {
                 ALOGE("%s: unexpected stream state: %s (expected PAUSED)",
                         __func__, toString(reply.state).c_str());
                 return INVALID_OPERATION;
@@ -211,6 +215,7 @@ status_t StreamHalAidl::standby() {
             FALLTHROUGH_INTENDED;
         case StreamDescriptor::State::PAUSED:
         case StreamDescriptor::State::DRAIN_PAUSED:
+        case StreamDescriptor::State::TRANSFER_PAUSED:
             if (mIsInput) return flush();
             RETURN_STATUS_IF_ERROR(flush(&reply));
             if (reply.state != StreamDescriptor::State::IDLE) {
@@ -327,8 +332,11 @@ status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred
             return INVALID_OPERATION;
         }
     }
+    StreamContextAidl::DataMQ::Error fmqError = StreamContextAidl::DataMQ::Error::NONE;
+    std::string fmqErrorMsg;
     if (!mIsInput) {
-        bytes = std::min(bytes, mContext.getDataMQ()->availableToWrite());
+        bytes = std::min(bytes,
+                mContext.getDataMQ()->availableToWrite(&fmqError, &fmqErrorMsg));
     }
     StreamDescriptor::Command burst =
             StreamDescriptor::Command::make<StreamDescriptor::Command::Tag::burst>(bytes);
@@ -345,12 +353,14 @@ status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred
         LOG_ALWAYS_FATAL_IF(*transferred > bytes,
                 "%s: HAL module read %zu bytes, which exceeds requested count %zu",
                 __func__, *transferred, bytes);
-        if (auto toRead = mContext.getDataMQ()->availableToRead();
+        if (auto toRead = mContext.getDataMQ()->availableToRead(&fmqError, &fmqErrorMsg);
                 toRead != 0 && !mContext.getDataMQ()->read(static_cast<int8_t*>(buffer), toRead)) {
             ALOGE("%s: failed to read %zu bytes to data MQ", __func__, toRead);
             return NOT_ENOUGH_DATA;
         }
     }
+    LOG_ALWAYS_FATAL_IF(fmqError != StreamContextAidl::DataMQ::Error::NONE,
+            "%s", fmqErrorMsg.c_str());
     mStreamPowerLog.log(buffer, *transferred);
     return OK;
 }
@@ -653,19 +663,14 @@ status_t StreamOutHalAidl::write(const void *buffer, size_t bytes, size_t *writt
     return transfer(const_cast<void*>(buffer), bytes, written);
 }
 
-status_t StreamOutHalAidl::getRenderPosition(uint32_t *dspFrames) {
+status_t StreamOutHalAidl::getRenderPosition(uint64_t *dspFrames) {
     if (dspFrames == nullptr) {
         return BAD_VALUE;
     }
     int64_t aidlFrames = 0, aidlTimestamp = 0;
     RETURN_STATUS_IF_ERROR(getObservablePosition(&aidlFrames, &aidlTimestamp));
-    *dspFrames = static_cast<uint32_t>(aidlFrames);
+    *dspFrames = aidlFrames;
     return OK;
-}
-
-status_t StreamOutHalAidl::getNextWriteTimestamp(int64_t *timestamp __unused) {
-    // Obsolete, use getPresentationPosition.
-    return INVALID_OPERATION;
 }
 
 status_t StreamOutHalAidl::setCallback(wp<StreamOutHalInterfaceCallback> callback) {
@@ -725,6 +730,11 @@ status_t StreamOutHalAidl::getPresentationPosition(uint64_t *frames, struct time
     *frames = aidlFrames;
     timestamp->tv_sec = aidlTimestamp / NANOS_PER_SECOND;
     timestamp->tv_nsec = aidlTimestamp - timestamp->tv_sec * NANOS_PER_SECOND;
+    return OK;
+}
+
+status_t StreamOutHalAidl::presentationComplete() {
+    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
     return OK;
 }
 
