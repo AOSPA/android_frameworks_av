@@ -437,14 +437,23 @@ void VirtualCameraRenderThread::processCaptureRequest(
 
   if (request.getRequestSettings().fpsRange) {
     const int maxFps =
-        std::min(1, request.getRequestSettings().fpsRange->maxFps);
+        std::max(1, request.getRequestSettings().fpsRange->maxFps);
     const std::chrono::nanoseconds minFrameDuration(
         static_cast<uint64_t>(1e9 / maxFps));
-    std::chrono::nanoseconds frameDuration =
+    const std::chrono::nanoseconds frameDuration =
         timestamp - lastAcquisitionTimestamp;
     if (frameDuration < minFrameDuration) {
       // We're too fast for the configured maxFps, let's wait a bit.
-      std::this_thread::sleep_for(minFrameDuration - frameDuration);
+      const std::chrono::nanoseconds sleepTime =
+          minFrameDuration - frameDuration;
+      ALOGV("Current frame duration would  be %" PRIu64
+            " ns corresponding to, "
+            "sleeping for %" PRIu64
+            " ns before updating texture to match maxFps %d",
+            static_cast<uint64_t>(frameDuration.count()),
+            static_cast<uint64_t>(sleepTime.count()), maxFps);
+
+      std::this_thread::sleep_for(sleepTime);
       timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch());
       mLastAcquisitionTimestampNanoseconds.store(timestamp.count(),
