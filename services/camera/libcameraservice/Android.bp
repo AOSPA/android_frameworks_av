@@ -39,6 +39,7 @@ cc_library_shared {
     name: "libcameraservice",
     defaults: [
         "camera_package_name_defaults",
+        "libcameraservice_ext_lib_defaults",
     ],
 
     // Camera service source
@@ -51,6 +52,7 @@ cc_library_shared {
         "common/CameraDeviceBase.cpp",
         "common/CameraOfflineSessionBase.cpp",
         "common/CameraProviderManager.cpp",
+        "common/CameraProviderExtension.cpp",
         "common/FrameProcessorBase.cpp",
         "common/hidl/HidlProviderInfo.cpp",
         "common/aidl/AidlProviderInfo.cpp",
@@ -262,3 +264,12 @@ cc_library_static {
     ],
 
 }
+
+cc_library_static {
+    name: "libcameraservice_ext_lib",
+    srcs: [
+        "common/CameraProviderExtension.cpp",
+    ],
+    export_include_dirs: ["."],
+}
+
