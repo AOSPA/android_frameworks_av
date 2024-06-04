@@ -6,6 +6,14 @@ package: "com.android.media.audio"
 container: "system"
 
 flag {
+    name: "abs_volume_index_fix"
+    namespace: "media_audio"
+    description:
+        "Fix double attenuation and index jumps in absolute volume mode"
+    bug: "340693050"
+}
+
+flag {
     name: "alarm_min_volume_zero"
     namespace: "media_audio"
     description: "Support configuring alarm min vol to zero"
@@ -17,6 +25,13 @@ flag {
     namespace: "media_audio"
     description: "AudioService handles device connection failures."
     bug: "326597760"
+}
+
+flag {
+    name: "audioserver_permissions"
+    namespace: "media_audio"
+    description: "Refactoring permission management in audioserver"
+    bug: "338089555"
 }
 
 flag {
@@ -42,6 +57,14 @@ flag {
     description:
         "Enable dynamic spatial audio over Bluetooth LE Audio."
     bug: "307588546"
+}
+
+flag {
+    name: "port_to_piid_simplification"
+    namespace: "media_audio"
+    description: "PAM only needs for each piid the last portId mapping"
+    bug: "335747248"
+
 }
 
 flag {

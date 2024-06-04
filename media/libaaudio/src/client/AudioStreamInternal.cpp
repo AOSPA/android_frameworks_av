@@ -57,7 +57,7 @@ using android::content::AttributionSourceState;
 
 using namespace aaudio;
 
-#define MIN_TIMEOUT_NANOS        (1000 * AAUDIO_NANOS_PER_MILLISECOND)
+#define MIN_TIMEOUT_NANOS        (2200 * AAUDIO_NANOS_PER_MILLISECOND)
 
 // Wait at least this many times longer than the operation should take.
 #define MIN_TIMEOUT_OPERATIONS    4

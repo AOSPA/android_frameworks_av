@@ -16,11 +16,13 @@
 
 #pragma once
 
-#include <vibrator/ExternalVibrationUtils.h>
-#include <map>
-
-#include "Processors.h"
 #include "effect-impl/EffectContext.h"
+#include "Processors.h"
+
+#include <vibrator/ExternalVibrationUtils.h>
+
+#include <cstddef>
+#include <map>
 
 namespace aidl::android::hardware::audio::effect {
 
@@ -39,7 +41,6 @@ struct HapticGeneratorParam {
     int mHapticChannelCount;
     int mAudioChannelCount;
 
-    HapticGenerator::HapticScale mHapticScale;
     std::map<int, HapticGenerator::VibratorScale> mHapticScales;
     // max intensity will be used to scale haptic data.
     HapticGenerator::VibratorScale mMaxVibratorScale;
@@ -69,12 +70,14 @@ class HapticGeneratorContext final : public EffectContext {
     void reset();
 
     RetCode setHgHapticScales(const std::vector<HapticGenerator::HapticScale>& hapticScales);
-    std::vector<HapticGenerator::HapticScale> getHgHapticScales();
+    std::vector<HapticGenerator::HapticScale> getHgHapticScales() const;
 
     RetCode setHgVibratorInformation(const HapticGenerator::VibratorInformation& vibratorInfo);
-    HapticGenerator::VibratorInformation getHgVibratorInformation();
+    HapticGenerator::VibratorInformation getHgVibratorInformation() const;
 
     IEffect::Status process(float* in, float* out, int samples);
+
+    RetCode setCommon(const Parameter::Common& common) override;
 
   private:
     static constexpr float DEFAULT_RESONANT_FREQUENCY = 150.0f;
@@ -108,15 +111,17 @@ class HapticGeneratorContext final : public EffectContext {
     // intermediate buffer in the generating algorithm.
     std::vector<float> mOutputBuffer;
 
-    void init_params(media::audio::common::AudioChannelLayout inputChMask,
-                     media::audio::common::AudioChannelLayout outputChMask);
+    void init_params(const Parameter::Common& common);
     void configure();
 
-    float getDistortionOutputGain();
-    float getFloatProperty(const std::string& key, float defaultValue);
+    float getDistortionOutputGain() const;
+    float getFloatProperty(const std::string& key, float defaultValue) const;
     void addBiquadFilter(std::shared_ptr<HapticBiquadFilter> filter);
     void buildProcessingChain();
     float* runProcessingChain(float* buf1, float* buf2, size_t frameCount);
+
+    std::string paramToString(const struct HapticGeneratorParam& param) const;
+    std::string contextToString() const;
 };
 
 }  // namespace aidl::android::hardware::audio::effect

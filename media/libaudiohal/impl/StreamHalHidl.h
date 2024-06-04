@@ -18,10 +18,12 @@
 #define ANDROID_HARDWARE_STREAM_HAL_HIDL_H
 
 #include <atomic>
+#include <mutex>
 
 #include PATH(android/hardware/audio/CORE_TYPES_FILE_VERSION/IStream.h)
 #include PATH(android/hardware/audio/CORE_TYPES_FILE_VERSION/IStreamIn.h)
 #include PATH(android/hardware/audio/FILE_VERSION/IStreamOut.h)
+#include <android-base/thread_annotations.h>
 #include <fmq/EventFlag.h>
 #include <fmq/MessageQueue.h>
 #include <media/audiohal/EffectHalInterface.h>
@@ -119,6 +121,9 @@ class StreamHalHidl : public virtual StreamHalInterface, public CoreConversionHe
 
 class StreamOutHalHidl : public StreamOutHalInterface, public StreamHalHidl {
   public:
+    // Put the audio hardware input/output into standby mode (from StreamHalInterface).
+    status_t standby() override;
+
     // Return the frame size (number of bytes per sample) of a stream.
     virtual status_t getFrameSize(size_t *size);
 
@@ -136,10 +141,7 @@ class StreamOutHalHidl : public StreamOutHalInterface, public StreamHalHidl {
 
     // Return the number of audio frames written by the audio dsp to DAC since
     // the output has exited standby.
-    virtual status_t getRenderPosition(uint32_t *dspFrames);
-
-    // Get the local time at which the next write to the audio driver will be presented.
-    virtual status_t getNextWriteTimestamp(int64_t *timestamp);
+    virtual status_t getRenderPosition(uint64_t *dspFrames);
 
     // Set the callback for notifying completion of non-blocking write and drain.
     virtual status_t setCallback(wp<StreamOutHalInterfaceCallback> callback);
@@ -159,11 +161,18 @@ class StreamOutHalHidl : public StreamOutHalInterface, public StreamHalHidl {
     // Requests notification when data buffered by the driver/hardware has been played.
     virtual status_t drain(bool earlyNotify);
 
-    // Notifies to the audio driver to flush the queued data.
+    // Notifies to the audio driver to flush (that is, drop) the queued data. Stream must
+    // already be paused before calling 'flush'.
     virtual status_t flush();
 
     // Return a recent count of the number of audio frames presented to an external observer.
+    // This excludes frames which have been written but are still in the pipeline. See the
+    // table at the start of the 'StreamOutHalInterface' for the specification of the frame
+    // count behavior w.r.t. 'flush', 'drain' and 'standby' operations.
     virtual status_t getPresentationPosition(uint64_t *frames, struct timespec *timestamp);
+
+    // Notifies the HAL layer that the framework considers the current playback as completed.
+    status_t presentationComplete() override;
 
     // Called when the metadata of the stream's source has been changed.
     status_t updateSourceMetadata(const SourceMetadata& sourceMetadata) override;
@@ -221,6 +230,10 @@ class StreamOutHalHidl : public StreamOutHalInterface, public StreamHalHidl {
     std::unique_ptr<StatusMQ> mStatusMQ;
     std::atomic<pid_t> mWriterClient;
     EventFlag* mEfGroup;
+    std::mutex mPositionMutex;
+    // Used to expand correctly the 32-bit position from the HAL.
+    uint64_t mRenderPosition GUARDED_BY(mPositionMutex) = 0;
+    bool mExpectRetrograde GUARDED_BY(mPositionMutex) = false; // See 'presentationComplete'.
 
     // Can not be constructed directly by clients.
     StreamOutHalHidl(const sp<::android::hardware::audio::CPP_VERSION::IStreamOut>& stream);
@@ -250,6 +263,7 @@ class StreamInHalHidl : public StreamInHalInterface, public StreamHalHidl {
 
     // Return a recent count of the number of audio frames received and
     // the clock time associated with that frame count.
+    // The count must not reset to zero when a PCM input enters standby.
     virtual status_t getCapturePosition(int64_t *frames, int64_t *time);
 
     // Get active microphones
