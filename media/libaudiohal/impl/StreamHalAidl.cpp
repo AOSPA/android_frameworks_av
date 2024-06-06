@@ -86,8 +86,8 @@ StreamHalAidl::StreamHalAidl(
           mStream(stream),
           mVendorExt(vext),
           mLastReplyLifeTimeNs(
-                  std::min(static_cast<size_t>(100),
-                          2 * mContext.getBufferDurationMs(mConfig.sample_rate))
+                  std::min(static_cast<size_t>(20),
+                           mContext.getBufferDurationMs(mConfig.sample_rate))
                   * NANOS_PER_MILLISECOND)
 {
     ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
