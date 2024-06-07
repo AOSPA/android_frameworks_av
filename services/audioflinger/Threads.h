@@ -948,7 +948,7 @@ protected:
     // StreamOutHalInterfaceCallback implementation
     virtual     void        onWriteReady();
     virtual     void        onDrainReady();
-    virtual     void        onError();
+    virtual     void        onError(bool /*isHardError*/);
 
 public: // AsyncCallbackThread
                 void        resetWriteBlocked(uint32_t sequence);
@@ -960,7 +960,7 @@ protected:
     virtual bool shouldStandby_l() REQUIRES(mutex(), ThreadBase_ThreadLoop);
     virtual void onAddNewTrack_l() REQUIRES(mutex());
 public:  // AsyncCallbackThread
-                void        onAsyncError(); // error reported by AsyncCallbackThread
+                void        onAsyncError(bool isHardError); // error reported by AsyncCallbackThread
 protected:
     // StreamHalInterfaceCodecFormatCallback implementation
                 void        onCodecFormatChanged(
@@ -1201,6 +1201,11 @@ public:
                     }
                     return mHalStarted;
                 }
+
+    void setTracksInternalMute(std::map<audio_port_handle_t, bool>* /* tracksInternalMute */)
+            override EXCLUDES_ThreadBase_Mutex {
+        // Do nothing. It is only used for bit perfect thread
+    }
 protected:
     // updated by readOutputParameters_l()
     size_t                          mNormalFrameCount;  // normal mixer and effects
@@ -1374,6 +1379,8 @@ protected:
     bool destroyTrack_l(const sp<IAfTrack>& track) final REQUIRES(mutex());
 
     void removeTrack_l(const sp<IAfTrack>& track) REQUIRES(mutex());
+    std::set<audio_port_handle_t> getTrackPortIds_l() REQUIRES(mutex());
+    std::set<audio_port_handle_t> getTrackPortIds();
 
     void readOutputParameters_l() REQUIRES(mutex());
     MetadataUpdate updateMetadata_l() final REQUIRES(mutex());
@@ -1846,7 +1853,7 @@ public:
             void        resetWriteBlocked();
             void        setDraining(uint32_t sequence);
             void        resetDraining();
-            void        setAsyncError();
+            void        setAsyncError(bool isHardError);
 
 private:
     const wp<PlaybackThread>   mPlaybackThread;
@@ -1860,7 +1867,8 @@ private:
     uint32_t                   mDrainSequence;
     audio_utils::condition_variable mWaitWorkCV;
     mutable audio_utils::mutex mMutex{audio_utils::MutexOrder::kAsyncCallbackThread_Mutex};
-    bool                       mAsyncError;
+    enum AsyncError { ASYNC_ERROR_NONE, ASYNC_ERROR_SOFT, ASYNC_ERROR_HARD };
+    AsyncError                 mAsyncError;
 
     audio_utils::mutex& mutex() const RETURN_CAPABILITY(audio_utils::AsyncCallbackThread_Mutex) {
         return mMutex;
@@ -2459,12 +2467,17 @@ public:
     BitPerfectThread(const sp<IAfThreadCallback>& afThreadCallback, AudioStreamOut *output,
                      audio_io_handle_t id, bool systemReady);
 
+    void setTracksInternalMute(std::map<audio_port_handle_t, bool>* tracksInternalMuted)
+            final EXCLUDES_ThreadBase_Mutex;
+
 protected:
     mixer_state prepareTracks_l(Vector<sp<IAfTrack>>* tracksToRemove) final
             REQUIRES(mutex(), ThreadBase_ThreadLoop);
     void threadLoop_mix() final REQUIRES(ThreadBase_ThreadLoop);
 
 private:
+    sp<IAfTrack> getTrackToStreamBitPerfectly_l() REQUIRES(mutex());
+
     // These variables are only accessed on the threadLoop; hence need no mutex.
     bool mIsBitPerfect GUARDED_BY(ThreadBase_ThreadLoop) = false;
     float mVolumeLeft GUARDED_BY(ThreadBase_ThreadLoop) = 0.f;

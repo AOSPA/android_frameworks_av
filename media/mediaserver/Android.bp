@@ -51,8 +51,11 @@ soong_config_module_type {
     ],
 }
 
-cc_defaults {
-    name: "mediaserver_defaults",
+mediaserver_cc_binary {
+    name: "mediaserver",
+
+    srcs: ["main_mediaserver.cpp"],
+
     shared_libs: [
         "android.hardware.media.omx@1.0",
         "libicu",
@@ -63,12 +66,19 @@ cc_defaults {
         "libmediaplayerservice",
         "libresourcemanagerservice",
         "libutils",
-        "libcutils",
     ],
 
     static_libs: [
         "libregistermsext",
     ],
+
+    // By default mediaserver runs in 32-bit to save memory, except
+    // on 64-bit-only lunch targets.
+    // ****************************************************************
+    // TO ENABLE 64-BIT MEDIASERVER ON MIXED 32/64-BIT DEVICES, COMMENT
+    // OUT THE FOLLOWING LINE:
+    // ****************************************************************
+    compile_multilib: "prefer32",
 
     cflags: [
         "-Werror",
@@ -77,41 +87,25 @@ cc_defaults {
 
     vintf_fragments: ["manifest_media_c2_software.xml"],
 
-}
-
-cc_binary {
-    name: "mediaserver",
-    defaults: [
-                "mediaserver_defaults",
-              ],
-    srcs: ["main_mediaserver.cpp"],
-    init_rc: ["mediaserver.rc"],
-    // mediaserver has only been verified on 32-bit, see b/126502613
-    // By default mediaserver runs in 32-bit to save memory, except
-    // on 64-bit-only lunch targets.
-    // Mediaserver has only been verified on 32-bit, see b/126502613
-    // use "prefer32" to *only* enable 64-bit builds on 64-bit-only lunch
-    // targets, which allows them to reach 'boot_complete'.
-    // ****************************************************************
-    // TO ENABLE 64-BIT MEDIASERVER ON MIXED 32/64-BIT DEVICES, COMMENT
-    // OUT THE FOLLOWING LINE:
-    // ****************************************************************
-    compile_multilib: "32",
-}
-cc_binary {
-    name: "mediaserver64",
-    defaults: [
-                "mediaserver_defaults",
-              ],
-    srcs: ["main_mediaserver.cpp"],
-    init_rc: ["mediaserver.rc"],
-    compile_multilib: "64",
-}
-cc_binary {
-    name: "mediaserverwrapper",
-    defaults: [
-                "mediaserver_defaults",
-              ],
-    srcs: ["mediaserverwrapper.cpp"],
-    init_rc: ["mediaserverwrapper.rc"],
+    soong_config_variables: {
+        TARGET_DYNAMIC_64_32_MEDIASERVER: {
+            compile_multilib: "both",
+            multilib: {
+                lib32: {
+                    suffix: "32",
+                },
+                lib64: {
+                    suffix: "64",
+                },
+            },
+            required: [
+                "mediaserver.zygote64_32.rc",
+                "mediaserver.zygote64.rc",
+            ],
+            init_rc: ["mediaserver_dynamic.rc"],
+            conditions_default: {
+                init_rc: ["mediaserver.rc"],
+            },
+        },
+    },
 }

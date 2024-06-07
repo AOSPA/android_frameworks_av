@@ -30,10 +30,12 @@
 
 #include "VirtualCameraDevice.h"
 #include "VirtualCameraProvider.h"
+#include "VirtualCameraTestInstance.h"
 #include "aidl/android/companion/virtualcamera/Format.h"
 #include "aidl/android/companion/virtualcamera/LensFacing.h"
 #include "aidl/android/companion/virtualcamera/VirtualCameraConfiguration.h"
 #include "android/binder_auto_utils.h"
+#include "android/binder_interface_utils.h"
 #include "android/binder_libbinder.h"
 #include "android/binder_status.h"
 #include "binder/Status.h"
@@ -64,6 +66,7 @@ namespace {
 constexpr int kVgaWidth = 640;
 constexpr int kVgaHeight = 480;
 constexpr int kMaxFps = 60;
+constexpr int kTestCameraDefaultInputFps = 30;
 constexpr char kEnableTestCameraCmd[] = "enable_test_camera";
 constexpr char kDisableTestCameraCmd[] = "disable_test_camera";
 constexpr char kHelp[] = "help";
@@ -75,6 +78,7 @@ Available commands:
      Options:
        --camera_id=(ID) - override numerical ID for test camera instance
        --lens_facing=(front|back|external) - specifies lens facing for test camera instance
+       --input_fps=(fps) - specify input fps for test camera, valid values are from 1 to 1000
  * disable_test_camera
 )";
 constexpr char kCreateVirtualDevicePermission[] =
@@ -90,6 +94,13 @@ ndk::ScopedAStatus validateConfiguration(
     const VirtualCameraConfiguration& configuration) {
   if (configuration.supportedStreamConfigs.empty()) {
     ALOGE("%s: No supported input configuration specified", __func__);
+    return ndk::ScopedAStatus::fromServiceSpecificError(
+        Status::EX_ILLEGAL_ARGUMENT);
+  }
+
+  if (configuration.virtualCameraCallback == nullptr) {
+    ALOGE("%s: Input configuration is missing virtual camera callback",
+          __func__);
     return ndk::ScopedAStatus::fromServiceSpecificError(
         Status::EX_ILLEGAL_ARGUMENT);
   }
@@ -411,6 +422,18 @@ binder_status_t VirtualCameraService::enableTestCameraCmd(
     }
   }
 
+  std::optional<int> inputFps;
+  it = options.find("input_fps");
+  if (it != options.end()) {
+    inputFps = parseInt(it->second);
+    if (!inputFps.has_value() || inputFps.value() < 1 ||
+        inputFps.value() > 1000) {
+      dprintf(err, "Invalid input fps: %s\n, must be integer in <1,1000> range.",
+              it->second.c_str());
+      return STATUS_BAD_VALUE;
+    }
+  }
+
   sp<BBinder> token = sp<BBinder>::make();
   mTestCameraToken.set(AIBinder_fromPlatformBinder(token));
 
@@ -418,9 +441,12 @@ binder_status_t VirtualCameraService::enableTestCameraCmd(
   VirtualCameraConfiguration configuration;
   configuration.supportedStreamConfigs.push_back({.width = kVgaWidth,
                                                   .height = kVgaHeight,
-                                                  Format::YUV_420_888,
+                                                  Format::RGBA_8888,
                                                   .maxFps = kMaxFps});
   configuration.lensFacing = lensFacing.value_or(LensFacing::EXTERNAL);
+  configuration.virtualCameraCallback =
+      ndk::SharedRefBase::make<VirtualCameraTestInstance>(
+          inputFps.value_or(kTestCameraDefaultInputFps));
   registerCamera(mTestCameraToken, configuration, cameraId.value_or(sNextId++),
                  kDefaultDeviceId, &ret);
   if (ret) {

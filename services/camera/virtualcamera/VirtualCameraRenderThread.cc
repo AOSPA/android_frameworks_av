@@ -51,7 +51,6 @@
 #include "util/EglFramebuffer.h"
 #include "util/JpegUtil.h"
 #include "util/MetadataUtil.h"
-#include "util/TestPatternHelper.h"
 #include "util/Util.h"
 #include "utils/Errors.h"
 
@@ -278,6 +277,16 @@ std::vector<uint8_t> createExif(
   return app1Data;
 }
 
+std::chrono::nanoseconds getMaxFrameDuration(
+    const RequestSettings& requestSettings) {
+  if (requestSettings.fpsRange.has_value()) {
+    return std::chrono::nanoseconds(static_cast<uint64_t>(
+        1e9 / std::max(1, requestSettings.fpsRange->minFps)));
+  }
+  return std::chrono::nanoseconds(
+      static_cast<uint64_t>(1e9 / VirtualCameraDevice::kMinFps));
+}
+
 }  // namespace
 
 CaptureRequestBuffer::CaptureRequestBuffer(int streamId, int bufferId,
@@ -300,11 +309,10 @@ sp<Fence> CaptureRequestBuffer::getFence() const {
 VirtualCameraRenderThread::VirtualCameraRenderThread(
     VirtualCameraSessionContext& sessionContext,
     const Resolution inputSurfaceSize, const Resolution reportedSensorSize,
-    std::shared_ptr<ICameraDeviceCallback> cameraDeviceCallback, bool testMode)
+    std::shared_ptr<ICameraDeviceCallback> cameraDeviceCallback)
     : mCameraDeviceCallback(cameraDeviceCallback),
       mInputSurfaceSize(inputSurfaceSize),
       mReportedSensorSize(reportedSensorSize),
-      mTestMode(testMode),
       mSessionContext(sessionContext) {
 }
 
@@ -401,10 +409,6 @@ void VirtualCameraRenderThread::threadLoop() {
   mEglSurfaceTexture = std::make_unique<EglSurfaceTexture>(
       mInputSurfaceSize.width, mInputSurfaceSize.height);
 
-  sp<Surface> inputSurface = mEglSurfaceTexture->getSurface();
-  if (mTestMode) {
-    inputSurface->connect(NATIVE_WINDOW_API_CPU, false, nullptr);
-  }
   mInputSurfacePromise.set_value(mEglSurfaceTexture->getSurface());
 
   while (std::unique_ptr<ProcessCaptureRequestTask> task = dequeueTask()) {
@@ -422,16 +426,10 @@ void VirtualCameraRenderThread::threadLoop() {
 
 void VirtualCameraRenderThread::processCaptureRequest(
     const ProcessCaptureRequestTask& request) {
-  if (mTestMode) {
-    // In test mode let's just render something to the Surface ourselves.
-    renderTestPatternYCbCr420(mEglSurfaceTexture->getSurface(),
-                              request.getFrameNumber());
-  }
-
   std::chrono::nanoseconds timestamp =
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch());
-  std::chrono::nanoseconds lastAcquisitionTimestamp(
+  const std::chrono::nanoseconds lastAcquisitionTimestamp(
       mLastAcquisitionTimestampNanoseconds.exchange(timestamp.count(),
                                                     std::memory_order_relaxed));
 
@@ -461,6 +459,29 @@ void VirtualCameraRenderThread::processCaptureRequest(
     }
   }
 
+  // Calculate the maximal amount of time we can afford to wait for next frame.
+  const std::chrono::nanoseconds maxFrameDuration =
+      getMaxFrameDuration(request.getRequestSettings());
+  const std::chrono::nanoseconds elapsedDuration =
+      timestamp - lastAcquisitionTimestamp;
+  if (elapsedDuration < maxFrameDuration) {
+    // We can afford to wait for next frame.
+    // Note that if there's already new frame in the input Surface, the call
+    // below returns immediatelly.
+    bool gotNewFrame = mEglSurfaceTexture->waitForNextFrame(maxFrameDuration -
+                                                            elapsedDuration);
+    timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch());
+    if (!gotNewFrame) {
+      ALOGV(
+          "%s: No new frame received on input surface after waiting for "
+          "%" PRIu64 "ns, repeating last frame.",
+          __func__,
+          static_cast<uint64_t>((timestamp - lastAcquisitionTimestamp).count()));
+    }
+    mLastAcquisitionTimestampNanoseconds.store(timestamp.count(),
+                                               std::memory_order_relaxed);
+  }
   // Acquire new (most recent) image from the Surface.
   mEglSurfaceTexture->updateTexture();
 
