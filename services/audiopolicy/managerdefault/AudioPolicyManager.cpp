@@ -378,7 +378,7 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
                         && (!device_distinguishes_on_address(device->type())
                                 // always force when disconnecting (a non-duplicated device)
                                 || (state == AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE));
-                if (desc->mUsePreferredMixerAttributes && newDevices != desc->devices()) {
+                if (desc->mPreferredAttrInfo != nullptr && newDevices != desc->devices()) {
                     // If the device is using preferred mixer attributes, the output need to reopen
                     // with default configuration when the new selected devices are different from
                     // current routing devices
@@ -592,6 +592,7 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
     }
 
     auto musicStrategy = streamToStrategy(AUDIO_STREAM_MUSIC);
+    uint32_t muteWaitMs = 0;
 
     // For offloaded A2DP, Hw modules may have the capability to
     // configure codecs.
@@ -625,8 +626,16 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
     }
     for (size_t i = 0; i < mOutputs.size(); i++) {
        sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-       // mute media strategies and delay device switch by the largest
-       // This avoid sending the music tail into the earpiece or headset.
+       // mute media strategies to avoid sending the music tail into
+       // the earpiece or headset.
+       if (desc->isStrategyActive(musicStrategy)) {
+           uint32_t tempRecommendedMuteDuration = desc->getRecommendedMuteDurationMs();
+           uint32_t tempMuteDurationMs = tempRecommendedMuteDuration > 0 ?
+                        tempRecommendedMuteDuration : desc->latency() * 4;
+           if (muteWaitMs < tempMuteDurationMs) {
+               muteWaitMs = tempMuteDurationMs;
+           }
+       }
        setStrategyMute(musicStrategy, true, desc);
        setStrategyMute(musicStrategy, false, desc, MUTE_TIME_MS,
           mEngine->getOutputDevicesForAttributes(attributes_initializer(AUDIO_USAGE_MEDIA),
@@ -640,6 +649,13 @@ status_t AudioPolicyManager::handleDeviceConfigChange(audio_devices_t device,
         repliedParameters.getInt(String8("A2dpSuspended"), isA2dpSuspended);
     }
 
+    // Wait for the muted audio to propagate down the audio path see checkDeviceMuteStrategies().
+    // We assume that MUTE_TIME_MS is way larger than muteWaitMs so that unmuting still
+    // happens after the actual device switch.
+    if (muteWaitMs > 0) {
+        ALOGW_IF(MUTE_TIME_MS < muteWaitMs * 2, "%s excessive mute wait %d", __func__, muteWaitMs);
+        usleep(muteWaitMs * 1000);
+    }
     // Toggle the device state: UNAVAILABLE -> AVAILABLE
     // This will force reading again the device configuration
     status = setDeviceConnectionState(device,
@@ -1013,15 +1029,15 @@ void AudioPolicyManager::setPhoneState(audio_mode_t state)
     for (size_t i = 0; i < mOutputs.size(); i++) {
         sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
         DeviceVector newDevices = getNewOutputDevices(desc, true /*fromCache*/);
+        if (state != AUDIO_MODE_NORMAL && oldState == AUDIO_MODE_NORMAL
+                && desc->mPreferredAttrInfo != nullptr) {
+            // If the output is using preferred mixer attributes and the audio mode is not normal,
+            // the output need to reopen with default configuration.
+            outputsToReopen.emplace(mOutputs.keyAt(i), newDevices);
+            continue;
+        }
         if (state != AUDIO_MODE_IN_CALL || (desc != mPrimaryOutput && !isTelephonyRxOrTx(desc))) {
             bool forceRouting = !newDevices.isEmpty();
-            if (desc->mUsePreferredMixerAttributes && newDevices != desc->devices()) {
-                // If the device is using preferred mixer attributes, the output need to reopen
-                // with default configuration when the new selected devices are different from
-                // current routing devices.
-                outputsToReopen.emplace(mOutputs.keyAt(i), newDevices);
-                continue;
-            }
             setOutputDevices(__func__, desc, newDevices, forceRouting, 0 /*delayMs*/, nullptr,
                              true /*requiresMuteCheck*/, !forceRouting /*requiresVolumeCheck*/);
         }
@@ -1437,9 +1453,22 @@ status_t AudioPolicyManager::getOutputForAttrInt(
             // Only use preferred mixer if the uid matches or the preferred mixer is bit-perfect
             // and it is currently active.
             if (info != nullptr && info->getUid() != uid &&
-                ((info->getFlags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) == AUDIO_OUTPUT_FLAG_NONE ||
-                        info->getActiveClientCount() == 0)) {
+                (!info->isBitPerfect() || info->getActiveClientCount() == 0)) {
                 info = nullptr;
+            }
+            if (com::android::media::audioserver::
+                    fix_concurrent_playback_behavior_with_bit_perfect_client()) {
+                if (info != nullptr && info->getUid() == uid &&
+                    info->configMatches(*config) &&
+                    (mEngine->getPhoneState() != AUDIO_MODE_NORMAL ||
+                            std::any_of(gHighPriorityUseCases.begin(), gHighPriorityUseCases.end(),
+                                        [this, &outputDevices](audio_usage_t usage) {
+                                            return mOutputs.isUsageActiveOnDevice(
+                                                    usage, outputDevices[0]); }))) {
+                    // Bit-perfect request is not allowed when the phone mode is not normal or
+                    // there is any higher priority user case active.
+                    return INVALID_OPERATION;
+                }
             }
         }
         *output = getOutputForDevices(outputDevices, session, resultAttr, config,
@@ -1447,13 +1476,17 @@ status_t AudioPolicyManager::getOutputForAttrInt(
         // The client will be active if the client is currently preferred mixer owner and the
         // requested configuration matches the preferred mixer configuration.
         *isBitPerfect = (info != nullptr
-                && (info->getFlags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) != AUDIO_OUTPUT_FLAG_NONE
+                && info->isBitPerfect()
                 && info->getUid() == uid
                 && *output != AUDIO_IO_HANDLE_NONE
                 // When bit-perfect output is selected for the preferred mixer attributes owner,
                 // only need to consider the config matches.
                 && mOutputs.valueFor(*output)->isConfigurationMatched(
                         clientConfig, AUDIO_OUTPUT_FLAG_NONE));
+
+        if (*isBitPerfect) {
+            *flags = (audio_output_flags_t)(*flags | AUDIO_OUTPUT_FLAG_BIT_PERFECT);
+        }
     }
     if (*output == AUDIO_IO_HANDLE_NONE) {
         AudioProfileVector profiles;
@@ -1740,6 +1773,11 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
     outputDesc->mDirectClientSession = session;
 
     addOutput(*output, outputDesc);
+    setOutputDevices(__func__, outputDesc,
+                     devices,
+                     true,
+                     0,
+                     NULL);
     mPreviousOutputs = mOutputs;
     ALOGV("%s returns new direct output %d", __func__, *output);
     mpClientInterface->onAudioPortListUpdate();
@@ -1923,6 +1961,24 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
                     (*flags == AUDIO_OUTPUT_FLAG_NONE) ? AUDIO_OUTPUT_FLAG_PRIMARY : *flags;
             ALOGV("%s forced deep-buffer (%s) flags (%0x)", __func__,
                     forceDeepBuffer ? "yes": "no" , *flags);
+            if (com::android::media::audioserver::
+                    fix_concurrent_playback_behavior_with_bit_perfect_client()) {
+                // If the preferred mixer attributes is null, do not select the bit-perfect output
+                // unless the bit-perfect output is the only output.
+                // The bit-perfect output can exist while the passed in preferred mixer attributes
+                // info is null when it is a high priority client. The high priority clients are
+                // ringtone or alarm, which is not a bit-perfect use case.
+                size_t i = 0;
+                while (i < outputs.size() && outputs.size() > 1) {
+                    auto desc = mOutputs.valueFor(outputs[i]);
+                    // The output descriptor must not be null here.
+                    if (desc->isBitPerfect()) {
+                        outputs.removeItemsAt(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
             output = selectOutput(
                     outputs, *flags, config->format, channelMask, config->sample_rate, session);
         }
@@ -2406,6 +2462,20 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
     ALOGV("startOutput() output %d, stream %d, session %d",
           outputDesc->mIoHandle, client->stream(), client->session());
 
+    if (com::android::media::audioserver::fix_concurrent_playback_behavior_with_bit_perfect_client()
+            && gHighPriorityUseCases.count(client->attributes().usage) != 0
+            && outputDesc->isBitPerfect()) {
+        // Usually, APM selects bit-perfect output for high priority use cases only when
+        // bit-perfect output is the only output that can be routed to the selected device.
+        // However, here is no need to play high priority use cases such as ringtone and alarm
+        // on the bit-perfect path. Reopen the output and return DEAD_OBJECT so that the client
+        // can attach to new output.
+        ALOGD("%s: reopen bit-perfect output as high priority use case(%d) is starting",
+              __func__, client->stream());
+        reopenOutput(outputDesc, nullptr /*config*/, AUDIO_OUTPUT_FLAG_NONE, __func__);
+        return DEAD_OBJECT;
+    }
+
     status_t status = outputDesc->start();
     if (status != NO_ERROR) {
         return status;
@@ -2424,7 +2494,6 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
                 ALOGE("%s unable to open output with default config", __func__);
                 return status;
             }
-            desc->mUsePreferredMixerAttributes = true;
         }
         return status;
     }
@@ -2448,14 +2517,13 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
                 if (desc == nullptr) {
                     return BAD_VALUE;
                 }
-                desc->mUsePreferredMixerAttributes = true;
+                desc->mPreferredAttrInfo = info;
                 // Intentionally return error to let the client side resending request for
                 // creating and starting.
                 return DEAD_OBJECT;
             }
             info->increaseActiveClient();
-            if (info->getActiveClientCount() == 1 &&
-                (info->getFlags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) != AUDIO_OUTPUT_FLAG_NONE) {
+            if (info->getActiveClientCount() == 1 && info->isBitPerfect()) {
                 // If it is first bit-perfect client, reroute all clients that will be routed to
                 // the bit-perfect sink so that it is guaranteed only bit-perfect stream is active.
                 PortHandleVector clientsToInvalidate;
@@ -2483,6 +2551,15 @@ status_t AudioPolicyManager::startOutput(audio_port_handle_t portId)
     }
     if (delayMs != 0) {
         usleep(delayMs * 1000);
+    }
+
+    if (status == NO_ERROR &&
+        outputDesc->mPreferredAttrInfo != nullptr &&
+        outputDesc->isBitPerfect() &&
+        com::android::media::audioserver::
+                fix_concurrent_playback_behavior_with_bit_perfect_client()) {
+        // A new client is started on bit-perfect output, update all clients internal mute.
+        updateClientsInternalMute(outputDesc);
     }
 
     return status;
@@ -2589,6 +2666,11 @@ status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outp
              followsSameRouting(clientAttr, attributes_initializer(AUDIO_USAGE_NOTIFICATION)) ||
              (beaconMuteLatency > 0));
         uint32_t waitMs = beaconMuteLatency;
+        const bool needToCloseBitPerfectOutput =
+                (com::android::media::audioserver::
+                        fix_concurrent_playback_behavior_with_bit_perfect_client() &&
+                gHighPriorityUseCases.count(clientAttr.usage) != 0);
+        std::vector<sp<SwAudioOutputDescriptor>> outputsToReopen;
         for (size_t i = 0; i < mOutputs.size(); i++) {
             sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
             if (desc != outputDesc) {
@@ -2625,14 +2707,21 @@ status_t AudioPolicyManager::startSource(const sp<SwAudioOutputDescriptor>& outp
                 // Note restoring AudioTracks onto this output needs to invoke
                 // a volume ramp if there is no mute.
                 requiresMuteCheck |= sharedDevice && isActive;
+
+                if (needToCloseBitPerfectOutput && desc->isBitPerfect()) {
+                    outputsToReopen.push_back(desc);
+                }
             }
         }
 
-        if (outputDesc->mUsePreferredMixerAttributes && devices != outputDesc->devices()) {
+        if (outputDesc->mPreferredAttrInfo != nullptr && devices != outputDesc->devices()) {
             // If the output is open with preferred mixer attributes, but the routed device is
             // changed when calling this function, returning DEAD_OBJECT to indicate routing
             // changed.
             return DEAD_OBJECT;
+        }
+        for (auto& outputToReopen : outputsToReopen) {
+            reopenOutput(outputToReopen, nullptr /*config*/, AUDIO_OUTPUT_FLAG_NONE, __func__);
         }
         const uint32_t muteWaitMs =
                 setOutputDevices(__func__, outputDesc, devices, force, 0, nullptr,
@@ -2712,7 +2801,7 @@ void AudioPolicyManager::checkLeBroadcastRoutes(bool wasUnicastActive,
                                     getAudioDeviceOutLeAudioUnicastSet()).isEmpty()))) {
                 DeviceVector newDevices = getNewOutputDevices(desc, false /*fromCache*/);
                 bool force = desc->devices() != newDevices;
-                if (desc->mUsePreferredMixerAttributes && force) {
+                if (desc->mPreferredAttrInfo != nullptr && force) {
                     // If the device is using preferred mixer attributes, the output need to reopen
                     // with default configuration when the new selected devices are different from
                     // current routing devices.
@@ -2760,11 +2849,20 @@ status_t AudioPolicyManager::stopOutput(audio_port_handle_t portId)
     if (outputDesc->devices().size() == 1) {
         sp<PreferredMixerAttributesInfo> info = getPreferredMixerAttributesInfo(
                 outputDesc->devices()[0]->getId(), client->strategy());
+        bool outputReopened = false;
         if (info != nullptr && info->getUid() == client->uid()) {
             info->decreaseActiveClient();
             if (info->getActiveClientCount() == 0) {
                 reopenOutput(outputDesc, nullptr /*config*/, AUDIO_OUTPUT_FLAG_NONE, __func__);
+                outputReopened = true;
             }
+        }
+        if (com::android::media::audioserver::
+                    fix_concurrent_playback_behavior_with_bit_perfect_client() &&
+            !outputReopened && outputDesc->isBitPerfect()) {
+            // Only need to update the clients' internal mute when the output is bit-perfect and it
+            // is not reopened.
+            updateClientsInternalMute(outputDesc);
         }
     }
     return status;
@@ -2837,7 +2935,7 @@ status_t AudioPolicyManager::stopSource(const sp<SwAudioOutputDescriptor>& outpu
                     DeviceVector newDevices2 = getNewOutputDevices(desc, false /*fromCache*/);
                     bool force = desc->devices() != newDevices2;
 
-                    if (desc->mUsePreferredMixerAttributes && force) {
+                    if (desc->mPreferredAttrInfo != nullptr && force) {
                         // If the device is using preferred mixer attributes, the output need to
                         // reopen with default configuration when the new selected devices are
                         // different from current routing devices.
@@ -4348,7 +4446,7 @@ void AudioPolicyManager::updateCallAndOutputRouting(bool forceVolumeReeval, uint
             // preventing the force re-routing in case of default dev that distinguishes on address.
             // Let's give back to engine full device choice decision however.
             bool forceRouting = !newDevices.isEmpty();
-            if (outputDesc->mUsePreferredMixerAttributes && newDevices != outputDesc->devices()) {
+            if (outputDesc->mPreferredAttrInfo != nullptr && newDevices != outputDesc->devices()) {
                 // If the device is using preferred mixer attributes, the output need to reopen
                 // with default configuration when the new selected devices are different from
                 // current routing devices.
@@ -5013,7 +5111,7 @@ status_t AudioPolicyManager::setPreferredMixerAttributes(
         const auto output = mOutputs.valueAt(i);
         if (output->mProfile == profile && output->devices().onlyContainsDevice(deviceDescriptor)) {
             if (output->isConfigurationMatched(mixerAttributes->config, flags)) {
-                output->mUsePreferredMixerAttributes = true;
+                output->mPreferredAttrInfo = mixerAttrInfo;
             } else {
                 for (const auto &client: output->getActiveClients()) {
                     if (client->uid() == uid && client->strategy() == strategy) {
@@ -5035,7 +5133,7 @@ status_t AudioPolicyManager::setPreferredMixerAttributes(
             ALOGE("%s, failed to reopen output with preferred mixer attributes", __func__);
             continue;
         }
-        desc->mUsePreferredMixerAttributes = true;
+        desc->mPreferredAttrInfo = mixerAttrInfo;
     }
 
     return NO_ERROR;
@@ -5051,8 +5149,7 @@ sp<PreferredMixerAttributesInfo> AudioPolicyManager::getPreferredMixerAttributes
     }
     if (activeBitPerfectPreferred) {
         for (auto [strategy, info] : it->second) {
-            if ((info->getFlags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) != AUDIO_OUTPUT_FLAG_NONE
-                && info->getActiveClientCount() != 0) {
+            if (info->isBitPerfect() && info->getActiveClientCount() != 0) {
                 return info;
             }
         }
@@ -5852,7 +5949,7 @@ void AudioPolicyManager::checkStrategyRoute(product_strategy_t ps, audio_io_hand
             invalidateStreams(mEngine->getStreamTypesForProductStrategy(ps));
         } else {
             DeviceVector newDevices = getNewOutputDevices(outputDesc, false /*fromCache*/);
-            if (outputDesc->mUsePreferredMixerAttributes && outputDesc->devices() != newDevices) {
+            if (outputDesc->mPreferredAttrInfo != nullptr && outputDesc->devices() != newDevices) {
                 // If the device is using preferred mixer attributes, the output need to reopen
                 // with default configuration when the new selected devices are different from
                 // current routing devices.
@@ -7224,8 +7321,7 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
         closingOutput->stop();
     }
     closingOutput->close();
-    if ((closingOutput->getFlags().output & AUDIO_OUTPUT_FLAG_BIT_PERFECT)
-            == AUDIO_OUTPUT_FLAG_BIT_PERFECT) {
+    if (closingOutput->isBitPerfect()) {
         for (const auto device : closingOutput->devices()) {
             device->setPreferredConfig(nullptr);
         }
@@ -7256,6 +7352,10 @@ void AudioPolicyManager::closeOutput(audio_io_handle_t output)
             // unavailable.
             setMsdOutputPatches();
         }
+    }
+
+    if (closingOutput->mPreferredAttrInfo != nullptr) {
+        closingOutput->mPreferredAttrInfo->resetActiveClient();
     }
 }
 
@@ -8979,7 +9079,11 @@ sp<SwAudioOutputDescriptor> AudioPolicyManager::openOutputWithProfileAndDevice(
     }
 
     addOutput(output, desc);
-
+    setOutputDevices(__func__, desc,
+                     devices,
+                     true,
+                     0,
+                     NULL);
     sp<DeviceDescriptor> speaker = mAvailableOutputDevices.getDevice(
             AUDIO_DEVICE_OUT_SPEAKER, String8(""), AUDIO_FORMAT_DEFAULT);
 
@@ -9194,6 +9298,62 @@ void AudioPolicyManager::invalidateStreams(StreamTypeVector streams) const {
         clients.insert(clients.end(), clientsForStream.begin(), clientsForStream.end());
     }
     mpClientInterface->invalidateTracks(clients);
+}
+
+void AudioPolicyManager::updateClientsInternalMute(
+        const sp<android::SwAudioOutputDescriptor> &desc) {
+    if (!desc->isBitPerfect() ||
+        !com::android::media::audioserver::
+                fix_concurrent_playback_behavior_with_bit_perfect_client()) {
+        // This is only used for bit perfect output now.
+        return;
+    }
+    sp<TrackClientDescriptor> bitPerfectClient = nullptr;
+    bool bitPerfectClientInternalMute = false;
+    std::vector<media::TrackInternalMuteInfo> clientsInternalMute;
+    for (const sp<TrackClientDescriptor>& client : desc->getActiveClients()) {
+        if ((client->flags() & AUDIO_OUTPUT_FLAG_BIT_PERFECT) != AUDIO_OUTPUT_FLAG_NONE) {
+            bitPerfectClient = client;
+            continue;
+        }
+        bool muted = false;
+        if (client->stream() == AUDIO_STREAM_SYSTEM) {
+            // System sound is muted.
+            muted = true;
+        } else {
+            bitPerfectClientInternalMute = true;
+        }
+        if (client->setInternalMute(muted)) {
+            auto result = legacy2aidl_audio_port_handle_t_int32_t(client->portId());
+            if (!result.ok()) {
+                ALOGE("%s, failed to convert port id(%d) to aidl", __func__, client->portId());
+                continue;
+            }
+            media::TrackInternalMuteInfo info;
+            info.portId = result.value();
+            info.muted = client->getInternalMute();
+            clientsInternalMute.push_back(std::move(info));
+        }
+    }
+    if (bitPerfectClient != nullptr &&
+        bitPerfectClient->setInternalMute(bitPerfectClientInternalMute)) {
+        auto result = legacy2aidl_audio_port_handle_t_int32_t(bitPerfectClient->portId());
+        if (result.ok()) {
+            media::TrackInternalMuteInfo info;
+            info.portId = result.value();
+            info.muted = bitPerfectClient->getInternalMute();
+            clientsInternalMute.push_back(std::move(info));
+        } else {
+            ALOGE("%s, failed to convert port id(%d) of bit perfect client to aidl",
+                  __func__, bitPerfectClient->portId());
+        }
+    }
+    if (!clientsInternalMute.empty()) {
+        if (status_t status = mpClientInterface->setTracksInternalMute(clientsInternalMute);
+                status != NO_ERROR) {
+            ALOGE("%s, failed to update tracks internal mute, err=%d", __func__, status);
+        }
+    }
 }
 
 } // namespace android

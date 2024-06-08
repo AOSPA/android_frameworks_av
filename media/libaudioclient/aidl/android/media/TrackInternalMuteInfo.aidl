@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 The Android Open Source Project
+ * Copyright (C) 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,20 +14,10 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_COMPANION_VIRTUALCAMERA_TESTPATTERNHELPER_H
-#define ANDROID_COMPANION_VIRTUALCAMERA_TESTPATTERNHELPER_H
+package android.media;
 
-#include "gui/Surface.h"
-
-namespace android {
-namespace companion {
-namespace virtualcamera {
-
-// Helper function for rendering test pattern into Surface.
-void renderTestPatternYCbCr420(sp<Surface> surface, int frameNumber);
-
-}  // namespace virtualcamera
-}  // namespace companion
-}  // namespace android
-
-#endif  // ANDROID_COMPANION_VIRTUALCAMERA_TESTPATTERNHELPER_H
+parcelable TrackInternalMuteInfo {
+    /* Interpreted as audio_port_handle_t. */
+    int portId;
+    boolean muted;
+}

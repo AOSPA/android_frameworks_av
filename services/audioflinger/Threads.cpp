@@ -33,6 +33,7 @@
 #include <afutils/Vibrator.h>
 #include <audio_utils/MelProcessor.h>
 #include <audio_utils/Metadata.h>
+#include <com_android_media_audioserver.h>
 #ifdef DEBUG_CPU_USAGE
 #include <audio_utils/Statistics.h>
 #include <cpustats/ThreadCpuUsage.h>
@@ -2703,14 +2704,17 @@ sp<IAfTrack> PlaybackThread::createTrack_l(
             }
         }
 
-        // Set DIRECT flag if current thread is DirectOutputThread. This can
-        // happen when the playback is rerouted to direct output thread by
+        // Set DIRECT/OFFLOAD flag if current thread is DirectOutputThread/OffloadThread.
+        // This can happen when the playback is rerouted to direct output/offload thread by
         // dynamic audio policy.
         // Do NOT report the flag changes back to client, since the client
-        // doesn't explicitly request a direct flag.
+        // doesn't explicitly request a direct/offload flag.
         audio_output_flags_t trackFlags = *flags;
         if (mType == DIRECT) {
             trackFlags = static_cast<audio_output_flags_t>(trackFlags | AUDIO_OUTPUT_FLAG_DIRECT);
+        } else if (mType == OFFLOAD) {
+            trackFlags = static_cast<audio_output_flags_t>(trackFlags |
+                                   AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_DIRECT);
         }
         *afTrackFlags = trackFlags;
 
@@ -3010,6 +3014,23 @@ void PlaybackThread::removeTrack_l(const sp<IAfTrack>& track)
     }
 }
 
+std::set<audio_port_handle_t> PlaybackThread::getTrackPortIds_l()
+{
+    std::set<int32_t> result;
+    for (const auto& t : mTracks) {
+        if (t->isExternalTrack()) {
+            result.insert(t->portId());
+        }
+    }
+    return result;
+}
+
+std::set<audio_port_handle_t> PlaybackThread::getTrackPortIds()
+{
+    audio_utils::lock_guard _l(mutex());
+    return getTrackPortIds_l();
+}
+
 String8 PlaybackThread::getParameters(const String8& keys)
 {
     audio_utils::lock_guard _l(mutex());
@@ -3063,9 +3084,9 @@ void PlaybackThread::onDrainReady()
     mCallbackThread->resetDraining();
 }
 
-void PlaybackThread::onError()
+void PlaybackThread::onError(bool isHardError)
 {
-    mCallbackThread->setAsyncError();
+    mCallbackThread->setAsyncError(isHardError);
 }
 
 void PlaybackThread::onCodecFormatChanged(
@@ -5461,10 +5482,14 @@ void PlaybackThread::onAddNewTrack_l()
     broadcast_l();
 }
 
-void PlaybackThread::onAsyncError()
+void PlaybackThread::onAsyncError(bool isHardError)
 {
+    auto allTrackPortIds = getTrackPortIds();
     for (int i = AUDIO_STREAM_SYSTEM; i < (int)AUDIO_STREAM_CNT; i++) {
         invalidateTracks((audio_stream_type_t)i);
+    }
+    if (isHardError) {
+        mAfThreadCallback->onHardError(allTrackPortIds);
     }
 }
 
@@ -5809,6 +5834,11 @@ PlaybackThread::mixer_state MixerThread::prepareTracks_l(
                 vlf *= volume;
                 vrf *= volume;
 
+                if (track->getInternalMute()) {
+                    vlf = 0.f;
+                    vrf = 0.f;
+                }
+
                 track->setFinalVolume(vlf, vrf);
                 ++fastTracks;
             } else {
@@ -6006,6 +6036,11 @@ PlaybackThread::mixer_state MixerThread::prepareTracks_l(
                 }
                 // vaf is represented as [0.0, 1.0] float by rescaling sendLevel
                 vaf = v * sendLevel * (1. / MAX_GAIN_INT);
+            }
+
+            if (track->getInternalMute()) {
+                vrf = 0.f;
+                vlf = 0.f;
             }
 
             track->setFinalVolume(vlf, vrf);
@@ -7265,7 +7300,7 @@ AsyncCallbackThread::AsyncCallbackThread(
         mPlaybackThread(playbackThread),
         mWriteAckSequence(0),
         mDrainSequence(0),
-        mAsyncError(false)
+        mAsyncError(ASYNC_ERROR_NONE)
 {
 }
 
@@ -7279,7 +7314,7 @@ bool AsyncCallbackThread::threadLoop()
     while (!exitPending()) {
         uint32_t writeAckSequence;
         uint32_t drainSequence;
-        bool asyncError;
+        AsyncError asyncError;
 
         {
             audio_utils::unique_lock _l(mutex());
@@ -7300,7 +7335,7 @@ bool AsyncCallbackThread::threadLoop()
             drainSequence = mDrainSequence;
             mDrainSequence &= ~1;
             asyncError = mAsyncError;
-            mAsyncError = false;
+            mAsyncError = ASYNC_ERROR_NONE;
         }
         {
             const sp<PlaybackThread> playbackThread = mPlaybackThread.promote();
@@ -7311,8 +7346,8 @@ bool AsyncCallbackThread::threadLoop()
                 if (drainSequence & 1) {
                     playbackThread->resetDraining(drainSequence >> 1);
                 }
-                if (asyncError) {
-                    playbackThread->onAsyncError();
+                if (asyncError != ASYNC_ERROR_NONE) {
+                    playbackThread->onAsyncError(asyncError == ASYNC_ERROR_HARD);
                 }
             }
         }
@@ -7362,10 +7397,10 @@ void AsyncCallbackThread::resetDraining()
     }
 }
 
-void AsyncCallbackThread::setAsyncError()
+void AsyncCallbackThread::setAsyncError(bool isHardError)
 {
     audio_utils::lock_guard _l(mutex());
-    mAsyncError = true;
+    mAsyncError = isHardError ? ASYNC_ERROR_HARD : ASYNC_ERROR_SOFT;
     mWaitWorkCV.notify_one();
 }
 
@@ -11479,14 +11514,15 @@ PlaybackThread::mixer_state BitPerfectThread::prepareTracks_l(
     // If there is only one active track and it is bit-perfect, enable tee buffer.
     float volumeLeft = 1.0f;
     float volumeRight = 1.0f;
-    if (mActiveTracks.size() == 1 && mActiveTracks[0]->isBitPerfect()) {
-        const int trackId = mActiveTracks[0]->id();
+    if (sp<IAfTrack> bitPerfectTrack = getTrackToStreamBitPerfectly_l();
+        bitPerfectTrack != nullptr) {
+        const int trackId = bitPerfectTrack->id();
         mAudioMixer->setParameter(
                     trackId, AudioMixer::TRACK, AudioMixer::TEE_BUFFER, (void *)mSinkBuffer);
         mAudioMixer->setParameter(
                     trackId, AudioMixer::TRACK, AudioMixer::TEE_BUFFER_FRAME_COUNT,
                     (void *)(uintptr_t)mNormalFrameCount);
-        mActiveTracks[0]->getFinalVolume(&volumeLeft, &volumeRight);
+        bitPerfectTrack->getFinalVolume(&volumeLeft, &volumeRight);
         mIsBitPerfect = true;
     } else {
         mIsBitPerfect = false;
@@ -11509,6 +11545,41 @@ PlaybackThread::mixer_state BitPerfectThread::prepareTracks_l(
 void BitPerfectThread::threadLoop_mix() {
     MixerThread::threadLoop_mix();
     mHasDataCopiedToSinkBuffer = mIsBitPerfect;
+}
+
+void BitPerfectThread::setTracksInternalMute(
+        std::map<audio_port_handle_t, bool>* tracksInternalMute) {
+    for (auto& track : mTracks) {
+        if (auto it = tracksInternalMute->find(track->portId()); it != tracksInternalMute->end()) {
+            track->setInternalMute(it->second);
+            tracksInternalMute->erase(it);
+        }
+    }
+}
+
+sp<IAfTrack> BitPerfectThread::getTrackToStreamBitPerfectly_l() {
+    if (com::android::media::audioserver::
+                fix_concurrent_playback_behavior_with_bit_perfect_client()) {
+        sp<IAfTrack> bitPerfectTrack = nullptr;
+        bool allOtherTracksMuted = true;
+        // Return the bit perfect track if all other tracks are muted
+        for (const auto& track : mActiveTracks) {
+            if (track->isBitPerfect()) {
+                bitPerfectTrack = track;
+            } else if (track->getFinalVolume() != 0.f) {
+                allOtherTracksMuted = false;
+                if (bitPerfectTrack != nullptr) {
+                    break;
+                }
+            }
+        }
+        return allOtherTracksMuted ? bitPerfectTrack : nullptr;
+    } else {
+        if (mActiveTracks.size() == 1 && mActiveTracks[0]->isBitPerfect()) {
+            return mActiveTracks[0];
+        }
+    }
+    return nullptr;
 }
 
 } // namespace android
