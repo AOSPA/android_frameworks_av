@@ -33,6 +33,7 @@
 #include <audio_utils/FdToString.h>
 #include <audio_utils/SimpleLog.h>
 #include <media/IAudioFlinger.h>
+#include <media/IAudioPolicyServiceLocal.h>
 #include <media/MediaMetricsItem.h>
 #include <media/audiohal/DevicesFactoryHalInterface.h>
 #include <mediautils/ServiceUtilities.h>
@@ -60,6 +61,8 @@ class AudioFlinger
     friend class sp<AudioFlinger>;
 public:
     static void instantiate() ANDROID_API;
+
+    status_t resetReferencesForTest();
 
 private:
 
@@ -426,6 +429,13 @@ public:
                             const sp<MmapStreamCallback>& callback,
                             sp<MmapStreamInterface>& interface,
             audio_port_handle_t *handle) EXCLUDES_AudioFlinger_Mutex;
+
+    void initAudioPolicyLocal(sp<media::IAudioPolicyServiceLocal> audioPolicyLocal) {
+        if (mAudioPolicyServiceLocal.load() == nullptr) {
+            mAudioPolicyServiceLocal = std::move(audioPolicyLocal);
+        }
+    }
+
 private:
     // FIXME The 400 is temporarily too high until a leak of writers in media.log is fixed.
     static const size_t kLogMemorySize = 400 * 1024;
@@ -784,6 +794,9 @@ private:
 
     // Bluetooth Variable latency control logic is enabled or disabled
     std::atomic<bool> mBluetoothLatencyModesEnabled = true;
+
+    // Local interface to AudioPolicyService, late inited, but logically const
+    mediautils::atomic_sp<media::IAudioPolicyServiceLocal> mAudioPolicyServiceLocal;
 };
 
 // ----------------------------------------------------------------------------

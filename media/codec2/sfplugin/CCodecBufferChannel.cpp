@@ -1102,6 +1102,10 @@ void CCodecBufferChannel::feedInputBufferIfAvailableInternal() {
             return;
         }
     }
+    if (android::media::codec::provider_->input_surface_throttle()
+            && mInputSurface != nullptr) {
+        mInputSurface->onInputBufferEmptied();
+    }
     size_t numActiveSlots = 0;
     size_t pipelineRoom = 0;
     size_t numInputBuffersAvailable = 0;

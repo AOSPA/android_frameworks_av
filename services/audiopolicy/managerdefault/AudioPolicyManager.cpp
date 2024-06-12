@@ -436,8 +436,12 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
             // Before checking intputs, broadcast connect event to allow HAL to retrieve dynamic
             // parameters on newly connected devices (instead of opening the inputs...)
             broadcastDeviceConnectionState(device, media::DeviceConnectedState::CONNECTED);
+            // Propagate device availability to Engine
+            setEngineDeviceConnectionState(device, state);
 
             if (checkInputsForDevice(device, state) != NO_ERROR) {
+                setEngineDeviceConnectionState(device, AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE);
+
                 mAvailableInputDevices.remove(device);
 
                 broadcastDeviceConnectionState(device, media::DeviceConnectedState::DISCONNECTED);
@@ -471,15 +475,15 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(const sp<DeviceDescript
 
             // remove device from mReportedFormatsMap cache
             mReportedFormatsMap.erase(device);
+
+            // Propagate device availability to Engine
+            setEngineDeviceConnectionState(device, state);
         } break;
 
         default:
             ALOGE("%s() invalid state: %x", __func__, state);
             return BAD_VALUE;
         }
-
-        // Propagate device availability to Engine
-        setEngineDeviceConnectionState(device, state);
 
         checkCloseInputs();
         // As the input device list can impact the output device selection, update
@@ -3569,6 +3573,23 @@ void AudioPolicyManager::closeClient(audio_port_handle_t portId)
     releaseInput(portId);
 }
 
+bool AudioPolicyManager::checkCloseInput(const sp<AudioInputDescriptor>& input) {
+    if (input->clientsList().size() == 0
+            || !mAvailableInputDevices.containsAtLeastOne(input->supportedDevices())) {
+        return true;
+    }
+    for (const auto& client : input->clientsList()) {
+        sp<DeviceDescriptor> device =
+            mEngine->getInputDeviceForAttributes(client->attributes(), client->uid(),
+                                                 client->session());
+        if (!input->supportedDevices().contains(device)) {
+            return true;
+        }
+    }
+    setInputDevice(input->mIoHandle, getNewInputDevice(input));
+    return false;
+}
+
 void AudioPolicyManager::checkCloseInputs() {
     // After connecting or disconnecting an input device, close input if:
     // - it has no client (was just opened to check profile)  OR
@@ -3577,33 +3598,35 @@ void AudioPolicyManager::checkCloseInputs() {
     // devices anymore. Otherwise update device selection
     std::vector<audio_io_handle_t> inputsToClose;
     for (size_t i = 0; i < mInputs.size(); i++) {
-        const sp<AudioInputDescriptor> input = mInputs.valueAt(i);
-        if (input->clientsList().size() == 0
-                || !mAvailableInputDevices.containsAtLeastOne(input->supportedDevices())) {
+        if (checkCloseInput(mInputs.valueAt(i))) {
             inputsToClose.push_back(mInputs.keyAt(i));
-        } else {
-            bool close = false;
-            for (const auto& client : input->clientsList()) {
-                sp<DeviceDescriptor> device =
-                    mEngine->getInputDeviceForAttributes(client->attributes(), client->uid(),
-                                                         client->session());
-                if (!input->supportedDevices().contains(device)) {
-                    close = true;
-                    break;
-                }
-            }
-            if (close) {
-                inputsToClose.push_back(mInputs.keyAt(i));
-            } else {
-                setInputDevice(input->mIoHandle, getNewInputDevice(input));
-            }
         }
     }
-
     for (const audio_io_handle_t handle : inputsToClose) {
         ALOGV("%s closing input %d", __func__, handle);
         closeInput(handle);
     }
+}
+
+status_t AudioPolicyManager::setDeviceAbsoluteVolumeEnabled(audio_devices_t deviceType,
+                                                            const char *address __unused,
+                                                            bool enabled,
+                                                            audio_stream_type_t streamToDriveAbs)
+{
+    audio_attributes_t attributesToDriveAbs = mEngine->getAttributesForStreamType(streamToDriveAbs);
+    if (attributesToDriveAbs == AUDIO_ATTRIBUTES_INITIALIZER) {
+        ALOGW("%s: no attributes for stream %s, bailing out", __func__,
+              toString(streamToDriveAbs).c_str());
+        return BAD_VALUE;
+    }
+
+    if (enabled) {
+        mAbsoluteVolumeDrivingStreams[deviceType] = attributesToDriveAbs;
+    } else {
+        mAbsoluteVolumeDrivingStreams.erase(deviceType);
+    }
+
+    return NO_ERROR;
 }
 
 void AudioPolicyManager::initStreamVolume(audio_stream_type_t stream, int indexMin, int indexMax)
@@ -4726,6 +4749,13 @@ void AudioPolicyManager::dump(String8 *dst) const
 
     dst->appendFormat("\nPolicy Engine dump:\n");
     mEngine->dump(dst);
+
+    dst->appendFormat("\nAbsolute volume devices with driving streams:\n");
+    for (const auto it : mAbsoluteVolumeDrivingStreams) {
+        dst->appendFormat("   - device type: %s, driving stream %d\n",
+                          dumpDeviceTypes({it.first}).c_str(),
+                          mEngine->getVolumeGroupForAttributes(it.second));
+    }
 }
 
 status_t AudioPolicyManager::dump(int fd)
@@ -7141,14 +7171,14 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
 status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& device,
                                                   audio_policy_dev_state_t state)
 {
-    sp<AudioInputDescriptor> desc;
-
     if (audio_device_is_digital(device->type())) {
         // erase all current sample rates, formats and channel masks
         device->clearAudioProfiles();
     }
 
     if (state == AUDIO_POLICY_DEVICE_STATE_AVAILABLE) {
+        sp<AudioInputDescriptor> desc;
+
         // first call getAudioPort to get the supported attributes from the HAL
         struct audio_port_v7 port = {};
         device->toAudioPort(&port);
@@ -7239,6 +7269,11 @@ status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& de
                     device->importAudioPortAndPickAudioProfile(profile);
                 }
                 ALOGV("checkInputsForDevice(): adding input %d", input);
+
+                if (checkCloseInput(desc)) {
+                    ALOGV("%s closing input %d", __func__, input);
+                    closeInput(input);
+                }
             }
         } // end scan profiles
 
@@ -8357,14 +8392,57 @@ sp<IOProfile> AudioPolicyManager::getInputProfile(const sp<DeviceDescriptor> &de
     return nullptr;
 }
 
+float AudioPolicyManager::adjustDeviceAttenuationForAbsVolume(IVolumeCurves &curves,
+                                                              VolumeSource volumeSource,
+                                                              int index,
+                                                              const DeviceTypeSet &deviceTypes)
+{
+    audio_devices_t volumeDevice = Volume::getDeviceForVolume(deviceTypes);
+    device_category deviceCategory = Volume::getDeviceCategory({volumeDevice});
+    float volumeDb = curves.volIndexToDb(deviceCategory, index);
+
+    if (com_android_media_audio_abs_volume_index_fix()) {
+        if (mAbsoluteVolumeDrivingStreams.find(volumeDevice) !=
+            mAbsoluteVolumeDrivingStreams.end()) {
+            audio_attributes_t attributesToDriveAbs = mAbsoluteVolumeDrivingStreams[volumeDevice];
+            auto groupToDriveAbs = mEngine->getVolumeGroupForAttributes(attributesToDriveAbs);
+            if (groupToDriveAbs == VOLUME_GROUP_NONE) {
+                ALOGD("%s: no group matching with %s", __FUNCTION__,
+                      toString(attributesToDriveAbs).c_str());
+                return volumeDb;
+            }
+
+            float volumeDbMax = curves.volIndexToDb(deviceCategory, curves.getVolumeIndexMax());
+            VolumeSource vsToDriveAbs = toVolumeSource(groupToDriveAbs);
+            if (vsToDriveAbs == volumeSource) {
+                // attenuation is applied by the abs volume controller
+                return volumeDbMax;
+            } else {
+                IVolumeCurves &curvesAbs = getVolumeCurves(vsToDriveAbs);
+                int indexAbs = curvesAbs.getVolumeIndex({volumeDevice});
+                float volumeDbAbs = curvesAbs.volIndexToDb(deviceCategory, indexAbs);
+                float volumeDbAbsMax = curvesAbs.volIndexToDb(deviceCategory,
+                                                              curvesAbs.getVolumeIndexMax());
+                float newVolumeDb = fminf(volumeDb + volumeDbAbsMax - volumeDbAbs, volumeDbMax);
+                ALOGV("%s: abs vol stream %d with attenuation %f is adjusting stream %d from "
+                      "attenuation %f to attenuation %f %f", __func__, vsToDriveAbs, volumeDbAbs,
+                      volumeSource, volumeDb, newVolumeDb, volumeDbMax);
+                return newVolumeDb;
+            }
+        }
+        return volumeDb;
+    } else {
+        return volumeDb;
+    }
+}
+
 float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
                                         VolumeSource volumeSource,
                                         int index,
                                         const DeviceTypeSet& deviceTypes,
                                         bool computeInternalInteraction)
 {
-    float volumeDb = curves.volIndexToDb(Volume::getDeviceCategory(deviceTypes), index);
-
+    float volumeDb = adjustDeviceAttenuationForAbsVolume(curves, volumeSource, index, deviceTypes);
     ALOGV("%s volume source %d, index %d,  devices %s, compute internal %b ", __func__,
           volumeSource, index, dumpDeviceTypes(deviceTypes).c_str(), computeInternalInteraction);
 
@@ -8538,7 +8616,7 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
     if (deviceTypes.empty()) {
         deviceTypes = outputDesc->devices().types();
         index = curves.getVolumeIndex(deviceTypes);
-        ALOGD("%s if deviceTypes is change from none to device %s, need get index %d",
+        ALOGV("%s if deviceTypes is change from none to device %s, need get index %d",
                 __func__, dumpDeviceTypes(deviceTypes).c_str(), index);
     }
 

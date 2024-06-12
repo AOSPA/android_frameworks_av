@@ -21,6 +21,7 @@
 #include <android/media/GetSpatializerResponse.h>
 #include <android-base/thread_annotations.h>
 #include <audio_utils/mutex.h>
+#include <com/android/media/permission/INativePermissionController.h>
 #include <cutils/misc.h>
 #include <cutils/config_utils.h>
 #include <cutils/compiler.h>
@@ -35,6 +36,8 @@
 #include <media/ToneGenerator.h>
 #include <media/AudioEffect.h>
 #include <media/AudioPolicy.h>
+#include <media/IAudioPolicyServiceLocal.h>
+#include <media/NativePermissionController.h>
 #include <media/UsecaseValidator.h>
 #include <mediautils/ServiceUtilities.h>
 #include "AudioPolicyEffects.h"
@@ -68,12 +71,16 @@ namespace media::audiopolicy {
 }
 
 using ::android::media::audiopolicy::AudioRecordClient;
+using ::com::android::media::permission::INativePermissionController;
+using ::com::android::media::permission::NativePermissionController;
+using ::com::android::media::permission::IPermissionProvider;
 
 class AudioPolicyService :
     public BinderService<AudioPolicyService>,
     public media::BnAudioPolicyService,
     public IBinder::DeathRecipient,
-    public SpatializerPolicyCallback
+    public SpatializerPolicyCallback,
+    public media::IAudioPolicyServiceLocal
 {
     friend class sp<AudioPolicyService>;
 
@@ -121,6 +128,9 @@ public:
     binder::Status startInput(int32_t portId) override;
     binder::Status stopInput(int32_t portId) override;
     binder::Status releaseInput(int32_t portId) override;
+    binder::Status setDeviceAbsoluteVolumeEnabled(const AudioDevice& device,
+                                                  bool enabled,
+                                                  AudioStreamType streamToDriveAbs) override;
     binder::Status initStreamVolume(AudioStreamType stream, int32_t indexMin,
                                     int32_t indexMax) override;
     binder::Status setStreamVolumeIndex(AudioStreamType stream,
@@ -315,7 +325,13 @@ public:
     binder::Status getRegisteredPolicyMixes(
             std::vector <::android::media::AudioMix>* mixes) override;
 
+    // Should only be called by AudioService to push permission data down to audioserver
+    binder::Status getPermissionController(sp<INativePermissionController>* out) override;
+
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) override;
+
+    // -- IAudioPolicyLocal methods
+    const IPermissionProvider& getPermissionProvider() const override;
 
     // IBinder::DeathRecipient
     virtual     void        binderDied(const wp<IBinder>& who);
@@ -1056,6 +1072,7 @@ private:
     CreateAudioPolicyManagerInstance mCreateAudioPolicyManager;
     DestroyAudioPolicyManagerInstance mDestroyAudioPolicyManager;
     std::unique_ptr<media::UsecaseValidator> mUsecaseValidator;
+    const sp<NativePermissionController> mPermissionController;
 };
 
 } // namespace android

@@ -37,6 +37,7 @@ namespace companion {
 namespace virtualcamera {
 namespace {
 
+constexpr char kCameraId[] = "42";
 constexpr int kQvgaWidth = 320;
 constexpr int kQvgaHeight = 240;
 constexpr int kVgaWidth = 640;
@@ -46,7 +47,6 @@ constexpr int kSvgaHeight = 600;
 constexpr int kMaxFps = 30;
 constexpr int kStreamId = 0;
 constexpr int kSecondStreamId = 1;
-constexpr int kCameraId = 42;
 constexpr int kDefaultDeviceId = 0;
 
 using ::aidl::android::companion::virtualcamera::BnVirtualCameraCallback;
@@ -374,6 +374,92 @@ TEST_F(VirtualCameraSessionInputChoiceTest,
   EXPECT_CALL(*mMockVirtualCameraClientCallback,
               onStreamConfigured(kStreamId, _, kQvgaWidth, kQvgaHeight,
                                  Format::RGBA_8888));
+  EXPECT_TRUE(
+      virtualCameraSession->configureStreams(streamConfiguration, &halStreams)
+          .isOk());
+}
+
+TEST_F(VirtualCameraSessionInputChoiceTest, reconfigureSwitchesInputStream) {
+  // Create camera configured to support SVGA YUV input and RGB QVGA input.
+  auto virtualCameraSession = createSession(
+      {SupportedStreamConfiguration{.width = kSvgaWidth,
+                                    .height = kSvgaHeight,
+                                    .pixelFormat = Format::YUV_420_888,
+                                    .maxFps = kMaxFps},
+       SupportedStreamConfiguration{.width = kQvgaWidth,
+                                    .height = kQvgaHeight,
+                                    .pixelFormat = Format::RGBA_8888,
+                                    .maxFps = kMaxFps}});
+
+  // First configure QVGA stream.
+  StreamConfiguration streamConfiguration;
+  streamConfiguration.streams = {createStream(
+      kStreamId, kQvgaWidth, kQvgaHeight, PixelFormat::IMPLEMENTATION_DEFINED)};
+  std::vector<HalStream> halStreams;
+
+  // Expect QVGA input configuragion to be chosen.
+  EXPECT_CALL(*mMockVirtualCameraClientCallback,
+              onStreamConfigured(kStreamId, _, kQvgaWidth, kQvgaHeight,
+                                 Format::RGBA_8888));
+  EXPECT_TRUE(
+      virtualCameraSession->configureStreams(streamConfiguration, &halStreams)
+          .isOk());
+
+  // Reconfigure with additional VGA stream.
+  streamConfiguration.streams.push_back(
+      createStream(kStreamId + 1, kVgaWidth, kVgaHeight,
+                   PixelFormat::IMPLEMENTATION_DEFINED));
+
+  // Expect original surface to be discarded.
+  EXPECT_CALL(*mMockVirtualCameraClientCallback, onStreamClosed(kStreamId));
+
+  // Expect SVGA input configuragion to be chosen.
+  EXPECT_CALL(*mMockVirtualCameraClientCallback,
+              onStreamConfigured(kStreamId + 1, _, kSvgaWidth, kSvgaHeight,
+                                 Format::YUV_420_888));
+  EXPECT_TRUE(
+      virtualCameraSession->configureStreams(streamConfiguration, &halStreams)
+          .isOk());
+}
+
+TEST_F(VirtualCameraSessionInputChoiceTest,
+       reconfigureKeepsInputStreamIfUnchanged) {
+  // Create camera configured to support SVGA YUV input and RGB QVGA input.
+  auto virtualCameraSession = createSession(
+      {SupportedStreamConfiguration{.width = kSvgaWidth,
+                                    .height = kSvgaHeight,
+                                    .pixelFormat = Format::YUV_420_888,
+                                    .maxFps = kMaxFps},
+       SupportedStreamConfiguration{.width = kQvgaWidth,
+                                    .height = kQvgaHeight,
+                                    .pixelFormat = Format::RGBA_8888,
+                                    .maxFps = kMaxFps}});
+
+  // First configure SVGA stream.
+  StreamConfiguration streamConfiguration;
+  streamConfiguration.streams = {createStream(
+      kStreamId, kSvgaWidth, kSvgaHeight, PixelFormat::IMPLEMENTATION_DEFINED)};
+  std::vector<HalStream> halStreams;
+
+  // Expect SVGA input configuragion to be chosen.
+  EXPECT_CALL(*mMockVirtualCameraClientCallback,
+              onStreamConfigured(kStreamId, _, kSvgaWidth, kSvgaHeight,
+                                 Format::YUV_420_888));
+  EXPECT_TRUE(
+      virtualCameraSession->configureStreams(streamConfiguration, &halStreams)
+          .isOk());
+
+  // Reconfigure with VGA + QVA stream. Because we only allow downscaling,
+  // this will be matched to SVGA input resolution.
+  streamConfiguration.streams = {
+      createStream(kStreamId + 1, kVgaWidth, kVgaHeight,
+                   PixelFormat::IMPLEMENTATION_DEFINED),
+      createStream(kStreamId + 2, kVgaWidth, kVgaHeight,
+                   PixelFormat::IMPLEMENTATION_DEFINED)};
+
+  // Expect the onStreamConfigured callback not to be invoked, since the
+  // original Surface is still best fit for current output streams.
+  EXPECT_CALL(*mMockVirtualCameraClientCallback, onStreamConfigured).Times(0);
   EXPECT_TRUE(
       virtualCameraSession->configureStreams(streamConfiguration, &halStreams)
           .isOk());

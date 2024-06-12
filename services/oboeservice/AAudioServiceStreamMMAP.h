@@ -73,6 +73,9 @@ protected:
     aaudio_result_t stop_l() REQUIRES(mLock) override;
 
     aaudio_result_t standby_l() REQUIRES(mLock) override;
+    bool isStandbyImplemented() override {
+        return true;
+    }
 
     aaudio_result_t exitStandby_l(AudioEndpointParcelable* parcelable) REQUIRES(mLock) override;
 
@@ -93,7 +96,13 @@ protected:
      * Device specific startup.
      * @return AAUDIO_OK or negative error.
      */
-    aaudio_result_t startDevice() override;
+    aaudio_result_t startDevice_l() REQUIRES(mLock) override;
+
+    aaudio_result_t startClient_l(const android::AudioClient& client,
+                                  const audio_attributes_t *attr,
+                                  audio_port_handle_t *clientHandle) REQUIRES(mLock) override;
+
+    aaudio_result_t stopClient_l(audio_port_handle_t clientHandle) REQUIRES(mLock) override;
 
 private:
 
