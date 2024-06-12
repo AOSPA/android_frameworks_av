@@ -914,6 +914,7 @@ void Hal2AidlMapper::resetPortConfig(int32_t portConfigId) {
                 !status.isOk()) {
             ALOGE("%s: error while resetting port config %d: %s",
                     __func__, portConfigId, status.getDescription().c_str());
+            return;
         }
         mPortConfigs.erase(it);
         return;
