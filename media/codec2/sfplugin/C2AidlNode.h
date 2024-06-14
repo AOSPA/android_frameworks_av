@@ -49,7 +49,7 @@ public:
 
     ::ndk::ScopedAStatus submitBuffer(
             int32_t buffer,
-            const ::aidl::android::hardware::HardwareBuffer& hBuffer,
+            const std::optional<::aidl::android::hardware::HardwareBuffer>& hBuffer,
             int32_t flags,
             int64_t timestampUs,
             const ::ndk::ScopedFileDescriptor& fence) override;
@@ -68,11 +68,17 @@ public:
     void setFrameSize(uint32_t width, uint32_t height);
 
     /**
-     * Clean up work item reference.
+     * Notify that the input buffer reference is no longer needed by the component.
+     * Clean up if necessary.
      *
      * \param index input work index
      */
     void onInputBufferDone(c2_cntr64_t index);
+
+    /**
+     * Notify input buffer is emptied.
+     */
+    void onInputBufferEmptied();
 
     /**
      * Returns dataspace information from GraphicBufferSource.
