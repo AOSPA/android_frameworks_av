@@ -1672,54 +1672,25 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
         return NAME_NOT_FOUND;
     }
 
-    sp<SwAudioOutputDescriptor> outputDesc = nullptr;
-    // check if direct output for pcm/track offload or compress offload already exist
-    bool directSessionInUse = false;
-    bool offloadSessionInUse = false;
     // exclusive outputs for MMAP and Offload are enforced by different session ids.
-    if (!(property_get_bool("vendor.audio.offload.multiple.enabled", false) &&
-          ((flags & AUDIO_OUTPUT_FLAG_DIRECT) != 0) &&
-          (flags & AUDIO_OUTPUT_FLAG_MMAP_NOIRQ) == 0)) {
-        for (size_t i = 0; i < mOutputs.size(); i++) {
-            sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
-            if (!desc->isDuplicated() && (profile == desc->mProfile)) {
-                 outputDesc = desc;
-                // reuse direct output if currently open by the same client
-                // and configured with same parameters
-                if ((config->sample_rate == desc->getSamplingRate()) &&
-                    (config->format == desc->getFormat()) &&
-                    (config->channel_mask == desc->getChannelMask()) &&
-                    (session == desc->mDirectClientSession)) {
-                    desc->mDirectOpenCount++;
-                    ALOGI("%s reusing direct output %d for session %d", __func__,
-                        mOutputs.keyAt(i), session);
-                    *output = mOutputs.keyAt(i);
-                    return NO_ERROR;
-                }
-                if (desc->mFlags == AUDIO_OUTPUT_FLAG_DIRECT) {
-                    directSessionInUse = true;
-                    ALOGV("%s Direct PCM already in use", __func__);
-                }
-                if (desc->mFlags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) {
-                    offloadSessionInUse = true;
-                    ALOGV("%s Compress Offload already in use", __func__);
-                }
-            }
-        }
-        if (outputDesc != nullptr &&
-            ((flags == AUDIO_OUTPUT_FLAG_DIRECT && directSessionInUse) ||
-            ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) && offloadSessionInUse))) {
-            if (session != outputDesc->mDirectClientSession) {
-                ALOGV("getOutput() do not reuse direct pcm output because current client (%d) "
-                      "is not the same as requesting client (%d) for different output conf",
-                outputDesc->mDirectClientSession, session);
-                return NAME_NOT_FOUND;
-            } else {
-                ALOGV("%s close previous output on same client session %d ", __func__, session);
-                closeOutput(outputDesc->mIoHandle);
+    for (size_t i = 0; i < mOutputs.size(); i++) {
+        sp<SwAudioOutputDescriptor> desc = mOutputs.valueAt(i);
+        if (!desc->isDuplicated() && (profile == desc->mProfile)) {
+            // reuse direct output if currently open by the same client
+            // and configured with same parameters
+            if ((config->sample_rate == desc->getSamplingRate()) &&
+                (config->format == desc->getFormat()) &&
+                (config->channel_mask == desc->getChannelMask()) &&
+                (session == desc->mDirectClientSession)) {
+                desc->mDirectOpenCount++;
+                ALOGI("%s reusing direct output %d for session %d", __func__,
+                    mOutputs.keyAt(i), session);
+                *output = mOutputs.keyAt(i);
+                return NO_ERROR;
             }
         }
     }
+
     if (!profile->canOpenNewIo()) {
         if (!com::android::media::audioserver::direct_track_reprioritization()) {
             return NAME_NOT_FOUND;
@@ -1744,7 +1715,7 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
         return NAME_NOT_FOUND;
     }
 
-    outputDesc = sp<SwAudioOutputDescriptor>::make(profile, mpClientInterface);
+    auto outputDesc = sp<SwAudioOutputDescriptor>::make(profile, mpClientInterface);
 
     // An MSD patch may be using the only output stream that can service this request. Release
     // all MSD patches to prioritize this request over any active output on MSD.
