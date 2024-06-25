@@ -126,9 +126,6 @@ cc_defaults {
 cc_library {
     name: "libstagefright_foundation",
     vendor_available: true,
-    vndk: {
-        enabled: true,
-    },
     defaults: ["libstagefright_foundation_defaults"],
     min_sdk_version: "29",
     apex_available: [
@@ -152,10 +149,6 @@ cc_library {
 cc_library {
     name: "libstagefright_foundation_ext",
     vendor: true,
-    vndk: {
-        enabled: true,
-        extends: "libstagefright_foundation",
-    },
     defaults: ["libstagefright_foundation_defaults"],
     host_supported: false,
     min_sdk_version: "29",

@@ -95,4 +95,5 @@ cc_binary {
         "libvirtualcamera_utils",
     ],
     init_rc: ["virtual_camera.hal.rc"],
+    sdclang: false,
 }

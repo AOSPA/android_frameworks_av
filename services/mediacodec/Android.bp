@@ -89,7 +89,6 @@ cc_binary {
         "libavservices_minijail",
         "libcutils",
         "libhidlbase",
-        "libstagefright_omx_ext",
         "libstagefright_omx",
         "libstagefright_xmlparser",
         "android.hardware.media.omx@1.0",
