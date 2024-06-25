@@ -68,9 +68,6 @@ cc_defaults {
 cc_library {
     name: "libmedia_helper",
     vendor_available: true,
-    vndk: {
-        enabled: true,
-    },
     defaults: ["libmedia_helper_defaults"],
     min_sdk_version: "29",
 }
@@ -78,10 +75,6 @@ cc_library {
 cc_library {
     name: "libmedia_helper_ext",
     vendor: true,
-    vndk: {
-        enabled: true,
-        extends: "libmedia_helper",
-    },
     defaults: ["libmedia_helper_defaults"],
     host_supported: false,
     cflags: [
