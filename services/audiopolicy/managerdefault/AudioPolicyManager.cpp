@@ -6816,6 +6816,11 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
                 ALOGW("Output profile contains no device on module %s", hwModule->getName());
                 continue;
             }
+            if (outProfile->isMmap() && !outProfile->hasDynamicAudioProfile()) {
+                ALOGV("%s skip opening output for mmap profile %s", __func__,
+                        outProfile->getTagName().c_str());
+                continue;
+            }
             if ((outProfile->getFlags() & AUDIO_OUTPUT_FLAG_TTS) != 0 ||
                 (outProfile->getFlags() & AUDIO_OUTPUT_FLAG_ULTRASOUND) != 0) {
                 mTtsOutputAvailable = true;
@@ -6887,6 +6892,11 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
                 ALOGW("Input profile contains no device on module %s", hwModule->getName());
                 continue;
             }
+            if (inProfile->isMmap() && !inProfile->hasDynamicAudioProfile()) {
+                ALOGV("%s skip opening input for mmap profile %s", __func__,
+                        inProfile->getTagName().c_str());
+                continue;
+            }
             // chose first device present in profile's SupportedDevices also part of
             // available input devices
             const DeviceVector &supportedDevices = inProfile->getSupportedDevices();
@@ -6903,7 +6913,7 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
             status_t status = inputDesc->open(nullptr,
                                               availProfileDevices.itemAt(0),
                                               AUDIO_SOURCE_MIC,
-                                              AUDIO_INPUT_FLAG_NONE,
+                                              (audio_input_flags_t) inProfile->getFlags(),
                                               &input);
             if (status != NO_ERROR) {
                 ALOGW("Cannot open input stream for device %s on hw module %s",
@@ -7050,7 +7060,11 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
             if (j != outputs.size()) {
                 continue;
             }
-
+            if (profile->isMmap() && !profile->hasDynamicAudioProfile()) {
+                ALOGV("%s skip opening output for mmap profile %s",
+                      __func__, profile->getTagName().c_str());
+                continue;
+            }
             if (!profile->canOpenNewIo()) {
                 ALOGW("Max Output number %u already opened for this profile %s",
                       profile->maxOpenCount, profile->getTagName().c_str());
@@ -7201,6 +7215,11 @@ status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& de
                 continue;
             }
 
+            if (profile->isMmap() && !profile->hasDynamicAudioProfile()) {
+                ALOGV("%s skip opening input for mmap profile %s",
+                      __func__, profile->getTagName().c_str());
+                continue;
+            }
             if (!profile->canOpenNewIo()) {
                 ALOGW("Max Input number %u already opened for this profile %s",
                       profile->maxOpenCount, profile->getTagName().c_str());
@@ -7209,7 +7228,8 @@ status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& de
 
             desc = new AudioInputDescriptor(profile, mpClientInterface);
             audio_io_handle_t input = AUDIO_IO_HANDLE_NONE;
-            status = desc->open(nullptr, device, AUDIO_SOURCE_MIC, AUDIO_INPUT_FLAG_NONE, &input);
+            status = desc->open(nullptr, device, AUDIO_SOURCE_MIC,
+                                (audio_input_flags_t) profile->getFlags(), &input);
 
             if (status == NO_ERROR) {
                 const String8& address = String8(device->address().c_str());
