@@ -282,6 +282,11 @@ public:
 
     const AudioProfileVector& getSupportedProfiles() { return mSupportedProfiles; }
 
+    /**
+     * @brief checks if all devices in device vector are attached to the HwModule or not
+     * @return true if all the devices in device vector are attached, otherwise false
+     */
+    bool areAllDevicesAttached() const;
     // Return a string to describe the DeviceVector. The sensitive information will only be
     // added to the string if `includeSensitiveInfo` is true.
     std::string toString(bool includeSensitiveInfo = false) const;
