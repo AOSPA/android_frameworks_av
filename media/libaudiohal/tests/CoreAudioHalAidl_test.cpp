@@ -29,6 +29,7 @@
 #include <aidl/android/hardware/audio/core/BnModule.h>
 #include <aidl/android/hardware/audio/core/BnStreamCommon.h>
 #include <aidl/android/media/audio/BnHalAdapterVendorExtension.h>
+#include <aidl/android/media/audio/common/AudioGainMode.h>
 #include <aidl/android/media/audio/common/Int.h>
 #include <utils/Log.h>
 
@@ -39,10 +40,13 @@ using ::aidl::android::hardware::audio::core::AudioRoute;
 using ::aidl::android::hardware::audio::core::VendorParameter;
 using ::aidl::android::media::audio::common::AudioChannelLayout;
 using ::aidl::android::media::audio::common::AudioConfig;
+using ::aidl::android::media::audio::common::AudioDevice;
 using ::aidl::android::media::audio::common::AudioDeviceDescription;
 using ::aidl::android::media::audio::common::AudioDeviceType;
 using ::aidl::android::media::audio::common::AudioFormatDescription;
 using ::aidl::android::media::audio::common::AudioFormatType;
+using ::aidl::android::media::audio::common::AudioGainConfig;
+using ::aidl::android::media::audio::common::AudioGainMode;
 using ::aidl::android::media::audio::common::AudioIoFlags;
 using ::aidl::android::media::audio::common::AudioPort;
 using ::aidl::android::media::audio::common::AudioPortConfig;
@@ -160,6 +164,29 @@ Configuration getTestConfiguration() {
             createProfile(PcmType::INT_16_BIT, {AudioChannelLayout::LAYOUT_STEREO}, {48000})};
     Configuration c;
 
+    AudioPort micInDevice =
+            createPort(c.nextPortId++, "Built-In Mic", 0, true,
+                       createPortDeviceExt(AudioDeviceType::IN_MICROPHONE,
+                                           1 << AudioPortDeviceExt::FLAG_INDEX_DEFAULT_DEVICE));
+    micInDevice.profiles = standardPcmAudioProfiles;
+    c.ports.push_back(micInDevice);
+
+    AudioPort micInBackDevice =
+            createPort(c.nextPortId++, "Built-In Back Mic", 0, true,
+                       createPortDeviceExt(AudioDeviceType::IN_MICROPHONE_BACK, 0));
+    micInDevice.profiles = standardPcmAudioProfiles;
+    c.ports.push_back(micInBackDevice);
+
+    AudioPort primaryInMix =
+            createPort(c.nextPortId++, "primary input", 0, true, createPortMixExt(0, 1));
+    primaryInMix.profiles = standardPcmAudioProfiles;
+    c.ports.push_back(primaryInMix);
+
+    AudioPort speakerOutDevice = createPort(c.nextPortId++, "Speaker", 0, false,
+                                            createPortDeviceExt(AudioDeviceType::OUT_SPEAKER, 0));
+    speakerOutDevice.profiles = standardPcmAudioProfiles;
+    c.ports.push_back(speakerOutDevice);
+
     AudioPort btOutDevice =
             createPort(c.nextPortId++, "BT A2DP Out", 0, false,
                        createPortDeviceExt(AudioDeviceType::OUT_DEVICE, 0,
@@ -172,6 +199,7 @@ Configuration getTestConfiguration() {
     btOutMix.profiles = standardPcmAudioProfiles;
     c.ports.push_back(btOutMix);
 
+    c.routes.push_back(createRoute({micInDevice, micInBackDevice}, primaryInMix));
     c.routes.push_back(createRoute({btOutMix}, btOutDevice));
 
     return c;
@@ -184,6 +212,18 @@ class ModuleMock : public ::aidl::android::hardware::audio::core::BnModule,
     explicit ModuleMock(const Configuration& config) : mConfig(config) {}
     bool isScreenTurnedOn() const { return mIsScreenTurnedOn; }
     ScreenRotation getScreenRotation() const { return mScreenRotation; }
+    std::vector<AudioPatch> getPatches() {
+        std::vector<AudioPatch> result;
+        getAudioPatches(&result);
+        return result;
+    }
+    std::optional<AudioPortConfig> getPortConfig(int32_t id) {
+        auto iter = findById<AudioPortConfig>(mConfig.portConfigs, id);
+        if (iter != mConfig.portConfigs.end()) {
+            return *iter;
+        }
+        return std::nullopt;
+    }
 
   private:
     ndk::ScopedAStatus setModuleDebug(
@@ -620,6 +660,19 @@ std::enable_if_t<std::is_enum_v<E>, std::ostream&> operator<<(std::ostream& os, 
     return os << toString(e);
 }
 }  // namespace aidl::android::hardware::audio::core
+
+namespace aidl::android::media::audio::common {
+template <typename P>
+std::enable_if_t<std::is_function_v<typename mf_traits<decltype(&P::toString)>::member_type>,
+                 std::ostream&>
+operator<<(std::ostream& os, const P& p) {
+    return os << p.toString();
+}
+template <typename E>
+std::enable_if_t<std::is_enum_v<E>, std::ostream&> operator<<(std::ostream& os, const E& e) {
+    return os << toString(e);
+}
+}  // namespace aidl::android::media::audio::common
 
 using namespace android;
 
@@ -1140,4 +1193,104 @@ TEST_F(Hal2AidlMapperTest, DisconnectConnectCreateFwkPatchDisconnectReleaseClose
     mStream.clear();
     EXPECT_EQ(0, mMapper->findFwkPatch(mPatch.id));
     EXPECT_EQ(0, mMapper->findFwkPatch(newPatchId));
+}
+
+TEST_F(Hal2AidlMapperTest, ChangeTransientPatchDevice) {
+    std::mutex mutex;  // Only needed for cleanups.
+    auto mapperAccessor = std::make_unique<LockedAccessor<Hal2AidlMapper>>(*mMapper, mutex);
+    Hal2AidlMapper::Cleanups cleanups(*mapperAccessor);
+    AudioConfig config;
+    config.base.channelMask = AudioChannelLayout::make<AudioChannelLayout::layoutMask>(
+            AudioChannelLayout::LAYOUT_STEREO);
+    config.base.format =
+            AudioFormatDescription{.type = AudioFormatType::PCM, .pcm = PcmType::INT_16_BIT};
+    config.base.sampleRate = 48000;
+    AudioDevice defaultDevice;
+    defaultDevice.type.type = AudioDeviceType::IN_DEFAULT;
+    AudioPortConfig mixPortConfig;
+    AudioPatch transientPatch;
+    ASSERT_EQ(OK, mMapper->prepareToOpenStream(43 /*ioHandle*/, defaultDevice,
+                                               AudioIoFlags::make<AudioIoFlags::input>(0),
+                                               AudioSource::DEFAULT, &cleanups, &config,
+                                               &mixPortConfig, &transientPatch));
+    cleanups.disarmAll();
+    ASSERT_NE(0, transientPatch.id);
+    ASSERT_NE(0, mixPortConfig.id);
+    sp<StreamHalInterface> stream = sp<StreamHalMock>::make();
+    mMapper->addStream(stream, mixPortConfig.id, transientPatch.id);
+
+    AudioPatch patch{};
+    int32_t patchId;
+    AudioPortConfig backMicPortConfig;
+    backMicPortConfig.channelMask = config.base.channelMask;
+    backMicPortConfig.format = config.base.format;
+    backMicPortConfig.sampleRate = aidl::android::media::audio::common::Int{config.base.sampleRate};
+    backMicPortConfig.flags = AudioIoFlags::make<AudioIoFlags::input>(0);
+    backMicPortConfig.ext = createPortDeviceExt(AudioDeviceType::IN_MICROPHONE_BACK, 0);
+    ASSERT_EQ(OK, mMapper->createOrUpdatePatch({backMicPortConfig}, {mixPortConfig}, &patchId,
+                                               &cleanups));
+    cleanups.disarmAll();
+    ASSERT_EQ(android::OK,
+              mMapper->findPortConfig(backMicPortConfig.ext.get<AudioPortExt::device>().device,
+                                      &backMicPortConfig));
+    EXPECT_NE(0, backMicPortConfig.id);
+
+    EXPECT_EQ(transientPatch.id, patchId);
+    auto patches = mModule->getPatches();
+    auto patchIt = findById(patches, patchId);
+    ASSERT_NE(patchIt, patches.end());
+    EXPECT_EQ(std::vector<int32_t>{backMicPortConfig.id}, patchIt->sourcePortConfigIds);
+    EXPECT_EQ(std::vector<int32_t>{mixPortConfig.id}, patchIt->sinkPortConfigIds);
+}
+
+TEST_F(Hal2AidlMapperTest, SetAudioPortConfigGainChangeExistingPortConfig) {
+    // First set config, then update gain.
+    AudioPortConfig speakerPortConfig;
+    speakerPortConfig.ext = createPortDeviceExt(AudioDeviceType::OUT_SPEAKER, 0);
+    speakerPortConfig.channelMask = AudioChannelLayout::make<AudioChannelLayout::layoutMask>(
+            AudioChannelLayout::LAYOUT_STEREO);
+    speakerPortConfig.format =
+            AudioFormatDescription{.type = AudioFormatType::PCM, .pcm = PcmType::INT_16_BIT};
+    speakerPortConfig.sampleRate = ::aidl::android::media::audio::common::Int(48000);
+    AudioPortConfig resultingPortConfig;
+    ASSERT_EQ(OK,
+              mMapper->setPortConfig(speakerPortConfig, std::set<int32_t>(), &resultingPortConfig));
+    EXPECT_NE(0, resultingPortConfig.id);
+    EXPECT_NE(0, resultingPortConfig.portId);
+
+    AudioPortConfig gainUpdate;
+    gainUpdate.ext = createPortDeviceExt(AudioDeviceType::OUT_SPEAKER, 0);
+    AudioGainConfig gainConfig{.index = -1,
+                               .mode = 1 << static_cast<int>(AudioGainMode::JOINT),
+                               .channelMask = AudioChannelLayout{},
+                               .values = std::vector<int32_t>{-3200},
+                               .rampDurationMs = 0};
+    gainUpdate.gain = gainConfig;
+    AudioPortConfig resultingGainUpdate;
+    ASSERT_EQ(OK, mMapper->setPortConfig(gainUpdate, std::set<int32_t>(), &resultingGainUpdate));
+    EXPECT_EQ(resultingPortConfig.id, resultingGainUpdate.id);
+    auto updatedPortConfig = mModule->getPortConfig(resultingGainUpdate.id);
+    ASSERT_TRUE(updatedPortConfig.has_value());
+    ASSERT_TRUE(updatedPortConfig->gain.has_value());
+    EXPECT_EQ(gainConfig, updatedPortConfig->gain);
+}
+
+TEST_F(Hal2AidlMapperTest, SetAudioPortConfigGainChangeFromScratch) {
+    // Set gain as the first operation, the HAL should suggest the rest of the configuration.
+    AudioPortConfig gainSet;
+    gainSet.ext = createPortDeviceExt(AudioDeviceType::OUT_SPEAKER, 0);
+    AudioGainConfig gainConfig{.index = -1,
+                               .mode = 1 << static_cast<int>(AudioGainMode::JOINT),
+                               .channelMask = AudioChannelLayout{},
+                               .values = std::vector<int32_t>{-3200},
+                               .rampDurationMs = 0};
+    gainSet.gain = gainConfig;
+    AudioPortConfig resultingPortConfig;
+    ASSERT_EQ(OK, mMapper->setPortConfig(gainSet, std::set<int32_t>(), &resultingPortConfig));
+    EXPECT_NE(0, resultingPortConfig.id);
+    EXPECT_NE(0, resultingPortConfig.portId);
+    auto portConfig = mModule->getPortConfig(resultingPortConfig.id);
+    ASSERT_TRUE(portConfig.has_value());
+    ASSERT_TRUE(portConfig->gain.has_value());
+    EXPECT_EQ(gainConfig, portConfig->gain);
 }

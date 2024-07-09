@@ -427,6 +427,10 @@ public:
     virtual FillingStatus& fillingStatus() = 0;
     virtual int8_t& retryCount() = 0;
     virtual FastTrackUnderruns& fastTrackUnderruns() = 0;
+
+    // Internal mute, this is currently only used for bit-perfect playback
+    virtual bool getInternalMute() const = 0;
+    virtual void setInternalMute(bool muted) = 0;
 };
 
 // playback track, used by DuplicatingThread
@@ -575,10 +579,11 @@ public:
             size_t bufferSize,
             audio_output_flags_t flags,
             const Timeout& timeout = {},
-            size_t frameCountToBeReady = 1 /** Default behaviour is to start
+            size_t frameCountToBeReady = 1, /** Default behaviour is to start
                                              *  as soon as possible to have
                                              *  the lowest possible latency
-                                             *  even if it might glitch. */);
+                                             *  even if it might glitch. */
+            float speed = 1.0f);
 };
 
 class IAfPatchRecord : public virtual IAfRecordTrack, public virtual IAfPatchTrackBase {

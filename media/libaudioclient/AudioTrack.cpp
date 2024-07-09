@@ -1242,6 +1242,13 @@ status_t AudioTrack::setSampleRate(uint32_t rate)
     mSampleRate = rate;
     mProxy->setSampleRate(effectiveSampleRate);
 
+    mediametrics::LogItem(mMetricsId)
+            .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_SETSAMPLERATE)
+            .set(AMEDIAMETRICS_PROP_PREFIX_EFFECTIVE AMEDIAMETRICS_PROP_SAMPLERATE,
+                    static_cast<int32_t>(effectiveSampleRate))
+            .set(AMEDIAMETRICS_PROP_SAMPLERATE, static_cast<int32_t>(rate))
+            .record();
+
     return NO_ERROR;
 }
 
@@ -3136,6 +3143,7 @@ VolumeShaper::Status AudioTrack::applyVolumeShaper(
         const sp<VolumeShaper::Configuration>& configuration,
         const sp<VolumeShaper::Operation>& operation)
 {
+    const int64_t beginNs = systemTime();
     AutoMutex lock(mLock);
     mVolumeHandler->setIdIfNecessary(configuration);
     media::VolumeShaperConfiguration config;
@@ -3143,6 +3151,18 @@ VolumeShaper::Status AudioTrack::applyVolumeShaper(
     media::VolumeShaperOperation op;
     operation->writeToParcelable(&op);
     VolumeShaper::Status status;
+
+    mediametrics::Defer defer([&] {
+        mediametrics::LogItem(mMetricsId)
+                .set(AMEDIAMETRICS_PROP_EVENT, AMEDIAMETRICS_PROP_EVENT_VALUE_APPLYVOLUMESHAPER)
+                .set(AMEDIAMETRICS_PROP_EXECUTIONTIMENS, (int64_t)(systemTime() - beginNs))
+                .set(AMEDIAMETRICS_PROP_STATE, stateToString(mState))
+                .set(AMEDIAMETRICS_PROP_STATUS, (int32_t)status)
+                .set(AMEDIAMETRICS_PROP_TOSTRING, configuration->toString()
+                                 .append(" ")
+                                 .append(operation->toString()))
+                .record(); });
+
     mAudioTrack->applyVolumeShaper(config, op, &status);
 
     if (status == DEAD_OBJECT) {

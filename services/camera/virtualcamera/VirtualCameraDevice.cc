@@ -68,17 +68,18 @@ namespace {
 
 using namespace std::chrono_literals;
 
-// Prefix of camera name - "device@1.1/virtual/{numerical_id}"
+// Prefix of camera name - "device@1.1/virtual/{camera_id}"
 const char* kDevicePathPrefix = "device@1.1/virtual/";
 
 constexpr int32_t kMaxJpegSize = 3 * 1024 * 1024 /*3MiB*/;
 
-constexpr int32_t kMinFps = 15;
-
 constexpr std::chrono::nanoseconds kMaxFrameDuration =
-    std::chrono::duration_cast<std::chrono::nanoseconds>(1e9ns / kMinFps);
+    std::chrono::duration_cast<std::chrono::nanoseconds>(
+        1e9ns / VirtualCameraDevice::kMinFps);
 
 constexpr uint8_t kPipelineMaxDepth = 2;
+
+constexpr int k30Fps = 30;
 
 constexpr MetadataBuilder::ControlRegion kDefaultEmptyControlRegion{};
 
@@ -130,16 +131,20 @@ std::vector<FpsRange> fpsRangesForInputConfig(
   std::set<FpsRange> availableRanges;
 
   for (const SupportedStreamConfiguration& config : configs) {
-    availableRanges.insert({.minFps = kMinFps, .maxFps = config.maxFps});
+    availableRanges.insert(
+        {.minFps = VirtualCameraDevice::kMinFps, .maxFps = config.maxFps});
     availableRanges.insert({.minFps = config.maxFps, .maxFps = config.maxFps});
   }
 
   if (std::any_of(configs.begin(), configs.end(),
                   [](const SupportedStreamConfiguration& config) {
-                    return config.maxFps >= 30;
+                    return config.maxFps >= k30Fps;
                   })) {
-    availableRanges.insert({.minFps = kMinFps, .maxFps = 30});
-    availableRanges.insert({.minFps = 30, .maxFps = 30});
+    // Extend the set of available ranges with (minFps <= 15, 30) & (30, 30) as
+    // required by CDD.
+    availableRanges.insert(
+        {.minFps = VirtualCameraDevice::kMinFps, .maxFps = k30Fps});
+    availableRanges.insert({.minFps = k30Fps, .maxFps = k30Fps});
   }
 
   return std::vector<FpsRange>(availableRanges.begin(), availableRanges.end());
@@ -399,8 +404,8 @@ std::optional<CameraMetadata> initCameraCharacteristics(
 }  // namespace
 
 VirtualCameraDevice::VirtualCameraDevice(
-    const uint32_t cameraId, const VirtualCameraConfiguration& configuration,
-    int32_t deviceId)
+    const std::string& cameraId,
+    const VirtualCameraConfiguration& configuration, int32_t deviceId)
     : mCameraId(cameraId),
       mVirtualCameraClientCallback(configuration.virtualCameraCallback),
       mSupportedInputConfigurations(configuration.supportedStreamConfigs) {
@@ -577,11 +582,11 @@ ndk::ScopedAStatus VirtualCameraDevice::getTorchStrengthLevel(
 }
 
 binder_status_t VirtualCameraDevice::dump(int fd, const char**, uint32_t) {
-  ALOGD("Dumping virtual camera %d", mCameraId);
+  ALOGD("Dumping virtual camera %s", mCameraId.c_str());
   const char* indent = "  ";
   const char* doubleIndent = "    ";
-  dprintf(fd, "%svirtual_camera %d belongs to virtual device %d\n", indent,
-          mCameraId,
+  dprintf(fd, "%svirtual_camera %s belongs to virtual device %d\n", indent,
+          mCameraId.c_str(),
           getDeviceId(mCameraCharacteristics)
               .value_or(VirtualCameraService::kDefaultDeviceId));
   dprintf(fd, "%sSupportedStreamConfiguration:\n", indent);
@@ -592,7 +597,7 @@ binder_status_t VirtualCameraDevice::dump(int fd, const char**, uint32_t) {
 }
 
 std::string VirtualCameraDevice::getCameraName() const {
-  return std::string(kDevicePathPrefix) + std::to_string(mCameraId);
+  return std::string(kDevicePathPrefix) + mCameraId;
 }
 
 const std::vector<SupportedStreamConfiguration>&
@@ -611,6 +616,10 @@ Resolution VirtualCameraDevice::getMaxInputResolution() const {
     return Resolution(0, 0);
   }
   return maxResolution.value();
+}
+
+int VirtualCameraDevice::allocateInputStreamId() {
+  return mNextInputStreamId++;
 }
 
 std::shared_ptr<VirtualCameraDevice> VirtualCameraDevice::sharedFromThis() {

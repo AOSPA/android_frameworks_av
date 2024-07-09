@@ -220,6 +220,8 @@ public:
      */
     void processMuteEvent_l(const sp<IAudioManager>& audioManager, mute_state_t muteState) final;
 
+    bool getInternalMute() const final { return mInternalMute; }
+    void setInternalMute(bool muted) final { mInternalMute = muted; }
 protected:
 
     DISALLOW_COPY_AND_ASSIGN(Track);
@@ -401,6 +403,8 @@ private:
     // access these two variables only when holding player thread lock.
     std::unique_ptr<os::PersistableBundle> mMuteEventExtras;
     mute_state_t        mMuteState;
+
+    bool                mInternalMute = false;
 };  // end of Track
 
 
@@ -493,10 +497,11 @@ public:
                                    size_t bufferSize,
                                    audio_output_flags_t flags,
                                    const Timeout& timeout = {},
-                                   size_t frameCountToBeReady = 1 /** Default behaviour is to start
+                                   size_t frameCountToBeReady = 1, /** Default behaviour is to start
                                                                     *  as soon as possible to have
                                                                     *  the lowest possible latency
-                                                                    *  even if it might glitch. */);
+                                                                    *  even if it might glitch. */
+                                   float speed = 1.0f);
     ~PatchTrack() override;
 
     size_t framesReady() const final;

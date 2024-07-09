@@ -193,6 +193,7 @@ BINDER_METHOD_ENTRY(supportsBluetoothVariableLatency) \
 BINDER_METHOD_ENTRY(getSoundDoseInterface) \
 BINDER_METHOD_ENTRY(getAudioPolicyConfig) \
 BINDER_METHOD_ENTRY(getAudioMixPort) \
+BINDER_METHOD_ENTRY(resetReferencesForTest) \
 
 // singleton for Binder Method Statistics for IAudioFlinger
 static auto& getIAudioFlingerStatistics() {
@@ -466,6 +467,8 @@ AudioFlinger::~AudioFlinger()
             sMediaLogService->unregisterWriter(iMemory);
         }
     }
+    mMediaLogNotifier->requestExit();
+    mPatchCommandThread->exit();
 }
 
 //static
@@ -1935,9 +1938,10 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
     if (mPrimaryHardwareDev == nullptr) {
         return 0;
     }
+    if (mInputBufferSizeOrderedDevs.empty()) {
+        return 0;
+    }
     mHardwareStatus = AUDIO_HW_GET_INPUT_BUFFER_SIZE;
-
-    sp<DeviceHalInterface> dev = mPrimaryHardwareDev.load()->hwDevice();
 
     std::vector<audio_channel_mask_t> channelMasks = {channelMask};
     if (channelMask != AUDIO_CHANNEL_IN_MONO) {
@@ -1968,6 +1972,22 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
 
     mHardwareStatus = AUDIO_HW_IDLE;
 
+    auto getInputBufferSize = [](const sp<DeviceHalInterface>& dev, audio_config_t config,
+                                 size_t* bytes) -> status_t {
+        if (!dev) {
+            return BAD_VALUE;
+        }
+        status_t result = dev->getInputBufferSize(&config, bytes);
+        if (result == BAD_VALUE) {
+            // Retry with the config suggested by the HAL.
+            result = dev->getInputBufferSize(&config, bytes);
+        }
+        if (result != OK || *bytes == 0) {
+            return BAD_VALUE;
+        }
+        return result;
+    };
+
     // Change parameters of the configuration each iteration until we find a
     // configuration that the device will support, or HAL suggests what it supports.
     audio_config_t config = AUDIO_CONFIG_INITIALIZER;
@@ -1979,16 +1999,15 @@ size_t AudioFlinger::getInputBufferSize(uint32_t sampleRate, audio_format_t form
                 config.sample_rate = testSampleRate;
 
                 size_t bytes = 0;
-                audio_config_t loopConfig = config;
-                status_t result = dev->getInputBufferSize(&config, &bytes);
-                if (result == BAD_VALUE) {
-                    // Retry with the config suggested by the HAL.
-                    result = dev->getInputBufferSize(&config, &bytes);
+                ret = BAD_VALUE;
+                for (const AudioHwDevice* dev : mInputBufferSizeOrderedDevs) {
+                    ret = getInputBufferSize(dev->hwDevice(), config, &bytes);
+                    if (ret == OK) {
+                        break;
+                    }
                 }
-                if (result != OK || bytes == 0) {
-                    config = loopConfig;
-                    continue;
-                }
+                if (ret == BAD_VALUE) continue;
+
                 if (config.sample_rate != sampleRate || config.channel_mask != channelMask ||
                     config.format != format) {
                     uint32_t dstChannelCount = audio_channel_count_from_in_mask(channelMask);
@@ -2170,6 +2189,13 @@ void AudioFlinger::onSupportedLatencyModesChanged(
     for (size_t i = 0; i < size; i++) {
         mNotificationClients.valueAt(i)->audioFlingerClient()
                 ->onSupportedLatencyModesChanged(outputAidl, modesAidl);
+    }
+}
+
+void AudioFlinger::onHardError(std::set<audio_port_handle_t>& trackPortIds) {
+    ALOGI("releasing tracks due to a hard error occurred on an I/O thread");
+    for (const auto portId : trackPortIds) {
+        AudioSystem::releaseOutput(portId);
     }
 }
 
@@ -2610,10 +2636,41 @@ AudioHwDevice* AudioFlinger::loadHwModule_ll(const char *name)
     }
 
     mAudioHwDevs.add(handle, audioDevice);
+    if (strcmp(name, AUDIO_HARDWARE_MODULE_ID_STUB) != 0) {
+        mInputBufferSizeOrderedDevs.insert(audioDevice);
+    }
 
     ALOGI("loadHwModule() Loaded %s audio interface, handle %d", name, handle);
 
     return audioDevice;
+}
+
+// Sort AudioHwDevice to be traversed in the getInputBufferSize call in the following order:
+// Primary, Usb, Bluetooth, A2DP, other modules, remote submix.
+/* static */
+bool AudioFlinger::inputBufferSizeDevsCmp(const AudioHwDevice* lhs, const AudioHwDevice* rhs) {
+    static const std::map<std::string_view, int> kPriorities = {
+        { AUDIO_HARDWARE_MODULE_ID_PRIMARY, 0 }, { AUDIO_HARDWARE_MODULE_ID_USB, 1 },
+        { AUDIO_HARDWARE_MODULE_ID_BLUETOOTH, 2 }, { AUDIO_HARDWARE_MODULE_ID_A2DP, 3 },
+        { AUDIO_HARDWARE_MODULE_ID_REMOTE_SUBMIX, std::numeric_limits<int>::max() }
+    };
+
+    const std::string_view lhsName = lhs->moduleName();
+    const std::string_view rhsName = rhs->moduleName();
+
+    auto lhsPriority = std::numeric_limits<int>::max() - 1;
+    if (const auto lhsIt = kPriorities.find(lhsName); lhsIt != kPriorities.end()) {
+        lhsPriority = lhsIt->second;
+    }
+    auto rhsPriority = std::numeric_limits<int>::max() - 1;
+    if (const auto rhsIt = kPriorities.find(rhsName); rhsIt != kPriorities.end()) {
+        rhsPriority = rhsIt->second;
+    }
+
+    if (lhsPriority != rhsPriority) {
+        return lhsPriority < rhsPriority;
+    }
+    return lhsName < rhsName;
 }
 
 // ----------------------------------------------------------------------------
@@ -3894,7 +3951,8 @@ void AudioFlinger::updateSecondaryOutputsForTrack_l(
                                                        patchRecord->bufferSize(),
                                                        outputFlags,
                                                        0ns /* timeout */,
-                                                       frameCountToBeReady);
+                                                       frameCountToBeReady,
+                                                       track->getSpeed());
         status = patchTrack->initCheck();
         if (status != NO_ERROR) {
             ALOGE("Secondary output patchTrack init failed: %d", status);
@@ -4512,6 +4570,10 @@ NO_THREAD_SAFETY_ANALYSIS
             if ((pt->type() == IAfThreadBase::MIXER || pt->type() == IAfThreadBase::OFFLOAD) &&
                     ((sessionType & IAfThreadBase::EFFECT_SESSION) != 0)) {
                 srcThread = pt.get();
+                if (srcThread == dstThread) {
+                    ALOGD("%s() same dst and src threads, ignoring move", __func__);
+                    return NO_ERROR;
+                }
                 ALOGW("%s() found srcOutput %d hosting AUDIO_SESSION_OUTPUT_MIX", __func__,
                       pt->id());
                 break;
@@ -4918,6 +4980,30 @@ status_t AudioFlinger::getAudioMixPort(const struct audio_port_v7 *devicePort,
     return mPatchPanel->getAudioMixPort_l(devicePort, mixPort);
 }
 
+status_t AudioFlinger::setTracksInternalMute(
+        const std::vector<media::TrackInternalMuteInfo>& tracksInternalMute) {
+    audio_utils::lock_guard _l(mutex());
+    ALOGV("%s", __func__);
+
+    std::map<audio_port_handle_t, bool> tracksInternalMuteMap;
+    for (const auto& trackInternalMute : tracksInternalMute) {
+        audio_port_handle_t portId = VALUE_OR_RETURN_STATUS(
+                aidl2legacy_int32_t_audio_port_handle_t(trackInternalMute.portId));
+        tracksInternalMuteMap.emplace(portId, trackInternalMute.muted);
+    }
+    for (size_t i = 0; i < mPlaybackThreads.size() && !tracksInternalMuteMap.empty(); i++) {
+        mPlaybackThreads.valueAt(i)->setTracksInternalMute(&tracksInternalMuteMap);
+    }
+    return NO_ERROR;
+}
+
+status_t AudioFlinger::resetReferencesForTest() {
+    mDeviceEffectManager.clear();
+    mPatchPanel.clear();
+    mMelReporter->resetReferencesForTest();
+    return NO_ERROR;
+}
+
 // ----------------------------------------------------------------------------
 
 status_t AudioFlinger::onTransactWrapper(TransactionCode code,
@@ -4952,6 +5038,8 @@ status_t AudioFlinger::onTransactWrapper(TransactionCode code,
         case TransactionCode::INVALIDATE_TRACKS:
         case TransactionCode::GET_AUDIO_POLICY_CONFIG:
         case TransactionCode::GET_AUDIO_MIX_PORT:
+        case TransactionCode::SET_TRACKS_INTERNAL_MUTE:
+        case TransactionCode::RESET_REFERENCES_FOR_TEST:
             ALOGW("%s: transaction %d received from PID %d",
                   __func__, static_cast<int>(code), IPCThreadState::self()->getCallingPid());
             // return status only for non void methods

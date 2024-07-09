@@ -317,6 +317,7 @@ aidl_interface {
         "aidl/android/media/DeviceConnectedState.aidl",
         "aidl/android/media/EffectDescriptor.aidl",
         "aidl/android/media/SurroundSoundConfig.aidl",
+        "aidl/android/media/TrackInternalMuteInfo.aidl",
         "aidl/android/media/TrackSecondaryOutputInfo.aidl",
     ],
     defaults: [
@@ -459,6 +460,7 @@ aidl_interface {
         "latest_android_media_audio_common_types_import_interface",
     ],
     imports: [
+        "audio-permission-aidl",
         "audioclient-types-aidl",
         "audiopolicy-types-aidl",
         "capture_state_listener-aidl",

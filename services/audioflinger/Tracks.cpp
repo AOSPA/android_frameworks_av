@@ -913,7 +913,7 @@ void Track::appendDumpHeader(String8& result) const
                         "  Format Chn mask  SRate "
                         "ST Usg CT "
                         " G db  L dB  R dB  VS dB "
-                        "  Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect"
+                        "  Server FrmCnt  FrmRdy F Underruns  Flushed BitPerfect InternalMute"
                         "%s\n",
                         isServerLatencySupported() ? "   Latency" : "");
 }
@@ -999,7 +999,7 @@ void Track::appendDump(String8& result, bool active) const
                         "%08X %08X %6u "
                         "%2u %3x %2x "
                         "%5.2g %5.2g %5.2g %5.2g%c "
-                        "%08X %6zu%c %6zu %c %9u%c %7u %10s",
+                        "%08X %6zu%c %6zu %c %9u%c %7u %10s %12s",
             active ? "yes" : "no",
             (mClient == 0) ? getpid() : mClient->pid(),
             mSessionId,
@@ -1029,7 +1029,8 @@ void Track::appendDump(String8& result, bool active) const
             mAudioTrackServerProxy->getUnderrunFrames(),
             nowInUnderrun,
             (unsigned)mAudioTrackServerProxy->framesFlushed() % 10000000,
-            isBitPerfect() ? "true" : "false"
+            isBitPerfect() ? "true" : "false",
+            getInternalMute() ? "true" : "false"
             );
 
     if (isServerLatencySupported()) {
@@ -2445,10 +2446,11 @@ sp<IAfPatchTrack> IAfPatchTrack::create(
         size_t bufferSize,
         audio_output_flags_t flags,
         const Timeout& timeout,
-        size_t frameCountToBeReady /** Default behaviour is to start
+        size_t frameCountToBeReady, /** Default behaviour is to start
                                          *  as soon as possible to have
                                          *  the lowest possible latency
-                                         *  even if it might glitch. */)
+                                         *  even if it might glitch. */
+        float speed)
 {
     return sp<PatchTrack>::make(
             playbackThread,
@@ -2461,7 +2463,8 @@ sp<IAfPatchTrack> IAfPatchTrack::create(
             bufferSize,
             flags,
             timeout,
-            frameCountToBeReady);
+            frameCountToBeReady,
+            speed);
 }
 
 PatchTrack::PatchTrack(IAfPlaybackThread* playbackThread,
@@ -2474,17 +2477,26 @@ PatchTrack::PatchTrack(IAfPlaybackThread* playbackThread,
                                                      size_t bufferSize,
                                                      audio_output_flags_t flags,
                                                      const Timeout& timeout,
-                                                     size_t frameCountToBeReady)
+                                                     size_t frameCountToBeReady,
+                                                     float speed)
     :   Track(playbackThread, NULL, streamType,
               audio_attributes_t{} /* currently unused for patch track */,
               sampleRate, format, channelMask, frameCount,
               buffer, bufferSize, nullptr /* sharedBuffer */,
               AUDIO_SESSION_NONE, getpid(), audioServerAttributionSource(getpid()), flags,
-              TYPE_PATCH, AUDIO_PORT_HANDLE_NONE, frameCountToBeReady),
-        PatchTrackBase(mCblk ? new ClientProxy(mCblk, mBuffer, frameCount, mFrameSize, true, true)
-                        : nullptr,
+              TYPE_PATCH, AUDIO_PORT_HANDLE_NONE, frameCountToBeReady, speed),
+        PatchTrackBase(mCblk ? new AudioTrackClientProxy(mCblk, mBuffer, frameCount, mFrameSize,
+                        true /*clientInServer*/) : nullptr,
                        playbackThread, timeout)
 {
+    if (mProxy != nullptr) {
+        sp<AudioTrackClientProxy>::cast(mProxy)->setPlaybackRate({
+                /* .mSpeed = */ speed,
+                /* .mPitch = */ AUDIO_TIMESTRETCH_PITCH_NORMAL,
+                /* .mStretchMode = */ AUDIO_TIMESTRETCH_STRETCH_DEFAULT,
+                /* .mFallbackMode = */ AUDIO_TIMESTRETCH_FALLBACK_FAIL
+        });
+    }
     ALOGV("%s(%d): sampleRate %d mPeerTimeout %d.%03d sec",
                                       __func__, mId, sampleRate,
                                       (int)mPeerTimeout.tv_sec,

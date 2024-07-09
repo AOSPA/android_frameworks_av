@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "Exif.h"
@@ -51,7 +52,6 @@
 #include "util/EglFramebuffer.h"
 #include "util/JpegUtil.h"
 #include "util/MetadataUtil.h"
-#include "util/TestPatternHelper.h"
 #include "util/Util.h"
 #include "utils/Errors.h"
 
@@ -79,6 +79,15 @@ using ::android::hardware::camera::common::helper::ExifUtils;
 
 namespace {
 
+// helper type for the visitor
+template <class... Ts>
+struct overloaded : Ts... {
+  using Ts::operator()...;
+};
+// explicit deduction guide (not needed as of C++20)
+template <class... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
+
 using namespace std::chrono_literals;
 
 static constexpr std::chrono::milliseconds kAcquireFenceTimeout = 500ms;
@@ -89,6 +98,8 @@ static constexpr std::chrono::milliseconds kAcquireFenceTimeout = 500ms;
 static constexpr uint8_t kPipelineDepth = 2;
 
 static constexpr size_t kJpegThumbnailBufferSize = 32 * 1024;  // 32 KiB
+
+static constexpr UpdateTextureTask kUpdateTextureTask;
 
 CameraMetadata createCaptureResultMetadata(
     const std::chrono::nanoseconds timestamp,
@@ -278,6 +289,31 @@ std::vector<uint8_t> createExif(
   return app1Data;
 }
 
+std::chrono::nanoseconds getMaxFrameDuration(
+    const RequestSettings& requestSettings) {
+  if (requestSettings.fpsRange.has_value()) {
+    return std::chrono::nanoseconds(static_cast<uint64_t>(
+        1e9 / std::max(1, requestSettings.fpsRange->minFps)));
+  }
+  return std::chrono::nanoseconds(
+      static_cast<uint64_t>(1e9 / VirtualCameraDevice::kMinFps));
+}
+
+class FrameAvailableListenerProxy : public ConsumerBase::FrameAvailableListener {
+ public:
+  FrameAvailableListenerProxy(std::function<void()> callback)
+      : mOnFrameAvailableCallback(callback) {
+  }
+
+  virtual void onFrameAvailable(const BufferItem&) override {
+    ALOGV("%s: onFrameAvailable", __func__);
+    mOnFrameAvailableCallback();
+  }
+
+ private:
+  std::function<void()> mOnFrameAvailableCallback;
+};
+
 }  // namespace
 
 CaptureRequestBuffer::CaptureRequestBuffer(int streamId, int bufferId,
@@ -300,12 +336,12 @@ sp<Fence> CaptureRequestBuffer::getFence() const {
 VirtualCameraRenderThread::VirtualCameraRenderThread(
     VirtualCameraSessionContext& sessionContext,
     const Resolution inputSurfaceSize, const Resolution reportedSensorSize,
-    std::shared_ptr<ICameraDeviceCallback> cameraDeviceCallback, bool testMode)
+    std::shared_ptr<ICameraDeviceCallback> cameraDeviceCallback)
     : mCameraDeviceCallback(cameraDeviceCallback),
       mInputSurfaceSize(inputSurfaceSize),
       mReportedSensorSize(reportedSensorSize),
-      mTestMode(testMode),
-      mSessionContext(sessionContext) {
+      mSessionContext(sessionContext),
+      mInputSurfaceFuture(mInputSurfacePromise.get_future()) {
 }
 
 VirtualCameraRenderThread::~VirtualCameraRenderThread() {
@@ -336,9 +372,25 @@ const RequestSettings& ProcessCaptureRequestTask::getRequestSettings() const {
   return mRequestSettings;
 }
 
+void VirtualCameraRenderThread::requestTextureUpdate() {
+  std::lock_guard<std::mutex> lock(mLock);
+  // If queue is not empty, we don't need to set the mTextureUpdateRequested
+  // flag, since the texture will be updated during ProcessCaptureRequestTask
+  // processing anyway.
+  if (mQueue.empty()) {
+    mTextureUpdateRequested = true;
+    mCondVar.notify_one();
+  }
+}
+
 void VirtualCameraRenderThread::enqueueTask(
     std::unique_ptr<ProcessCaptureRequestTask> task) {
   std::lock_guard<std::mutex> lock(mLock);
+  // When enqueving process capture request task, clear the
+  // mTextureUpdateRequested flag. If this flag is set, the texture was not yet
+  // updated and it will be updated when processing ProcessCaptureRequestTask
+  // anyway.
+  mTextureUpdateRequested = false;
   mQueue.emplace_back(std::move(task));
   mCondVar.notify_one();
 }
@@ -365,11 +417,10 @@ void VirtualCameraRenderThread::stop() {
 }
 
 sp<Surface> VirtualCameraRenderThread::getInputSurface() {
-  return mInputSurfacePromise.get_future().get();
+  return mInputSurfaceFuture.get();
 }
 
-std::unique_ptr<ProcessCaptureRequestTask>
-VirtualCameraRenderThread::dequeueTask() {
+RenderThreadTask VirtualCameraRenderThread::dequeueTask() {
   std::unique_lock<std::mutex> lock(mLock);
   // Clang's thread safety analysis doesn't perform alias analysis,
   // so it doesn't support moveable std::unique_lock.
@@ -380,12 +431,20 @@ VirtualCameraRenderThread::dequeueTask() {
   ScopedLockAssertion lockAssertion(mLock);
 
   mCondVar.wait(lock, [this]() REQUIRES(mLock) {
-    return mPendingExit || !mQueue.empty();
+    return mPendingExit || mTextureUpdateRequested || !mQueue.empty();
   });
   if (mPendingExit) {
-    return nullptr;
+    // Render thread task with null task signals render thread to terminate.
+    return RenderThreadTask(nullptr);
   }
-  std::unique_ptr<ProcessCaptureRequestTask> task = std::move(mQueue.front());
+  if (mTextureUpdateRequested) {
+    // If mTextureUpdateRequested, it's guaranteed the queue is empty, return
+    // kUpdateTextureTask to signal we want render thread to update the texture
+    // (consume buffer from the queue).
+    mTextureUpdateRequested = false;
+    return RenderThreadTask(kUpdateTextureTask);
+  }
+  RenderThreadTask task(std::move(mQueue.front()));
   mQueue.pop_front();
   return task;
 }
@@ -400,15 +459,23 @@ void VirtualCameraRenderThread::threadLoop() {
       EglTextureProgram::TextureFormat::RGBA);
   mEglSurfaceTexture = std::make_unique<EglSurfaceTexture>(
       mInputSurfaceSize.width, mInputSurfaceSize.height);
+  sp<FrameAvailableListenerProxy> frameAvailableListener =
+      sp<FrameAvailableListenerProxy>::make(
+          [this]() { requestTextureUpdate(); });
+  mEglSurfaceTexture->setFrameAvailableListener(frameAvailableListener);
 
-  sp<Surface> inputSurface = mEglSurfaceTexture->getSurface();
-  if (mTestMode) {
-    inputSurface->connect(NATIVE_WINDOW_API_CPU, false, nullptr);
-  }
   mInputSurfacePromise.set_value(mEglSurfaceTexture->getSurface());
 
-  while (std::unique_ptr<ProcessCaptureRequestTask> task = dequeueTask()) {
-    processCaptureRequest(*task);
+  while (RenderThreadTask task = dequeueTask()) {
+    std::visit(
+        overloaded{[this](const std::unique_ptr<ProcessCaptureRequestTask>& t) {
+                     processTask(*t);
+                   },
+                   [this](const UpdateTextureTask&) {
+                     ALOGV("Idle update of the texture");
+                     mEglSurfaceTexture->updateTexture();
+                   }},
+        task);
   }
 
   // Destroy EGL utilities still on the render thread.
@@ -420,18 +487,12 @@ void VirtualCameraRenderThread::threadLoop() {
   ALOGV("Render thread exiting");
 }
 
-void VirtualCameraRenderThread::processCaptureRequest(
+void VirtualCameraRenderThread::processTask(
     const ProcessCaptureRequestTask& request) {
-  if (mTestMode) {
-    // In test mode let's just render something to the Surface ourselves.
-    renderTestPatternYCbCr420(mEglSurfaceTexture->getSurface(),
-                              request.getFrameNumber());
-  }
-
   std::chrono::nanoseconds timestamp =
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch());
-  std::chrono::nanoseconds lastAcquisitionTimestamp(
+  const std::chrono::nanoseconds lastAcquisitionTimestamp(
       mLastAcquisitionTimestampNanoseconds.exchange(timestamp.count(),
                                                     std::memory_order_relaxed));
 
@@ -461,6 +522,29 @@ void VirtualCameraRenderThread::processCaptureRequest(
     }
   }
 
+  // Calculate the maximal amount of time we can afford to wait for next frame.
+  const std::chrono::nanoseconds maxFrameDuration =
+      getMaxFrameDuration(request.getRequestSettings());
+  const std::chrono::nanoseconds elapsedDuration =
+      timestamp - lastAcquisitionTimestamp;
+  if (elapsedDuration < maxFrameDuration) {
+    // We can afford to wait for next frame.
+    // Note that if there's already new frame in the input Surface, the call
+    // below returns immediatelly.
+    bool gotNewFrame = mEglSurfaceTexture->waitForNextFrame(maxFrameDuration -
+                                                            elapsedDuration);
+    timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch());
+    if (!gotNewFrame) {
+      ALOGV(
+          "%s: No new frame received on input surface after waiting for "
+          "%" PRIu64 "ns, repeating last frame.",
+          __func__,
+          static_cast<uint64_t>((timestamp - lastAcquisitionTimestamp).count()));
+    }
+    mLastAcquisitionTimestampNanoseconds.store(timestamp.count(),
+                                               std::memory_order_relaxed);
+  }
   // Acquire new (most recent) image from the Surface.
   mEglSurfaceTexture->updateTexture();
 
@@ -666,7 +750,7 @@ ndk::ScopedAStatus VirtualCameraRenderThread::renderIntoBlobStreamBuffer(
     return status;
   }
 
-  PlanesLockGuard planesLock(hwBuffer, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY,
+  PlanesLockGuard planesLock(hwBuffer, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
                              fence);
   if (planesLock.getStatus() != OK) {
     return cameraStatus(Status::INTERNAL_ERROR);
@@ -749,8 +833,8 @@ ndk::ScopedAStatus VirtualCameraRenderThread::renderIntoEglFramebuffer(
 
   Rect viewportRect =
       viewport.value_or(Rect(framebuffer.getWidth(), framebuffer.getHeight()));
-  glViewport(viewportRect.leftTop().x, viewportRect.leftTop().y,
-             viewportRect.getWidth(), viewportRect.getHeight());
+  glViewport(viewportRect.left, viewportRect.top, viewportRect.getWidth(),
+             viewportRect.getHeight());
 
   sp<GraphicBuffer> textureBuffer = mEglSurfaceTexture->getCurrentBuffer();
   if (textureBuffer == nullptr) {

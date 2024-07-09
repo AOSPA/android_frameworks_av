@@ -18,6 +18,7 @@
 #define ANDROID_COMPANION_VIRTUALCAMERA_EGLPROGRAM_H
 
 #include <array>
+#include <chrono>
 
 #include "GLES/gl.h"
 
@@ -45,8 +46,14 @@ class EglProgram {
 class EglTestPatternProgram : public EglProgram {
  public:
   EglTestPatternProgram();
+  virtual ~EglTestPatternProgram();
 
-  bool draw(int width, int height, int frameNumber);
+  bool draw(std::chrono::nanoseconds timestamp);
+
+ private:
+  int mPositionHandle = -1;
+  int mTextureCoordHandle = -1;
+  int mCHandle = -1;
 };
 
 // Shader program to  draw texture.

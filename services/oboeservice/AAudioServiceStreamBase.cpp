@@ -22,6 +22,7 @@
 #include <iostream>
 #include <mutex>
 
+#include <com_android_media_aaudio.h>
 #include <media/MediaMetricsItem.h>
 #include <media/TypeConverter.h>
 #include <mediautils/SchedulingPolicyService.h>
@@ -219,12 +220,16 @@ aaudio_result_t AAudioServiceStreamBase::close_l() {
     return closeAndClear();
 }
 
-aaudio_result_t AAudioServiceStreamBase::startDevice() {
+aaudio_result_t AAudioServiceStreamBase::startDevice_l() {
     mClientHandle = AUDIO_PORT_HANDLE_NONE;
     sp<AAudioServiceEndpoint> endpoint = mServiceEndpointWeak.promote();
     if (endpoint == nullptr) {
         ALOGE("%s() has no endpoint", __func__);
         return AAUDIO_ERROR_INVALID_STATE;
+    }
+    if (!endpoint->isConnected()) {
+        ALOGE("%s() endpoint was already disconnected", __func__);
+        return AAUDIO_ERROR_DISCONNECTED;
     }
     return endpoint->startStream(this, &mClientHandle);
 }
@@ -274,7 +279,7 @@ aaudio_result_t AAudioServiceStreamBase::start_l() {
     mAtomicStreamTimestamp.clear();
 
     mClientHandle = AUDIO_PORT_HANDLE_NONE;
-    result = startDevice();
+    result = startDevice_l();
     if (result != AAUDIO_OK) goto error;
 
     // This should happen at the end of the start.
@@ -333,6 +338,7 @@ aaudio_result_t AAudioServiceStreamBase::stop() {
 aaudio_result_t AAudioServiceStreamBase::stop_l() {
     aaudio_result_t result = AAUDIO_OK;
     if (!isRunning()) {
+        ALOGW("%s() stream not running, returning early", __func__);
         return result;
     }
     const int64_t beginNs = AudioClock::getNanoseconds();
@@ -397,6 +403,7 @@ aaudio_result_t AAudioServiceStreamBase::flush_l() {
 }
 
 // implement Runnable, periodically send timestamps to client and process commands from queue.
+// Enter standby mode if idle for a while.
 __attribute__((no_sanitize("integer")))
 void AAudioServiceStreamBase::run() {
     ALOGD("%s() %s entering >>>>>>>>>>>>>> COMMANDS", __func__, getTypeText());
@@ -405,6 +412,7 @@ void AAudioServiceStreamBase::run() {
     TimestampScheduler timestampScheduler;
     int64_t nextTimestampReportTime;
     int64_t nextDataReportTime;
+    // When to try to enter standby.
     int64_t standbyTime = AudioClock::getNanoseconds() + IDLE_TIMEOUT_NANOS;
     // Balance the incStrong from when the thread was launched.
     holdStream->decStrong(nullptr);
@@ -416,28 +424,26 @@ void AAudioServiceStreamBase::run() {
     int32_t loopCount = 0;
     while (mThreadEnabled.load()) {
         loopCount++;
-        int64_t timeoutNanos = -1;
-        if (isDisconnected_l()) {
-            if (!isStandby_l()) {
-                // If the stream is disconnected but not in standby mode, wait until standby time.
+        int64_t timeoutNanos = -1; // wait forever
+        if (isDisconnected_l() || isIdle_l()) {
+            if (isStandbyImplemented() && !isStandby_l()) {
+                // If not in standby mode, wait until standby time.
                 timeoutNanos = standbyTime - AudioClock::getNanoseconds();
                 timeoutNanos = std::max<int64_t>(0, timeoutNanos);
-            } // else {
-                // If the stream is disconnected and in standby mode, keep `timeoutNanos` as
-                // -1 to wait forever until next command as the stream can only be closed.
-            // }
-        } else if (isRunning() || (isIdle_l() && !isStandby_l())) {
-            timeoutNanos = (isRunning() ? std::min(nextTimestampReportTime, nextDataReportTime)
-                                        : standbyTime) - AudioClock::getNanoseconds();
+            }
+            // Otherwise, keep `timeoutNanos` as -1 to wait forever until next command.
+        } else if (isRunning()) {
+            timeoutNanos = std::min(nextTimestampReportTime, nextDataReportTime)
+                    - AudioClock::getNanoseconds();
             timeoutNanos = std::max<int64_t>(0, timeoutNanos);
         }
-
         auto command = mCommandQueue.waitForCommand(timeoutNanos);
         if (!mThreadEnabled) {
             // Break the loop if the thread is disabled.
             break;
         }
 
+        // Is it time to send timestamps?
         if (isRunning() && !isDisconnected_l()) {
             auto currentTimestamp = AudioClock::getNanoseconds();
             if (currentTimestamp >= nextDataReportTime) {
@@ -453,19 +459,24 @@ void AAudioServiceStreamBase::run() {
                 nextTimestampReportTime = timestampScheduler.nextAbsoluteTime();
             }
         }
-        if ((isIdle_l() || isDisconnected_l()) && AudioClock::getNanoseconds() >= standbyTime) {
+
+        // Is it time to enter standby?
+        if ((isIdle_l() || isDisconnected_l())
+                && isStandbyImplemented()
+                && !isStandby_l()
+                && (AudioClock::getNanoseconds() >= standbyTime)) {
+            ALOGD("%s() call standby_l(), %d loops", __func__, loopCount);
             aaudio_result_t result = standby_l();
             if (result != AAUDIO_OK) {
-                // If standby failed because of the function is not implemented, there is no
-                // need to retry. Otherwise, retry standby later.
-                ALOGW("Failed to enter standby, error=%d", result);
-                standbyTime = result == AAUDIO_ERROR_UNIMPLEMENTED
-                        ? std::numeric_limits<int64_t>::max()
-                        : AudioClock::getNanoseconds() + IDLE_TIMEOUT_NANOS;
+                ALOGW("Failed to enter standby, error = %d", result);
+                // Try again later.
+                standbyTime = AudioClock::getNanoseconds() + IDLE_TIMEOUT_NANOS;
             }
         }
 
         if (command != nullptr) {
+            ALOGD("%s() got COMMAND opcode %d after %d loops",
+                    __func__, command->operationCode, loopCount);
             std::scoped_lock<std::mutex> _commandLock(command->lock);
             switch (command->operationCode) {
                 case START:
@@ -519,6 +530,18 @@ void AAudioServiceStreamBase::run() {
                     command->result = param == nullptr ? AAUDIO_ERROR_ILLEGAL_ARGUMENT
                                                        : exitStandby_l(param->mParcelable);
                     standbyTime = AudioClock::getNanoseconds() + IDLE_TIMEOUT_NANOS;
+                } break;
+                case START_CLIENT: {
+                    auto param = (StartClientParam *) command->parameter.get();
+                    command->result = param == nullptr ? AAUDIO_ERROR_ILLEGAL_ARGUMENT
+                                                       : startClient_l(param->mClient,
+                                                                       param->mAttr,
+                                                                       param->mClientHandle);
+                } break;
+                case STOP_CLIENT: {
+                    auto param = (StopClientParam *) command->parameter.get();
+                    command->result = param == nullptr ? AAUDIO_ERROR_ILLEGAL_ARGUMENT
+                                                       : stopClient_l(param->mClientHandle);
                 } break;
                 default:
                     ALOGE("Invalid command op code: %d", command->operationCode);
@@ -727,6 +750,26 @@ aaudio_result_t AAudioServiceStreamBase::exitStandby(AudioEndpointParcelable *pa
     auto command = std::make_shared<AAudioCommand>(
             EXIT_STANDBY,
             std::make_shared<ExitStandbyParam>(parcelable),
+            true /*waitForReply*/,
+            TIMEOUT_NANOS);
+    return mCommandQueue.sendCommand(command);
+}
+
+aaudio_result_t AAudioServiceStreamBase::sendStartClientCommand(const android::AudioClient &client,
+                                                                const audio_attributes_t *attr,
+                                                                audio_port_handle_t *clientHandle) {
+    auto command = std::make_shared<AAudioCommand>(
+            START_CLIENT,
+            std::make_shared<StartClientParam>(client, attr, clientHandle),
+            true /*waitForReply*/,
+            TIMEOUT_NANOS);
+    return mCommandQueue.sendCommand(command);
+}
+
+aaudio_result_t AAudioServiceStreamBase::sendStopClientCommand(audio_port_handle_t clientHandle) {
+    auto command = std::make_shared<AAudioCommand>(
+            STOP_CLIENT,
+            std::make_shared<StopClientParam>(clientHandle),
             true /*waitForReply*/,
             TIMEOUT_NANOS);
     return mCommandQueue.sendCommand(command);
