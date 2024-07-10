@@ -713,7 +713,7 @@ public:
              uint32_t mRightVolume;      // previous volume on right channel
              uint32_t mNewLeftVolume;       // new volume on left channel
              uint32_t mNewRightVolume;      // new volume on right channel
-             product_strategy_t mStrategy; // strategy for this effect chain
+             product_strategy_t mStrategy = PRODUCT_STRATEGY_NONE; // strategy for this effect chain
              // mSuspendedEffects lists all effects currently suspended in the chain.
              // Use effect type UUID timelow field as key. There is no real risk of identical
              // timeLow fields among effect type UUIDs.
@@ -808,7 +808,7 @@ private:
         void checkSuspendOnEffectEnabled(const sp<IAfEffectBase>& effect __unused,
                               bool enabled __unused, bool threadLocked __unused) override {}
         void resetVolume_l() override REQUIRES(audio_utils::EffectChain_Mutex) {}
-        product_strategy_t strategy() const override  { return static_cast<product_strategy_t>(0); }
+        product_strategy_t strategy() const override  { return PRODUCT_STRATEGY_NONE; }
         int32_t activeTrackCnt() const override { return 0; }
         void onEffectEnable(const sp<IAfEffectBase>& effect __unused) override;
         void onEffectDisable(const sp<IAfEffectBase>& effect __unused) override;
