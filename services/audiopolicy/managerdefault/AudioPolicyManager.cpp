@@ -1707,6 +1707,10 @@ status_t AudioPolicyManager::openDirectOutput(audio_stream_type_t stream,
             ALOGW("%s profile %s can't open new mmap output maxOpenCount reached", __func__,
                   profile->getName().c_str());
             return NAME_NOT_FOUND;
+        } else if (profile->getFlags() == AUDIO_OUTPUT_FLAG_DIRECT) {
+            ALOGW("%s profile %s can't open new direct pcm output for session %d"
+                   " maxOpenCount reached", __func__, profile->getName().c_str(), session);
+             return NAME_NOT_FOUND;
         } else {
             // Close outputs on this profile, if available, to free resources for this request
             for (int i = 0; i < mOutputs.size() && !profile->canOpenNewIo(); i++) {

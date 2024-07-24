@@ -86,8 +86,8 @@ StreamHalAidl::StreamHalAidl(
           mStream(stream),
           mVendorExt(vext),
           mLastReplyLifeTimeNs(
-                  std::min(static_cast<size_t>(100),
-                          2 * mContext.getBufferDurationMs(mConfig.sample_rate))
+                  std::min(static_cast<size_t>(20),
+                           mContext.getBufferDurationMs(mConfig.sample_rate))
                   * NANOS_PER_MILLISECOND)
 {
     ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
@@ -800,6 +800,14 @@ status_t StreamOutHalAidl::supportsDrain(bool *supportsDrain) {
 }
 
 status_t StreamOutHalAidl::drain(bool earlyNotify) {
+    if (!mStream) return NO_INIT;
+
+    if(const auto state = getState(); state == StreamDescriptor::State::IDLE) {
+        ALOGD("%p %s stream already in IDLE state", this, __func__);
+        if(mContext.isAsynchronous()) onDrainReady();
+        return OK;
+    }
+
     return StreamHalAidl::drain(earlyNotify);
 }
 
