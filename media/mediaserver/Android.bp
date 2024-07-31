@@ -26,14 +26,14 @@ cc_library_static {
 }
 
 prebuilt_etc {
-    name: "mediaserver.zygote64_32.rc",
-    src: "mediaserver.zygote64_32.rc",
+    name: "mediaserver.64bit_true.rc",
+    src: "mediaserver.64bit_true.rc",
     sub_dir: "init/hw",
 }
 
 prebuilt_etc {
-    name: "mediaserver.zygote64.rc",
-    src: "mediaserver.zygote64.rc",
+    name: "mediaserver.64bit_false.rc",
+    src: "mediaserver.64bit_false.rc",
     sub_dir: "init/hw",
 }
 
@@ -99,8 +99,8 @@ mediaserver_cc_binary {
                 },
             },
             required: [
-                "mediaserver.zygote64_32.rc",
-                "mediaserver.zygote64.rc",
+                "mediaserver.64bit_true.rc",
+                "mediaserver.64bit_false.rc",
             ],
             init_rc: ["mediaserver_dynamic.rc"],
             conditions_default: {
