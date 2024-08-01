@@ -515,6 +515,10 @@ C2Fence _C2FenceFactory::CreateSyncFence(int fenceFd, bool validate) {
     return C2Fence(p);
 }
 
+C2Fence _C2FenceFactory::CreateSyncFence(int fenceFd) {
+    return CreateSyncFence(fenceFd, true);
+}
+
 C2Fence _C2FenceFactory::CreateUnorderedMultiSyncFence(
         const std::vector<int>& fenceFds, c2_status_t *status) {
     if (status) {
