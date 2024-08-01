@@ -215,6 +215,11 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
 
     ~StreamHalAidl() override;
 
+    ::aidl::android::hardware::audio::core::StreamDescriptor::State getState() {
+        std::lock_guard l(mLock);
+        return mLastReply.state;
+    }
+
     status_t getLatency(uint32_t *latency);
 
     // Always returns non-negative values.
@@ -267,10 +272,6 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
         result.channel_mask = config.channel_mask;
         result.format = config.format;
         return result;
-    }
-    ::aidl::android::hardware::audio::core::StreamDescriptor::State getState() {
-        std::lock_guard l(mLock);
-        return mLastReply.state;
     }
     // Note: Since `sendCommand` takes mLock while holding mCommandReplyLock, never call
     // it with `mLock` being held.
