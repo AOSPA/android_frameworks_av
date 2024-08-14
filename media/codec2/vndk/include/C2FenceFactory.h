@@ -65,7 +65,7 @@ struct _C2FenceFactory {
      *                          it is a valid pending sync fence fd.
      */
 
-    static C2Fence CreateSyncFence(int fenceFd, bool validate = true);
+    static C2Fence CreateSyncFence(int fenceFd, bool validate /*= true*/);
 
      //Overloading CreateSyncFence for backward compatibility
 
