@@ -230,6 +230,31 @@ class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelper
         return false;
     }
 
+    bool isInPlayOrRecordState(
+            const ::aidl::android::hardware::audio::core::StreamDescriptor::State state) {
+        if (state == ::aidl::android::hardware::audio::core::StreamDescriptor::State::ACTIVE ||
+            state ==
+                    ::aidl::android::hardware::audio::core::StreamDescriptor::State::TRANSFERRING ||
+            state == ::aidl::android::hardware::audio::core::StreamDescriptor::State::DRAINING) {
+            // play or record equivalent states
+            return true;
+        }
+        return false;
+    }
+
+    bool isInPausedState(
+            const ::aidl::android::hardware::audio::core::StreamDescriptor::State& state) {
+        if (state == ::aidl::android::hardware::audio::core::StreamDescriptor::State::PAUSED ||
+            state ==
+                    ::aidl::android::hardware::audio::core::StreamDescriptor::State::DRAIN_PAUSED ||
+            state == ::aidl::android::hardware::audio::core::StreamDescriptor::State::
+                             TRANSFER_PAUSED) {
+            // pause equivalent states
+            return true;
+        }
+        return false;
+    }
+
     status_t getLatency(uint32_t *latency);
 
     // Always returns non-negative values.
