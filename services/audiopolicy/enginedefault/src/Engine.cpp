@@ -286,7 +286,12 @@ DeviceVector Engine::getDevicesForStrategyInt(legacy_strategy strategy,
     switch (strategy) {
 
     case STRATEGY_TRANSMITTED_THROUGH_SPEAKER:
-        devices = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_SPEAKER);
+        if (property_get_bool("vendor.audio.enable.wfdfilteredaudio", false)) {
+            devices = availableOutputDevices.getFirstDevicesFromTypes({AUDIO_DEVICE_OUT_IP,
+                            AUDIO_DEVICE_OUT_SPEAKER});
+        } else {
+           devices = availableOutputDevices.getDevicesFromType(AUDIO_DEVICE_OUT_SPEAKER);
+        }
         break;
 
     case STRATEGY_PHONE: {
