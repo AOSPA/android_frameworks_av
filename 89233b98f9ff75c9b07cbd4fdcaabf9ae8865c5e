@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "unresolved": false,
+      "key": {
+        "uuid": "f5383ed9_c2b1dff3",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 4
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000579
+      },
+      "writtenOn": "2024-10-08T10:17:15Z",
+      "side": 1,
+      "message": "NTCamera works as intended on phone1",
+      "revId": "89233b98f9ff75c9b07cbd4fdcaabf9ae8865c5e",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    }
+  ]
+}
