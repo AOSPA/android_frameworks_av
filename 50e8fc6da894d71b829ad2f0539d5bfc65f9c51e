@@ -16,6 +16,23 @@
       "message": "no software omx in a14 qpr3+",
       "revId": "50e8fc6da894d71b829ad2f0539d5bfc65f9c51e",
       "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
+    },
+    {
+      "unresolved": true,
+      "key": {
+        "uuid": "012e1271_84124817",
+        "filename": "/PATCHSET_LEVEL",
+        "patchSetId": 1
+      },
+      "lineNbr": 0,
+      "author": {
+        "id": 1000895
+      },
+      "writtenOn": "2024-10-09T13:26:56Z",
+      "side": 1,
+      "message": "as i havent switched to c2 cause of dolby it was causing some trace-back issue, and without this commit no spatial audio to be found on streaming platforms.",
+      "revId": "50e8fc6da894d71b829ad2f0539d5bfc65f9c51e",
+      "serverId": "3162e3d8-d894-470e-abd9-724f7b0effad"
     }
   ]
 }
