@@ -421,8 +421,16 @@ status_t StreamHalAidl::pause(StreamDescriptor::Reply* reply) {
     ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    return sendCommand(makeHalCommand<HalCommand::Tag::pause>(), reply,
-            true /*safeFromNonWorkerThread*/);  // The workers stops its I/O activity first.
+
+    if (const auto state = getState(); isInPlayOrRecordState(state)) {
+        return sendCommand(
+                makeHalCommand<HalCommand::Tag::pause>(), reply,
+                true /*safeFromNonWorkerThread*/);  // The workers stops its I/O activity first.
+    } else {
+        ALOGD("%s: already stream in one of the PAUSED kind of states, current state: %s", __func__,
+              toString(state).c_str());
+        return OK;
+    }
 }
 
 status_t StreamHalAidl::resume(StreamDescriptor::Reply* reply) {
@@ -477,8 +485,19 @@ status_t StreamHalAidl::flush(StreamDescriptor::Reply* reply) {
     ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
     TIME_CHECK();
     if (!mStream) return NO_INIT;
-    return sendCommand(makeHalCommand<HalCommand::Tag::flush>(), reply,
-            true /*safeFromNonWorkerThread*/);  // The workers stops its I/O activity first.
+
+    if (const auto state = getState(); isInPausedState(state)) {
+        return sendCommand(
+                makeHalCommand<HalCommand::Tag::flush>(), reply,
+                true /*safeFromNonWorkerThread*/);  // The workers stops its I/O activity first.
+    } else if (isInPlayOrRecordState(state)) {
+        ALOGE("%s: found stream in non-flushable state: %s", __func__, toString(state).c_str());
+        return INVALID_OPERATION;
+    } else {
+        ALOGD("%s: already stream in one of the flushable state: current state: %s", __func__,
+              toString(state).c_str());
+        return OK;
+    }
 }
 
 status_t StreamHalAidl::exit() {
@@ -802,9 +821,9 @@ status_t StreamOutHalAidl::supportsDrain(bool *supportsDrain) {
 status_t StreamOutHalAidl::drain(bool earlyNotify) {
     if (!mStream) return NO_INIT;
 
-    if(const auto state = getState(); state == StreamDescriptor::State::IDLE) {
-        ALOGD("%p %s stream already in IDLE state", this, __func__);
-        if(mContext.isAsynchronous()) onDrainReady();
+    if (const auto state = getState(); isInDrainedState(state)) {
+        ALOGD("%p %s stream already in %s", this, __func__, toString(state).c_str());
+        if (mContext.isAsynchronous()) onDrainReady();
         return OK;
     }
 

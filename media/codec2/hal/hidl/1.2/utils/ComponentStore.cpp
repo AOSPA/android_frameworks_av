@@ -201,6 +201,46 @@ std::shared_ptr<FilterWrapper> ComponentStore::GetFilterWrapper() {
 }
 #endif
 
+std::shared_ptr<MultiAccessUnitInterface> ComponentStore::tryCreateMultiAccessUnitInterface(
+        const std::shared_ptr<C2ComponentInterface> &c2interface) {
+    std::shared_ptr<MultiAccessUnitInterface> multiAccessUnitIntf = nullptr;
+    if (c2interface == nullptr) {
+        return nullptr;
+    }
+    // Framework support for Large audio frame feature depends on:
+    // 1. All feature flags enabled on platform
+    // 2. The capability of the implementation to use the same input buffer
+    //    for different C2Work (C2Config::api_feature_t::API_SAME_INPUT_BUFFER)
+    // 3. Implementation does not inherently support C2LargeFrame::output::PARAM_TYPE param.
+    if (MultiAccessUnitHelper::isEnabledOnPlatform()) {
+        c2_status_t err = C2_OK;
+        C2ComponentDomainSetting domain;
+        C2ApiFeaturesSetting features = (C2Config::api_feature_t)0;
+        err = c2interface->query_vb({&domain, &features}, {}, C2_MAY_BLOCK, nullptr);
+        if (err == C2_OK
+                && (domain.value == C2Component::DOMAIN_AUDIO)
+                && ((features.value & C2Config::api_feature_t::API_SAME_INPUT_BUFFER) != 0)) {
+            std::vector<std::shared_ptr<C2ParamDescriptor>> params;
+            bool isComponentSupportsLargeAudioFrame = false;
+            c2interface->querySupportedParams_nb(&params);
+            for (const auto &paramDesc : params) {
+                if (paramDesc->name().compare(C2_PARAMKEY_OUTPUT_LARGE_FRAME) == 0) {
+                    isComponentSupportsLargeAudioFrame = true;
+                    break;
+                }
+            }
+            if (!isComponentSupportsLargeAudioFrame) {
+                std::shared_ptr<C2ReflectorHelper> multiAccessReflector(new C2ReflectorHelper());
+                multiAccessUnitIntf = std::make_shared<MultiAccessUnitInterface>(
+                        c2interface,
+                        multiAccessReflector);
+                mParamReflectors.push_back(multiAccessReflector);
+            }
+        }
+    }
+    return multiAccessUnitIntf;
+}
+
 // Methods from ::android::hardware::media::c2::V1_0::IComponentStore
 Return<void> ComponentStore::createComponent(
         const hidl_string& name,
@@ -248,7 +288,9 @@ Return<void> ComponentStore::createInterface(
         c2interface = GetFilterWrapper()->maybeWrapInterface(c2interface);
 #endif
         onInterfaceLoaded(c2interface);
-        interface = new ComponentInterface(c2interface, mParameterCache);
+        std::shared_ptr<MultiAccessUnitInterface> multiAccessUnitIntf =
+                tryCreateMultiAccessUnitInterface(c2interface);
+        interface = new ComponentInterface(c2interface, multiAccessUnitIntf, mParameterCache);
     }
     _hidl_cb(static_cast<Status>(res), interface);
     return Void();
