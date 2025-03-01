@@ -88,6 +88,10 @@ status_t HevcParameterSets::addNalUnit(const uint8_t* data, size_t size) {
         case 35:  // AUD
         case 39:  // Prefix SEI
         case 40:  // Suffix SEI
+            if (size < 2) {
+                ALOGE("invalid NAL/PPS size b/35467107");
+                return ERROR_MALFORMED;
+            }
             err = parseSeiMessage(data + 2, size - 2);
             break;
         default:
