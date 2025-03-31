@@ -120,7 +120,6 @@ enum video_encoder {
     VIDEO_ENCODER_VP9 = 6,
     VIDEO_ENCODER_DOLBY_VISION = 7,
     VIDEO_ENCODER_AV1 = 8,
-    VIDEO_ENCODER_MVHEVC = 9,
     VIDEO_ENCODER_LIST_END // must be the last - used to validate the video encoder type
 };
 

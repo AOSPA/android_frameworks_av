@@ -2052,10 +2052,6 @@ status_t StagefrightRecorder::setupVideoEncoder(
             format->setString("mime", MEDIA_MIMETYPE_VIDEO_AV1);
             break;
 
-        case VIDEO_ENCODER_MVHEVC:
-            format->setString("mime", MEDIA_MIMETYPE_VIDEO_MVHEVC);
-            break;
-
         default:
             CHECK(!"Should not be here, unsupported video encoding.");
             break;

@@ -1438,73 +1438,6 @@ status_t convertMetaDataToMessage(
         }
 
         parseHevcProfileLevelFromHvcc((const uint8_t *)data, dataSize, msg);
-        const void *lhvcData;
-        if (meta->findData(kKeyLHVC, &type, &lhvcData, &size)) {
-            const uint8_t *ptr = (const uint8_t *)lhvcData;
-
-            if (size < 6) {
-                ALOGE("b/23680780");
-                return BAD_VALUE;
-            }
-
-            const size_t dataSize = size; // save for later
-            ptr += 5;
-            size -= 5;
-
-            size_t numofArrays = (char)ptr[0];
-            ptr += 1;
-            size -= 1;
-            size_t j = 0, i = 0;
-
-            sp<ABuffer> lhvcBuffer = new (std::nothrow) ABuffer(1024);
-            if (lhvcBuffer.get() == NULL || lhvcBuffer->base() == NULL) {
-                return NO_MEMORY;
-            }
-            lhvcBuffer->setRange(0, 0);
-
-            HevcParameterSets lhvc;
-
-            for (i = 0; i < numofArrays; i++) {
-                if (size < 3) {
-                    ALOGE("b/23680780");
-                    return BAD_VALUE;
-                }
-                ptr += 1;
-                size -= 1;
-
-                //Num of nals
-                size_t numofNals = U16_AT(ptr);
-
-                ptr += 2;
-                size -= 2;
-
-                for (j = 0; j < numofNals; j++) {
-                    if (size < 2) {
-                        ALOGE("b/23680780");
-                        return BAD_VALUE;
-                    }
-                    size_t length = U16_AT(ptr);
-
-                    ptr += 2;
-                    size -= 2;
-
-                    if (size < length) {
-                        return BAD_VALUE;
-                    }
-                    status_t err = copyNALUToABuffer(&lhvcBuffer, ptr, length);
-                    if (err != OK) {
-                        return err;
-                    }
-                    (void)lhvc.addNalUnit(ptr, length);
-
-                    ptr += length;
-                    size -= length;
-                }
-            }
-            lhvcBuffer->meta()->setInt32("csd", true);
-            lhvcBuffer->meta()->setInt64("timeUs", 0);
-            msg->setBuffer("csd-1", lhvcBuffer);
-        }
     } else if (meta->findData(kKeyAV1C, &type, &data, &size)) {
         sp<ABuffer> buffer = new (std::nothrow) ABuffer(size);
         if (buffer.get() == NULL || buffer->base() == NULL) {
@@ -1799,42 +1732,6 @@ static size_t reassembleHVCC(const sp<ABuffer> &csd0, uint8_t *hvcc, size_t hvcc
     }
     return size;
 }
-
-static size_t reassembleLHVC(const sp<ABuffer> &csd1, uint8_t *lhvc, size_t lhvcSize, size_t nalSizeLength) {
-    HevcParameterSets paramSets;
-    uint8_t* data = csd1->data();
-    if (csd1->size() < 4) {
-        ALOGE("csd1 too small");
-        return 0;
-    }
-    if (memcmp(data, "\x00\x00\x00\x01", 4) != 0) {
-        ALOGE("csd1 doesn't start with a start code");
-        return 0;
-    }
-    size_t prevNalOffset = 4;
-    status_t err = OK;
-    for (size_t i = 1; i < csd1->size() - 4; ++i) {
-        if (memcmp(&data[i], "\x00\x00\x00\x01", 4) != 0) {
-            continue;
-        }
-        err = paramSets.addNalUnit(&data[prevNalOffset], i - prevNalOffset);
-        if (err != OK) {
-            return 0;
-        }
-        prevNalOffset = i + 4;
-    }
-    err = paramSets.addNalUnit(&data[prevNalOffset], csd1->size() - prevNalOffset);
-    if (err != OK) {
-        return 0;
-    }
-    size_t size = lhvcSize;
-    err = paramSets.makeLhvc(lhvc, &size, nalSizeLength);
-    if (err != OK) {
-        return 0;
-    }
-    return size;
-}
-
 
 #if 0
 static void convertMessageToMetaDataInt32(
@@ -2199,15 +2096,6 @@ status_t convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
                 size_t outsize = reassembleAVCC(csd0, csd1, avcc.data());
                 meta->setData(kKeyAVCC, kTypeAVCC, avcc.data(), outsize);
             }
-        } else if (mime == MEDIA_MIMETYPE_VIDEO_MVHEVC) {
-            std::vector<uint8_t> hvcc(csd0size + 1024);
-            size_t outsize = reassembleHVCC(csd0, hvcc.data(), hvcc.size(), 4);
-            meta->setData(kKeyHVCC, kTypeHVCC, hvcc.data(), outsize);
-            if (msg->findBuffer("csd-1", &csd1)) {
-                std::vector<uint8_t> lhvc(csd1->size() + 1024);
-                outsize = reassembleLHVC(csd1, lhvc.data(), lhvc.size(), 4);
-                meta->setData(kKeyLHVC, kTypeLHVC, lhvc.data(), outsize);
-            }
         } else if (mime == MEDIA_MIMETYPE_AUDIO_AAC ||
                 mime == MEDIA_MIMETYPE_VIDEO_MPEG4 ||
                 mime == MEDIA_MIMETYPE_AUDIO_WMA ||
@@ -2409,13 +2297,6 @@ status_t convertMessageToMetaData(const sp<AMessage> &msg, sp<MetaData> &meta) {
     } else if ((mime == MEDIA_MIMETYPE_VIDEO_HEVC || mime == MEDIA_MIMETYPE_IMAGE_ANDROID_HEIC)
             && msg->findBuffer("csd-hevc", &csd0)) {
         meta->setData(kKeyHVCC, kTypeHVCC, csd0->data(), csd0->size());
-    } else if (mime == MEDIA_MIMETYPE_VIDEO_MVHEVC) {
-        if (msg->findBuffer("csd-hevc", &csd0)) {
-            meta->setData(kKeyHVCC, kTypeHVCC, csd0->data(), csd0->size());
-        }
-        if (msg->findBuffer("csd-lhevc", &csd1)) {
-            meta->setData(kKeyLHVC, kTypeLHVC, csd1->data(), csd1->size());
-        }
     } else if (msg->findBuffer("esds", &csd0)) {
         meta->setData(kKeyESDS, kTypeESDS, csd0->data(), csd0->size());
     } else if (msg->findBuffer("mpeg2-stream-header", &csd0)) {

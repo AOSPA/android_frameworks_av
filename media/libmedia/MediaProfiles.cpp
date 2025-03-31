@@ -91,7 +91,6 @@ const MediaProfiles::NameToTagMap MediaProfiles::sVideoEncoderNameMap[] = {
     {"m4v",  VIDEO_ENCODER_MPEG_4_SP},
     {"vp8",  VIDEO_ENCODER_VP8},
     {"hevc", VIDEO_ENCODER_HEVC},
-    {"mvhevc", VIDEO_ENCODER_MVHEVC},
     {"vp9",  VIDEO_ENCODER_VP9},
     {"dolbyvision", VIDEO_ENCODER_DOLBY_VISION},
 };
@@ -319,7 +318,6 @@ MediaProfiles::detectAdvancedVideoProfile(
         // flow does not get here
 
     case VIDEO_ENCODER_HEVC:
-    case VIDEO_ENCODER_MVHEVC:
         switch (profile) {
         case HEVCProfileMain:
             return true;

@@ -78,8 +78,6 @@ public:
     virtual int32_t getStartTimeOffsetMs() const { return mStartTimeOffsetMs; }
     virtual status_t setNextFd(int fd);
 
-    status_t setCameraInfo(String8 info);
-
 protected:
     virtual ~MPEG4Writer();
 
@@ -100,9 +98,6 @@ private:
     status_t mInitCheck;
     bool mIsRealTimeRecording;
     bool mIsBackgroundMode;
-    std::map<std::string, std::string> mInfos;
-    bool getStereoCameraInfo(std::string &stereoCamInfo);
-
 protected:
     bool mUse4ByteNalLength;
     bool mIsFileSizeLimitExplicitlyRequested;
