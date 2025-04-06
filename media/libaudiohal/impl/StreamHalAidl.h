@@ -53,7 +53,7 @@ class StreamContextAidl {
 
     StreamContextAidl(
             ::aidl::android::hardware::audio::core::StreamDescriptor& descriptor,
-            bool isAsynchronous)
+            bool isAsynchronous, int ioHandle)
         : mFrameSizeBytes(descriptor.frameSizeBytes),
           mCommandMQ(new CommandMQ(descriptor.command)),
           mReplyMQ(new ReplyMQ(descriptor.reply)),
@@ -61,7 +61,8 @@ class StreamContextAidl {
           mDataMQ(maybeCreateDataMQ(descriptor)),
           mIsAsynchronous(isAsynchronous),
           mIsMmapped(isMmapped(descriptor)),
-          mMmapBufferDescriptor(maybeGetMmapBuffer(descriptor)) {}
+          mMmapBufferDescriptor(maybeGetMmapBuffer(descriptor)),
+          mIoHandle(ioHandle) {}
     StreamContextAidl(StreamContextAidl&& other) :
             mFrameSizeBytes(other.mFrameSizeBytes),
             mCommandMQ(std::move(other.mCommandMQ)),
@@ -70,7 +71,8 @@ class StreamContextAidl {
             mDataMQ(std::move(other.mDataMQ)),
             mIsAsynchronous(other.mIsAsynchronous),
             mIsMmapped(other.mIsMmapped),
-            mMmapBufferDescriptor(std::move(other.mMmapBufferDescriptor)) {}
+            mMmapBufferDescriptor(std::move(other.mMmapBufferDescriptor)),
+            mIoHandle(other.mIoHandle) {}
     StreamContextAidl& operator=(StreamContextAidl&& other) {
         mFrameSizeBytes = other.mFrameSizeBytes;
         mCommandMQ = std::move(other.mCommandMQ);
@@ -80,6 +82,7 @@ class StreamContextAidl {
         mIsAsynchronous = other.mIsAsynchronous;
         mIsMmapped = other.mIsMmapped;
         mMmapBufferDescriptor = std::move(other.mMmapBufferDescriptor);
+        mIoHandle = other.mIoHandle;
         return *this;
     }
     bool isValid() const {
@@ -105,7 +108,9 @@ class StreamContextAidl {
     bool isAsynchronous() const { return mIsAsynchronous; }
     bool isMmapped() const { return mIsMmapped; }
     const MmapBufferDescriptor& getMmapBufferDescriptor() const { return mMmapBufferDescriptor; }
-    size_t getMmapBurstSize() const { return mMmapBufferDescriptor.burstSizeFrames;}
+    size_t getMmapBurstSize() const { return mMmapBufferDescriptor.burstSizeFrames; }
+    int getIoHandle() const { return mIoHandle; }
+
   private:
     static std::unique_ptr<DataMQ> maybeCreateDataMQ(
             const ::aidl::android::hardware::audio::core::StreamDescriptor& descriptor) {
@@ -137,6 +142,7 @@ class StreamContextAidl {
     bool mIsAsynchronous;
     bool mIsMmapped;
     MmapBufferDescriptor mMmapBufferDescriptor;
+    int mIoHandle;
 };
 
 class StreamHalAidl : public virtual StreamHalInterface, public ConversionHelperAidl {

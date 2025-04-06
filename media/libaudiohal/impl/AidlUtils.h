@@ -25,6 +25,32 @@
 
 namespace android {
 
+/*
+ * Helper macro to add instance name, function name in logs
+ * classes should provide getInstanceName and getClassName API to use these macros.
+ * print function names along with instance name.
+ *
+ * Usage:
+ *  AUGMENT_LOG(I, "hello!");
+ *  AUGMENT_LOG(W, "value: %d", value);
+ *
+ * AUGMENT_LOG_IF(D, value < 0, "negative");
+ * AUGMENT_LOG_IF(E, value < 0, "bad value: %d", value);
+ */
+
+#define AUGMENT_LOG(level, ...)                                                              \
+    ALOG##level("[%s] %s: " __android_second(0, __VA_ARGS__, ""), getInstanceName().c_str(), \
+                __func__ __android_rest(__VA_ARGS__))
+
+#define AUGMENT_LOG_IF(level, cond, ...)                                     \
+    ALOG##level##_IF(cond, "[%s] %s: " __android_second(0, __VA_ARGS__, ""), \
+                     getInstanceName().c_str(), __func__ __android_rest(__VA_ARGS__))
+// Used to register an entry into the function
+#define LOG_ENTRY() ALOGD("[%s] %s", getInstanceName().c_str(), __func__)
+
+// entry logging as verbose level
+#define LOG_ENTRY_V() ALOGV("[%s] %s", getInstanceName().c_str(), __func__)
+
 class HalDeathHandler {
   public:
     static HalDeathHandler& getInstance();

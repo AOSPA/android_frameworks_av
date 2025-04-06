@@ -233,17 +233,32 @@ class DeviceHalAidl : public DeviceHalInterface, public ConversionHelperAidl,
     // MicrophoneInfoProvider implementation
     MicrophoneInfoProvider::Info const* getMicrophoneInfo() override;
 
-    const std::string mInstance;
-    const std::shared_ptr<::aidl::android::hardware::audio::core::IModule> mModule;
-    const std::shared_ptr<::aidl::android::media::audio::IHalAdapterVendorExtension> mVendorExt;
-    const std::shared_ptr<::aidl::android::hardware::audio::core::ITelephony> mTelephony;
-    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetooth> mBluetooth;
-    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetoothA2dp> mBluetoothA2dp;
-    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetoothLe> mBluetoothLe;
-    const std::shared_ptr<::aidl::android::hardware::audio::core::sounddose::ISoundDose> mSoundDose;
+    // See below, the lock is only used to serialize calling into the interface.
+    bool isModuleInitialized() const NO_THREAD_SAFETY_ANALYSIS { return mModule != nullptr; }
+    bool isTelephonyInitialized() const NO_THREAD_SAFETY_ANALYSIS { return mTelephony != nullptr; }
 
-    std::mutex mLock;
-    std::map<void*, Callbacks> mCallbacks GUARDED_BY(mLock);
+    mutable std::mutex mLock;
+    // GUARDED_BY is used to prevent concurrent calls into these interfaces from multiple threads.
+    // There is no requirement for IModule and its helper interfaces implementations
+    // to be thread-safe.
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IModule> mModule
+            GUARDED_BY(mLock);
+    const std::shared_ptr<::aidl::android::hardware::audio::core::ITelephony> mTelephony
+            GUARDED_BY(mLock);
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetooth> mBluetooth
+            GUARDED_BY(mLock);
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetoothA2dp> mBluetoothA2dp
+            GUARDED_BY(mLock);
+    const std::shared_ptr<::aidl::android::hardware::audio::core::IBluetoothLe> mBluetoothLe
+            GUARDED_BY(mLock);
+
+    const std::shared_ptr<::aidl::android::hardware::audio::core::sounddose::ISoundDose> mSoundDose;
+    const std::shared_ptr<::aidl::android::media::audio::IHalAdapterVendorExtension> mVendorExt;
+
+    std::mutex mCallbacksLock;
+    // Use 'mCallbacksLock' only to implement exclusive access to 'mCallbacks'. Never hold it
+    // while making any calls.
+    std::map<void*, Callbacks> mCallbacks GUARDED_BY(mCallbacksLock);
     std::set<audio_port_handle_t> mDeviceDisconnectionNotified GUARDED_BY(mLock);
     Hal2AidlMapper mMapper GUARDED_BY(mLock);
     LockedAccessor<Hal2AidlMapper> mMapperAccessor;

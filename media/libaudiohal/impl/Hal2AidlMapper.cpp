@@ -25,6 +25,7 @@
 #include <Utils.h>
 #include <utils/Log.h>
 
+#include "AidlUtils.h"
 #include "Hal2AidlMapper.h"
 
 using aidl::android::aidl_utils::statusTFromBinderStatus;
@@ -99,8 +100,7 @@ bool containHapticChannel(AudioChannelLayout channel) {
 }  // namespace
 
 Hal2AidlMapper::Hal2AidlMapper(const std::string& instance, const std::shared_ptr<IModule>& module)
-        : mInstance(instance), mModule(module) {
-}
+    : ConversionHelperAidl("Hal2AidlMapper", instance), mModule(module) {}
 
 void Hal2AidlMapper::addStream(
         const sp<StreamHalInterface>& stream, int32_t mixPortConfigId, int32_t patchId) {
@@ -137,9 +137,9 @@ status_t Hal2AidlMapper::createOrUpdatePatch(
     // 'sinks' will not be updated because 'setAudioPatch' only needs IDs. Here we log
     // the source arguments, where only the audio configuration and device specifications
     // are relevant.
-    ALOGD("%s: patch ID: %d, [disregard IDs] sources: %s, sinks: %s",
-            __func__, *patchId, ::android::internal::ToString(sources).c_str(),
-            ::android::internal::ToString(sinks).c_str());
+    AUGMENT_LOG(D, "patch ID: %d, [disregard IDs] sources: %s, sinks: %s", *patchId,
+                ::android::internal::ToString(sources).c_str(),
+                ::android::internal::ToString(sinks).c_str());
     auto fillPortConfigs = [&](
             const std::vector<AudioPortConfig>& configs,
             const std::set<int32_t>& destinationPortIds,
@@ -152,18 +152,20 @@ status_t Hal2AidlMapper::createOrUpdatePatch(
                     // See b/315528763. Despite that the framework knows the actual format of
                     // the mix port, it still uses the original format. Luckily, there is
                     // the I/O handle which can be used to find the mix port.
-                    ALOGI("fillPortConfigs: retrying to find a mix port config with default "
-                            "configuration");
+                    AUGMENT_LOG(I,
+                                "fillPortConfigs: retrying to find a mix port config with"
+                                " default configuration");
                     if (auto it = findPortConfig(std::nullopt, s.flags,
                                     s.ext.get<AudioPortExt::mix>().handle);
                             it != mPortConfigs.end()) {
                         portConfig = it->second;
                     } else {
-                        const std::string flags = s.flags.has_value() ?
-                                s.flags->toString() : "<unspecified>";
-                        ALOGE("fillPortConfigs: existing port config for flags %s, handle %d "
-                                "not found in module %s", flags.c_str(),
-                                s.ext.get<AudioPortExt::mix>().handle, mInstance.c_str());
+                        const std::string flags =
+                                s.flags.has_value() ? s.flags->toString() : "<unspecified>";
+                        AUGMENT_LOG(E,
+                                    "fillPortConfigs: existing port config for flags %s, "
+                                    " handle %d not found",
+                                    flags.c_str(), s.ext.get<AudioPortExt::mix>().handle);
                         return BAD_VALUE;
                     }
                 } else {
@@ -171,8 +173,8 @@ status_t Hal2AidlMapper::createOrUpdatePatch(
                 }
             }
             LOG_ALWAYS_FATAL_IF(portConfig.id == 0,
-                    "fillPortConfigs: initial config: %s, port config: %s",
-                    s.toString().c_str(), portConfig.toString().c_str());
+                                "fillPortConfigs: initial config: %s, port config: %s",
+                                s.toString().c_str(), portConfig.toString().c_str());
             ids->push_back(portConfig.id);
             if (portIds != nullptr) {
                 portIds->insert(portConfig.portId);
@@ -218,8 +220,8 @@ status_t Hal2AidlMapper::createOrUpdatePatch(
         if (!created) {
             requestedPatch.id = patch.id;
             if (patch != requestedPatch) {
-                ALOGI("%s: Updating transient patch. Current: %s, new: %s",
-                        __func__, patch.toString().c_str(), requestedPatch.toString().c_str());
+                AUGMENT_LOG(I, "Updating transient patch. Current: %s, new: %s",
+                            patch.toString().c_str(), requestedPatch.toString().c_str());
                 // Since matching may be done by mix port only, update the patch if the device port
                 // config has changed.
                 patch = requestedPatch;
@@ -252,7 +254,7 @@ status_t Hal2AidlMapper::createOrUpdatePortConfig(
     int32_t id = result->id;
     if (requestedPortConfig.id != 0 && requestedPortConfig.id != id) {
         LOG_ALWAYS_FATAL("%s: requested port config id %d changed to %d", __func__,
-                requestedPortConfig.id, id);
+                         requestedPortConfig.id, id);
     }
 
     auto [_, inserted] = mPortConfigs.insert_or_assign(id, *result);
@@ -272,8 +274,8 @@ status_t Hal2AidlMapper::createOrUpdatePortConfigRetry(
         RETURN_STATUS_IF_ERROR(createOrUpdatePortConfig(suggestedOrAppliedPortConfig,
                         &appliedPortConfig, created));
         if (appliedPortConfig.id == 0) {
-            ALOGE("%s: module %s did not apply suggested config %s", __func__,
-                    mInstance.c_str(), suggestedOrAppliedPortConfig.toString().c_str());
+            AUGMENT_LOG(E, "did not apply suggested config %s",
+                        suggestedOrAppliedPortConfig.toString().c_str());
             return NO_INIT;
         }
         *result = appliedPortConfig;
@@ -289,7 +291,7 @@ void Hal2AidlMapper::eraseConnectedPort(int32_t portId) {
     if (mDisconnectedPortReplacement.first == portId) {
         const auto& port = mDisconnectedPortReplacement.second;
         mPorts.insert(std::make_pair(port.id, port));
-        ALOGD("%s: disconnected port replacement: %s", __func__, port.toString().c_str());
+        AUGMENT_LOG(D, "disconnected port replacement: %s", port.toString().c_str());
         mDisconnectedPortReplacement = std::pair<int32_t, AudioPort>();
     }
     updateDynamicMixPorts();
@@ -331,8 +333,7 @@ status_t Hal2AidlMapper::findOrCreateDevicePortConfig(
     if (auto portConfigIt = findPortConfig(device); portConfigIt == mPortConfigs.end()) {
         auto portsIt = findPort(device);
         if (portsIt == mPorts.end()) {
-            ALOGE("%s: device port for device %s is not found in the module %s",
-                    __func__, device.toString().c_str(), mInstance.c_str());
+            AUGMENT_LOG(E, "device port for device %s is not found", device.toString().c_str());
             return BAD_VALUE;
         }
         AudioPortConfig requestedPortConfig;
@@ -385,15 +386,15 @@ status_t Hal2AidlMapper::findOrCreateMixPortConfig(
             matchFlags.set<AudioIoFlags::Tag::input>(matchFlags.get<AudioIoFlags::Tag::input>() &
                     ~makeBitPositionFlagMask(*optionalInputFlagsIt++));
             portsIt = findPort(config, matchFlags, destinationPortIds);
-            ALOGI("%s: mix port for config %s, flags %s was not found in the module %s, "
-                    "retried with flags %s", __func__, config.toString().c_str(),
-                    flags.value().toString().c_str(), mInstance.c_str(),
-                    matchFlags.toString().c_str());
+            AUGMENT_LOG(I,
+                        "mix port for config %s, flags %s was not found"
+                        "retried with flags %s",
+                        config.toString().c_str(), flags.value().toString().c_str(),
+                        matchFlags.toString().c_str());
         }
         if (portsIt == mPorts.end()) {
-            ALOGE("%s: mix port for config %s, flags %s is not found in the module %s",
-                    __func__, config.toString().c_str(), matchFlags.toString().c_str(),
-                    mInstance.c_str());
+            AUGMENT_LOG(E, "mix port for config %s, flags %s is not found",
+                        config.toString().c_str(), matchFlags.toString().c_str());
             return BAD_VALUE;
         }
         AudioPortConfig requestedPortConfig;
@@ -408,9 +409,10 @@ status_t Hal2AidlMapper::findOrCreateMixPortConfig(
         }
         return createOrUpdatePortConfig(requestedPortConfig, portConfig, created);
     } else if (portConfigIt == mPortConfigs.end() && !flags.has_value()) {
-        ALOGW("%s: mix port config for %s, handle %d not found in the module %s, "
-                "and was not created as flags are not specified",
-                __func__, config.toString().c_str(), ioHandle, mInstance.c_str());
+        AUGMENT_LOG(W,
+                    "mix port config for %s, handle %d not found "
+                    "and was not created as flags are not specified",
+                    config.toString().c_str(), ioHandle);
         return BAD_VALUE;
     } else {
         AudioPortConfig requestedPortConfig = portConfigIt->second;
@@ -440,8 +442,8 @@ status_t Hal2AidlMapper::findOrCreatePortConfig(
         if (const auto& p = requestedPortConfig;
                 !p.sampleRate.has_value() || !p.channelMask.has_value() ||
                 !p.format.has_value()) {
-            ALOGW("%s: provided mix port config is not fully specified: %s",
-                    __func__, p.toString().c_str());
+            AUGMENT_LOG(W, "provided mix port config is not fully specified: %s",
+                        p.toString().c_str());
             return BAD_VALUE;
         }
         AudioConfig config;
@@ -470,14 +472,13 @@ status_t Hal2AidlMapper::findOrCreatePortConfig(
                     requestedPortConfig.ext.get<Tag::device>().device, configPtr, gainConfigPtr,
                     portConfig, created);
         } else {
-            ALOGD("%s: device port config does not have audio or gain config specified", __func__);
+            AUGMENT_LOG(D, "device port config does not have audio or gain config specified");
             return findOrCreateDevicePortConfig(
                     requestedPortConfig.ext.get<Tag::device>().device, nullptr /*config*/,
                     nullptr /*gainConfig*/, portConfig, created);
         }
     }
-    ALOGW("%s: unsupported audio port config: %s",
-            __func__, requestedPortConfig.toString().c_str());
+    AUGMENT_LOG(W, "unsupported audio port config: %s", requestedPortConfig.toString().c_str());
     return BAD_VALUE;
 }
 
@@ -486,8 +487,7 @@ status_t Hal2AidlMapper::findPortConfig(const AudioDevice& device, AudioPortConf
         *portConfig = it->second;
         return OK;
     }
-    ALOGE("%s: could not find a device port config for device %s",
-            __func__, device.toString().c_str());
+    AUGMENT_LOG(E, "could not find a device port config for device %s", device.toString().c_str());
     return BAD_VALUE;
 }
 
@@ -593,9 +593,10 @@ Hal2AidlMapper::Ports::iterator Hal2AidlMapper::findPort(
             }
             optionalFlags |= makeBitPositionFlagMask(*optionalOutputFlagsIt++);
             result = std::find_if(mPorts.begin(), mPorts.end(), matcher);
-            ALOGI("%s: port for config %s, flags %s was not found in the module %s, "
-                  "retried with excluding optional flags %#x", __func__, config.toString().c_str(),
-                    flags.toString().c_str(), mInstance.c_str(), optionalFlags);
+            AUGMENT_LOG(I,
+                        "port for config %s, flags %s was not found "
+                        "retried with excluding optional flags %#x",
+                        config.toString().c_str(), flags.toString().c_str(), optionalFlags);
         }
     }
     return result;
@@ -629,7 +630,7 @@ Hal2AidlMapper::PortConfigs::iterator Hal2AidlMapper::findPortConfig(
 status_t Hal2AidlMapper::getAudioMixPort(int32_t ioHandle, AudioPort* port) {
     auto it = findPortConfig(std::nullopt /*config*/, std::nullopt /*flags*/, ioHandle);
     if (it == mPortConfigs.end()) {
-        ALOGE("%s, cannot find mix port config for handle %u", __func__, ioHandle);
+        AUGMENT_LOG(E, "cannot find mix port config for handle %u", ioHandle);
         return BAD_VALUE;
     }
     return updateAudioPort(it->second.portId, port);
@@ -638,21 +639,18 @@ status_t Hal2AidlMapper::getAudioMixPort(int32_t ioHandle, AudioPort* port) {
 status_t Hal2AidlMapper::getAudioPortCached(
         const ::aidl::android::media::audio::common::AudioDevice& device,
         ::aidl::android::media::audio::common::AudioPort* port) {
-
     if (auto portsIt = findPort(device); portsIt != mPorts.end()) {
         *port = portsIt->second;
         return OK;
     }
-    ALOGE("%s: device port for device %s is not found in the module %s",
-            __func__, device.toString().c_str(), mInstance.c_str());
+    AUGMENT_LOG(E, "device port for device %s is not found", device.toString().c_str());
     return BAD_VALUE;
 }
 
 status_t Hal2AidlMapper::initialize() {
     std::vector<AudioPort> ports;
     RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mModule->getAudioPorts(&ports)));
-    ALOGW_IF(ports.empty(), "%s: module %s returned an empty list of audio ports",
-            __func__, mInstance.c_str());
+    AUGMENT_LOG_IF(W, ports.empty(), "returned an empty list of audio ports");
     mDefaultInputPortId = mDefaultOutputPortId = -1;
     const int defaultDeviceFlag = 1 << AudioPortDeviceExt::FLAG_INDEX_DEFAULT_DEVICE;
     for (auto it = ports.begin(); it != ports.end(); ) {
@@ -685,8 +683,9 @@ status_t Hal2AidlMapper::initialize() {
         }
     }
     if (mRemoteSubmixIn.has_value() != mRemoteSubmixOut.has_value()) {
-        ALOGE("%s: The configuration only has input or output remote submix device, must have both",
-                __func__);
+        AUGMENT_LOG(E,
+                    "The configuration only has input or output remote submix device, "
+                    "must have both");
         mRemoteSubmixIn.reset();
         mRemoteSubmixOut.reset();
     }
@@ -694,7 +693,7 @@ status_t Hal2AidlMapper::initialize() {
         AudioPort connectedRSubmixIn = *mRemoteSubmixIn;
         connectedRSubmixIn.ext.get<AudioPortExt::Tag::device>().device.address =
                 AUDIO_REMOTE_SUBMIX_DEVICE_ADDRESS;
-        ALOGD("%s: connecting remote submix input", __func__);
+        AUGMENT_LOG(D, "connecting remote submix input");
         RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mModule->connectExternalDevice(
                                 connectedRSubmixIn, &connectedRSubmixIn)));
         // The template port for the remote submix input couldn't be "default" because it is not
@@ -711,7 +710,7 @@ status_t Hal2AidlMapper::initialize() {
         AudioPort tempConnectedRSubmixOut = *mRemoteSubmixOut;
         tempConnectedRSubmixOut.ext.get<AudioPortExt::Tag::device>().device.address =
                 AUDIO_REMOTE_SUBMIX_DEVICE_ADDRESS;
-        ALOGD("%s: temporarily connecting and disconnecting remote submix output", __func__);
+        AUGMENT_LOG(D, "temporarily connecting and disconnecting remote submix output");
         RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mModule->connectExternalDevice(
                                 tempConnectedRSubmixOut, &tempConnectedRSubmixOut)));
         RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mModule->disconnectExternalDevice(
@@ -720,8 +719,8 @@ status_t Hal2AidlMapper::initialize() {
         ports.push_back(std::move(tempConnectedRSubmixOut));
     }
 
-    ALOGI("%s: module %s default port ids: input %d, output %d",
-            __func__, mInstance.c_str(), mDefaultInputPortId, mDefaultOutputPortId);
+    AUGMENT_LOG(I, "default port ids: input %d, output %d", mDefaultInputPortId,
+                mDefaultOutputPortId);
     std::transform(ports.begin(), ports.end(), std::inserter(mPorts, mPorts.end()),
             [](const auto& p) { return std::make_pair(p.id, p); });
     RETURN_STATUS_IF_ERROR(updateRoutes());
@@ -774,10 +773,10 @@ status_t Hal2AidlMapper::prepareToOpenStream(
         int32_t ioHandle, const AudioDevice& device, const AudioIoFlags& flags,
         AudioSource source, Cleanups* cleanups, AudioConfig* config,
         AudioPortConfig* mixPortConfig, AudioPatch* patch) {
-    ALOGD("%p %s: handle %d, device %s, flags %s, source %s, config %s, mix port config %s",
-            this, __func__, ioHandle, device.toString().c_str(),
-            flags.toString().c_str(), toString(source).c_str(),
-            config->toString().c_str(), mixPortConfig->toString().c_str());
+    AUGMENT_LOG(D, "handle %d, device %s, flags %s, source %s, config %s, mixport config %s",
+                ioHandle, device.toString().c_str(), flags.toString().c_str(),
+                toString(source).c_str(), config->toString().c_str(),
+                mixPortConfig->toString().c_str());
     resetUnusedPatchesAndPortConfigs();
     const AudioConfig initialConfig = *config;
     // Find / create AudioPortConfigs for the device port and the mix port,
@@ -800,8 +799,8 @@ status_t Hal2AidlMapper::prepareToOpenStream(
         // module can't perform audio stream conversions.
         AudioConfig deviceConfig = initialConfig;
         if (setConfigFromPortConfig(&deviceConfig, devicePortConfig)->base != initialConfig.base) {
-            ALOGD("%s: retrying with device port config: %s", __func__,
-                    devicePortConfig.toString().c_str());
+            AUGMENT_LOG(D, "retrying with device port config: %s",
+                        devicePortConfig.toString().c_str());
             status = prepareToOpenStreamHelper(ioHandle, devicePortConfig.portId,
                     devicePortConfig.id, flags, source, initialConfig, cleanups,
                     &deviceConfig, mixPortConfig, patch);
@@ -845,8 +844,8 @@ status_t Hal2AidlMapper::prepareToOpenStreamHelper(
         retryWithSuggestedConfig = true;
     }
     if (mixPortConfig->id == 0 && retryWithSuggestedConfig) {
-        ALOGD("%s: retrying to find/create a mix port config using config %s", __func__,
-                config->toString().c_str());
+        AUGMENT_LOG(D, "retrying to find/create a mix port config using config %s",
+                    config->toString().c_str());
         RETURN_STATUS_IF_ERROR(findOrCreateMixPortConfig(*config, flags, ioHandle, source,
                         std::set<int32_t>{devicePortId}, mixPortConfig, &created));
         if (created) {
@@ -855,8 +854,8 @@ status_t Hal2AidlMapper::prepareToOpenStreamHelper(
         setConfigFromPortConfig(config, *mixPortConfig);
     }
     if (mixPortConfig->id == 0) {
-        ALOGD("%p %s: returning suggested config for the stream: %s", this, __func__,
-                config->toString().c_str());
+        AUGMENT_LOG(D, "returning suggested config for the stream: %s",
+                    config->toString().c_str());
         return OK;
     }
     if (isInput) {
@@ -894,9 +893,10 @@ status_t Hal2AidlMapper::releaseAudioPatch(int32_t patchId) {
 // Note: does not reset port configs.
 status_t Hal2AidlMapper::releaseAudioPatch(Patches::iterator it) {
     const int32_t patchId = it->first;
+    AUGMENT_LOG(D, "patchId %d", patchId);
     if (ndk::ScopedAStatus status = mModule->resetAudioPatch(patchId); !status.isOk()) {
-        ALOGE("%s: error while resetting patch %d: %s",
-                __func__, patchId, status.getDescription().c_str());
+        AUGMENT_LOG(E, "error while resetting patch %d: %s", patchId,
+                    status.getDescription().c_str());
         return statusTFromBinderStatus(status);
     }
     mPatches.erase(it);
@@ -915,7 +915,7 @@ status_t Hal2AidlMapper::releaseAudioPatches(const std::set<int32_t>& patchIds) 
         if (auto it = mPatches.find(patchId); it != mPatches.end()) {
             releaseAudioPatch(it);
         } else {
-            ALOGE("%s: patch id %d not found", __func__, patchId);
+            AUGMENT_LOG(E, "patch id %d not found", patchId);
             result = BAD_VALUE;
         }
     }
@@ -925,16 +925,17 @@ status_t Hal2AidlMapper::releaseAudioPatches(const std::set<int32_t>& patchIds) 
 
 void Hal2AidlMapper::resetPortConfig(int32_t portConfigId) {
     if (auto it = mPortConfigs.find(portConfigId); it != mPortConfigs.end()) {
+        AUGMENT_LOG(D, "%s", it->second.toString().c_str());
         if (ndk::ScopedAStatus status = mModule->resetAudioPortConfig(portConfigId);
                 !status.isOk()) {
-            ALOGE("%s: error while resetting port config %d: %s",
-                    __func__, portConfigId, status.getDescription().c_str());
+            AUGMENT_LOG(E, "error while resetting port config %d: %s", portConfigId,
+                        status.getDescription().c_str());
             return;
         }
         mPortConfigs.erase(it);
         return;
     }
-    ALOGE("%s: port config id %d not found", __func__, portConfigId);
+    AUGMENT_LOG(E, "port config id %d not found", portConfigId);
 }
 
 void Hal2AidlMapper::resetUnusedPatchesAndPortConfigs() {
@@ -979,6 +980,8 @@ void Hal2AidlMapper::resetUnusedPortConfigs() {
 }
 
 status_t Hal2AidlMapper::setDevicePortConnectedState(const AudioPort& devicePort, bool connected) {
+    AUGMENT_LOG(D, "state %s, device %s", (connected ? "connected" : "disconnected"),
+                devicePort.toString().c_str());
     resetUnusedPatchesAndPortConfigs();
     if (connected) {
         AudioDevice matchDevice = devicePort.ext.get<AudioPortExt::device>().device;
@@ -1009,8 +1012,7 @@ status_t Hal2AidlMapper::setDevicePortConnectedState(const AudioPort& devicePort
                 // port not found in every one of them.
                 return BAD_VALUE;
             } else {
-                ALOGD("%s: device port for device %s found in the module %s",
-                        __func__, matchDevice.toString().c_str(), mInstance.c_str());
+                AUGMENT_LOG(D, "device port for device %s found", matchDevice.toString().c_str());
             }
             templatePort = portsIt->second;
         }
@@ -1021,10 +1023,9 @@ status_t Hal2AidlMapper::setDevicePortConnectedState(const AudioPort& devicePort
         RETURN_STATUS_IF_ERROR(statusTFromBinderStatus(mModule->connectExternalDevice(
                                 connectedPort, &connectedPort)));
         const auto [it, inserted] = mPorts.insert(std::make_pair(connectedPort.id, connectedPort));
-        LOG_ALWAYS_FATAL_IF(!inserted,
-                "%s: module %s, duplicate port ID received from HAL: %s, existing port: %s",
-                __func__, mInstance.c_str(), connectedPort.toString().c_str(),
-                it->second.toString().c_str());
+        LOG_ALWAYS_FATAL_IF(
+                !inserted, "%s duplicate port ID received from HAL: %s, existing port: %s",
+                __func__, connectedPort.toString().c_str(), it->second.toString().c_str());
         mConnectedPorts.insert(connectedPort.id);
         if (erasePortAfterConnectionIt != mPorts.end()) {
             mPorts.erase(erasePortAfterConnectionIt);
@@ -1037,8 +1038,7 @@ status_t Hal2AidlMapper::setDevicePortConnectedState(const AudioPort& devicePort
             // port not found in every one of them.
             return BAD_VALUE;
         } else {
-            ALOGD("%s: device port for device %s found in the module %s",
-                    __func__, matchDevice.toString().c_str(), mInstance.c_str());
+            AUGMENT_LOG(D, "device port for device %s found", matchDevice.toString().c_str());
         }
 
         // Disconnection of remote submix out with address "0" is a special case. We need to replace
@@ -1094,8 +1094,8 @@ status_t Hal2AidlMapper::updateAudioPort(int32_t portId, AudioPort* port) {
             }
             portIt->second = *port;
         } else {
-            ALOGW("%s, port(%d) returned successfully from the HAL but not it is not cached",
-                  __func__, portId);
+            AUGMENT_LOG(W, "port(%d) returned successfully from the HAL but not it is not cached",
+                        portId);
         }
     }
     return status;
@@ -1104,8 +1104,7 @@ status_t Hal2AidlMapper::updateAudioPort(int32_t portId, AudioPort* port) {
 status_t Hal2AidlMapper::updateRoutes() {
     RETURN_STATUS_IF_ERROR(
             statusTFromBinderStatus(mModule->getAudioRoutes(&mRoutes)));
-    ALOGW_IF(mRoutes.empty(), "%s: module %s returned an empty list of audio routes",
-            __func__, mInstance.c_str());
+    AUGMENT_LOG_IF(W, mRoutes.empty(), "returned an empty list of audio routes");
     if (mRemoteSubmixIn.has_value()) {
         // Remove mentions of the template remote submix input from routes.
         int32_t rSubmixInId = mRemoteSubmixIn->id;
@@ -1146,7 +1145,7 @@ void Hal2AidlMapper::updateDynamicMixPorts() {
             updateAudioPort(portId, &it->second);
         } else {
             // This must not happen
-            ALOGE("%s, cannot find port for id=%d", __func__, portId);
+            AUGMENT_LOG(E, "cannot find port for id=%d", portId);
         }
     }
 }

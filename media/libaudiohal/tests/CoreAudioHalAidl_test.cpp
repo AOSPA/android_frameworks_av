@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define LOG_TAG "CoreAudioHalAidlTest"
@@ -28,6 +29,7 @@
 #include <StreamHalAidl.h>
 #include <aidl/android/hardware/audio/core/BnModule.h>
 #include <aidl/android/hardware/audio/core/BnStreamCommon.h>
+#include <aidl/android/hardware/audio/core/BnStreamOut.h>
 #include <aidl/android/media/audio/BnHalAdapterVendorExtension.h>
 #include <aidl/android/media/audio/common/AudioGainMode.h>
 #include <aidl/android/media/audio/common/Int.h>
@@ -64,13 +66,13 @@ class VendorParameterMock {
     const std::vector<VendorParameter>& getSyncParameters() const { return mSyncParameters; }
 
   protected:
-    ndk::ScopedAStatus getVendorParametersImpl(const std::vector<std::string>& in_parameterIds) {
+    ndk::ScopedAStatus getVendorParameters(const std::vector<std::string>& in_parameterIds) {
         mGetParameterIds.insert(mGetParameterIds.end(), in_parameterIds.begin(),
                                 in_parameterIds.end());
         return ndk::ScopedAStatus::ok();
     }
-    ndk::ScopedAStatus setVendorParametersImpl(const std::vector<VendorParameter>& in_parameters,
-                                               bool async) {
+    ndk::ScopedAStatus setVendorParameters(const std::vector<VendorParameter>& in_parameters,
+                                           bool async) {
         if (async) {
             mAsyncParameters.insert(mAsyncParameters.end(), in_parameters.begin(),
                                     in_parameters.end());
@@ -187,6 +189,11 @@ Configuration getTestConfiguration() {
     speakerOutDevice.profiles = standardPcmAudioProfiles;
     c.ports.push_back(speakerOutDevice);
 
+    AudioPort primaryOutMix =
+            createPort(c.nextPortId++, "primary output", 0, false, createPortMixExt(1, 1));
+    primaryOutMix.profiles = standardPcmAudioProfiles;
+    c.ports.push_back(primaryOutMix);
+
     AudioPort btOutDevice =
             createPort(c.nextPortId++, "BT A2DP Out", 0, false,
                        createPortDeviceExt(AudioDeviceType::OUT_DEVICE, 0,
@@ -200,10 +207,140 @@ Configuration getTestConfiguration() {
     c.ports.push_back(btOutMix);
 
     c.routes.push_back(createRoute({micInDevice, micInBackDevice}, primaryInMix));
+    c.routes.push_back(createRoute({primaryOutMix}, speakerOutDevice));
     c.routes.push_back(createRoute({btOutMix}, btOutDevice));
 
     return c;
 }
+
+class StreamCommonMock : public ::aidl::android::hardware::audio::core::BnStreamCommon,
+                         public VendorParameterMock {
+    ndk::ScopedAStatus close() override { return ndk::ScopedAStatus::ok(); }
+    ndk::ScopedAStatus prepareToClose() override { return ndk::ScopedAStatus::ok(); }
+    ndk::ScopedAStatus updateHwAvSyncId(int32_t) override { return ndk::ScopedAStatus::ok(); }
+    ndk::ScopedAStatus getVendorParameters(const std::vector<std::string>& in_parameterIds,
+                                           std::vector<VendorParameter>*) override {
+        return VendorParameterMock::getVendorParameters(in_parameterIds);
+    }
+    ndk::ScopedAStatus setVendorParameters(const std::vector<VendorParameter>& in_parameters,
+                                           bool async) override {
+        return VendorParameterMock::setVendorParameters(in_parameters, async);
+    }
+    ndk::ScopedAStatus addEffect(
+            const std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect>&) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus removeEffect(
+            const std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect>&) override {
+        return ndk::ScopedAStatus::ok();
+    }
+};
+
+class StreamContext {
+  public:
+    using Descriptor = ::aidl::android::hardware::audio::core::StreamDescriptor;
+    typedef ::android::AidlMessageQueue<
+            Descriptor::Command, ::aidl::android::hardware::common::fmq::SynchronizedReadWrite>
+            CommandMQ;
+    typedef ::android::AidlMessageQueue<
+            Descriptor::Reply, ::aidl::android::hardware::common::fmq::SynchronizedReadWrite>
+            ReplyMQ;
+    typedef ::android::AidlMessageQueue<
+            int8_t, ::aidl::android::hardware::common::fmq::SynchronizedReadWrite>
+            DataMQ;
+
+    StreamContext() = default;
+    StreamContext(std::unique_ptr<CommandMQ> commandMQ, std::unique_ptr<ReplyMQ> replyMQ,
+                  std::unique_ptr<DataMQ> dataMQ)
+        : mCommandMQ(std::move(commandMQ)),
+          mReplyMQ(std::move(replyMQ)),
+          mDataMQ(std::move(dataMQ)) {}
+    void fillDescriptor(Descriptor* desc) {
+        if (mCommandMQ) {
+            desc->command = mCommandMQ->dupeDesc();
+        }
+        if (mReplyMQ) {
+            desc->reply = mReplyMQ->dupeDesc();
+        }
+        if (mDataMQ) {
+            desc->frameSizeBytes = 2;
+            desc->bufferSizeFrames = 48;
+            desc->audio.set<Descriptor::AudioBuffer::Tag::fmq>(mDataMQ->dupeDesc());
+        }
+    }
+
+  private:
+    std::unique_ptr<CommandMQ> mCommandMQ =
+            std::make_unique<CommandMQ>(1, true /*configureEventFlagWord*/);
+    std::unique_ptr<ReplyMQ> mReplyMQ =
+            std::make_unique<ReplyMQ>(1, true /*configureEventFlagWord*/);
+    std::unique_ptr<DataMQ> mDataMQ = std::make_unique<DataMQ>(96);
+};
+
+class StreamOutMock : public ::aidl::android::hardware::audio::core::BnStreamOut {
+  public:
+    explicit StreamOutMock(StreamContext&& ctx) : mContext(std::move(ctx)) {}
+
+  private:
+    ndk::ScopedAStatus getStreamCommon(
+            std::shared_ptr<::aidl::android::hardware::audio::core::IStreamCommon>* _aidl_return)
+            override {
+        if (!mCommon) {
+            mCommon = ndk::SharedRefBase::make<StreamCommonMock>();
+        }
+        *_aidl_return = mCommon;
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus updateMetadata(
+            const ::aidl::android::hardware::audio::common::SourceMetadata&) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus updateOffloadMetadata(
+            const ::aidl::android::hardware::audio::common::AudioOffloadMetadata&) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus getHwVolume(std::vector<float>*) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus setHwVolume(const std::vector<float>&) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus getAudioDescriptionMixLevel(float*) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus setAudioDescriptionMixLevel(float) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus getDualMonoMode(
+            ::aidl::android::media::audio::common::AudioDualMonoMode*) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus setDualMonoMode(
+            ::aidl::android::media::audio::common::AudioDualMonoMode) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus getRecommendedLatencyModes(
+            std::vector<::aidl::android::media::audio::common::AudioLatencyMode>*) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus setLatencyMode(
+            ::aidl::android::media::audio::common::AudioLatencyMode) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus getPlaybackRateParameters(
+            ::aidl::android::media::audio::common::AudioPlaybackRate*) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus setPlaybackRateParameters(
+            const ::aidl::android::media::audio::common::AudioPlaybackRate&) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    ndk::ScopedAStatus selectPresentation(int32_t, int32_t) override {
+        return ndk::ScopedAStatus::ok();
+    }
+    StreamContext mContext;
+    std::shared_ptr<StreamCommonMock> mCommon;
+};
 
 class ModuleMock : public ::aidl::android::hardware::audio::core::BnModule,
                    public VendorParameterMock {
@@ -339,7 +476,10 @@ class ModuleMock : public ::aidl::android::hardware::audio::core::BnModule,
         return ndk::ScopedAStatus::ok();
     }
     ndk::ScopedAStatus openOutputStream(const OpenOutputStreamArguments&,
-                                        OpenOutputStreamReturn*) override {
+                                        OpenOutputStreamReturn* _aidl_return) override {
+        StreamContext context;
+        context.fillDescriptor(&_aidl_return->desc);
+        _aidl_return->stream = ndk::SharedRefBase::make<StreamOutMock>(std::move(context));
         return ndk::ScopedAStatus::ok();
     }
     ndk::ScopedAStatus getSupportedPlaybackRateFactors(SupportedPlaybackRateFactors*) override {
@@ -351,6 +491,7 @@ class ModuleMock : public ::aidl::android::hardware::audio::core::BnModule,
         if (requested.id == 0) {
             *patch = requested;
             patch->id = mConfig.nextPatchId++;
+            patch->latenciesMs.push_back(100);
             mConfig.patches.push_back(*patch);
             ALOGD("%s: returning %s", __func__, patch->toString().c_str());
         } else {
@@ -437,11 +578,11 @@ class ModuleMock : public ::aidl::android::hardware::audio::core::BnModule,
     ndk::ScopedAStatus generateHwAvSyncId(int32_t*) override { return ndk::ScopedAStatus::ok(); }
     ndk::ScopedAStatus getVendorParameters(const std::vector<std::string>& in_parameterIds,
                                            std::vector<VendorParameter>*) override {
-        return getVendorParametersImpl(in_parameterIds);
+        return VendorParameterMock::getVendorParameters(in_parameterIds);
     }
     ndk::ScopedAStatus setVendorParameters(const std::vector<VendorParameter>& in_parameters,
                                            bool async) override {
-        return setVendorParametersImpl(in_parameters, async);
+        return VendorParameterMock::setVendorParameters(in_parameters, async);
     }
     ndk::ScopedAStatus addDeviceEffect(
             int32_t,
@@ -472,29 +613,6 @@ class ModuleMock : public ::aidl::android::hardware::audio::core::BnModule,
     Configuration mConfig;
     bool mIsScreenTurnedOn = false;
     ScreenRotation mScreenRotation = ScreenRotation::DEG_0;
-};
-
-class StreamCommonMock : public ::aidl::android::hardware::audio::core::BnStreamCommon,
-                         public VendorParameterMock {
-    ndk::ScopedAStatus close() override { return ndk::ScopedAStatus::ok(); }
-    ndk::ScopedAStatus prepareToClose() override { return ndk::ScopedAStatus::ok(); }
-    ndk::ScopedAStatus updateHwAvSyncId(int32_t) override { return ndk::ScopedAStatus::ok(); }
-    ndk::ScopedAStatus getVendorParameters(const std::vector<std::string>& in_parameterIds,
-                                           std::vector<VendorParameter>*) override {
-        return getVendorParametersImpl(in_parameterIds);
-    }
-    ndk::ScopedAStatus setVendorParameters(const std::vector<VendorParameter>& in_parameters,
-                                           bool async) override {
-        return setVendorParametersImpl(in_parameters, async);
-    }
-    ndk::ScopedAStatus addEffect(
-            const std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect>&) override {
-        return ndk::ScopedAStatus::ok();
-    }
-    ndk::ScopedAStatus removeEffect(
-            const std::shared_ptr<::aidl::android::hardware::audio::effect::IEffect>&) override {
-        return ndk::ScopedAStatus::ok();
-    }
 };
 
 VendorParameter makeVendorParameter(const std::string& id, int value) {
@@ -708,7 +826,7 @@ class StreamHalMock : public virtual StreamHalInterface {
 class DeviceHalAidlTest : public testing::Test {
   public:
     void SetUp() override {
-        mModule = ndk::SharedRefBase::make<ModuleMock>();
+        mModule = ndk::SharedRefBase::make<ModuleMock>(getTestConfiguration());
         mDevice = sp<DeviceHalAidl>::make("test", mModule, nullptr /*vext*/);
     }
     void TearDown() override {
@@ -748,6 +866,46 @@ TEST_F(DeviceHalAidlTest, ScreenRotation) {
     EXPECT_EQ(OK,
               mDevice->setParameters(createParameterString(AudioParameter::keyScreenRotation, 42)));
     EXPECT_EQ(ScreenRotation::DEG_0, mModule->getScreenRotation());
+}
+
+// See http://b/357487484#comment6
+TEST_F(DeviceHalAidlTest, StreamReleaseOnMapperCleanup) {
+    ASSERT_EQ(OK, mDevice->initCheck());
+    // Since the test is in effect probabilistic, try multiple times.
+    for (int i = 0; i < 100; ++i) {
+        sp<StreamOutHalInterface> stream1;
+        struct audio_config config = AUDIO_CONFIG_INITIALIZER;
+        config.sample_rate = 48000;
+        config.channel_mask = AUDIO_CHANNEL_OUT_STEREO;
+        config.format = AUDIO_FORMAT_PCM_16_BIT;
+        ASSERT_EQ(OK, mDevice->openOutputStream(42 /*handle*/, AUDIO_DEVICE_OUT_SPEAKER,
+                                                AUDIO_OUTPUT_FLAG_NONE, &config, "" /*address*/,
+                                                &stream1));
+        ASSERT_EQ(1, stream1->getStrongCount());
+        std::atomic<bool> stopReleaser = false;
+        // Try to catch the moment when Hal2AidlMapper promotes its wp<StreamHalInterface> to sp<>
+        // in Hal2AidlMapper::resetUnusedPatchesAndPortConfigs and release on our side in order to
+        // make Hal2AidlMapper the sole owner via a temporary sp and enforce destruction of the
+        // stream while the DeviceHalAidl::mLock is held.
+        std::thread releaser([&stream1, &stopReleaser]() {
+            while (!stopReleaser) {
+                if (stream1->getStrongCount() > 1) {
+                    stream1.clear();
+                    break;
+                }
+                std::this_thread::yield();
+            }
+        });
+        sp<StreamOutHalInterface> stream2;
+        // Opening another stream triggers a call to
+        // Hal2AidlMapper::resetUnusedPatchesAndPortConfigs.  It must not cause a deadlock of the
+        // test (main) thread.
+        ASSERT_EQ(OK, mDevice->openOutputStream(43 /*handle*/, AUDIO_DEVICE_OUT_SPEAKER,
+                                                AUDIO_OUTPUT_FLAG_NONE, &config, "" /*address*/,
+                                                &stream2));
+        stopReleaser = true;
+        releaser.join();
+    }
 }
 
 class DeviceHalAidlVendorParametersTest : public testing::Test {
@@ -830,9 +988,9 @@ class StreamHalAidlVendorParametersTest : public testing::Test {
         mVendorExt = ndk::SharedRefBase::make<TestHalAdapterVendorExtension>();
         struct audio_config config = AUDIO_CONFIG_INITIALIZER;
         ::aidl::android::hardware::audio::core::StreamDescriptor descriptor;
+        StreamContextAidl context(descriptor, false /*isAsynchronous*/, 0);
         mStream = sp<StreamHalAidl>::make("test", false /*isInput*/, config, 0 /*nominalLatency*/,
-                                          StreamContextAidl(descriptor, false /*isAsynchronous*/),
-                                          mStreamCommon, mVendorExt);
+                                          std::move(context), mStreamCommon, mVendorExt);
     }
     void TearDown() override {
         mStream.clear();

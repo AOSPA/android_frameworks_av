@@ -32,6 +32,7 @@
 #include <Utils.h>
 #include <utils/Log.h>
 
+#include "AidlUtils.h"
 #include "DeviceHalAidl.h"
 #include "EffectHalAidl.h"
 #include "StreamHalAidl.h"
@@ -74,12 +75,12 @@ std::shared_ptr<IStreamCommon> StreamHalAidl::getStreamCommon(const std::shared_
     return streamCommon;
 }
 
-StreamHalAidl::StreamHalAidl(
-        std::string_view className, bool isInput, const audio_config& config,
-        int32_t nominalLatency, StreamContextAidl&& context,
-        const std::shared_ptr<IStreamCommon>& stream,
-        const std::shared_ptr<IHalAdapterVendorExtension>& vext)
-        : ConversionHelperAidl(className),
+StreamHalAidl::StreamHalAidl(std::string_view className, bool isInput, const audio_config& config,
+                             int32_t nominalLatency, StreamContextAidl&& context,
+                             const std::shared_ptr<IStreamCommon>& stream,
+                             const std::shared_ptr<IHalAdapterVendorExtension>& vext)
+    : ConversionHelperAidl(className, std::string(isInput ? "in" : "out") + "|ioHandle:" +
+            std::to_string(context.getIoHandle())),
           mIsInput(isInput),
           mConfig(configToBase(config)),
           mContext(std::move(context)),
@@ -90,7 +91,7 @@ StreamHalAidl::StreamHalAidl(
                            mContext.getBufferDurationMs(mConfig.sample_rate))
                   * NANOS_PER_MILLISECOND)
 {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     {
         std::lock_guard l(mLock);
         mLastReply.latencyMs = nominalLatency;
@@ -105,15 +106,15 @@ StreamHalAidl::StreamHalAidl(
 }
 
 StreamHalAidl::~StreamHalAidl() {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     if (mStream != nullptr) {
         ndk::ScopedAStatus status = mStream->close();
-        ALOGE_IF(!status.isOk(), "%s: status %s", __func__, status.getDescription().c_str());
+        AUGMENT_LOG_IF(E, !status.isOk(), "status %s", status.getDescription().c_str());
     }
 }
 
 status_t StreamHalAidl::getBufferSize(size_t *size) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     if (size == nullptr) {
         return BAD_VALUE;
     }
@@ -122,11 +123,12 @@ status_t StreamHalAidl::getBufferSize(size_t *size) {
         return NO_INIT;
     }
     *size = mContext.getBufferSizeBytes();
+    AUGMENT_LOG(I, "size: %zu", *size);
     return OK;
 }
 
 status_t StreamHalAidl::getAudioProperties(audio_config_base_t *configBase) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     if (configBase == nullptr) {
         return BAD_VALUE;
     }
@@ -136,10 +138,11 @@ status_t StreamHalAidl::getAudioProperties(audio_config_base_t *configBase) {
 }
 
 status_t StreamHalAidl::setParameters(const String8& kvPairs) {
+    LOG_ENTRY_V();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     AudioParameter parameters(kvPairs);
-    ALOGD("%s: parameters: %s", __func__, parameters.toString().c_str());
+    AUGMENT_LOG(D, "parameters: %s", parameters.toString().c_str());
 
     (void)VALUE_OR_RETURN_STATUS(filterOutAndProcessParameter<int>(
                     parameters, String8(AudioParameter::keyStreamHwAvSync),
@@ -150,6 +153,7 @@ status_t StreamHalAidl::setParameters(const String8& kvPairs) {
 }
 
 status_t StreamHalAidl::getParameters(const String8& keys __unused, String8 *values) {
+    LOG_ENTRY_V();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (values == nullptr) {
@@ -161,7 +165,7 @@ status_t StreamHalAidl::getParameters(const String8& keys __unused, String8 *val
 }
 
 status_t StreamHalAidl::getFrameSize(size_t *size) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     if (size == nullptr) {
         return BAD_VALUE;
     }
@@ -173,7 +177,7 @@ status_t StreamHalAidl::getFrameSize(size_t *size) {
 }
 
 status_t StreamHalAidl::addEffect(sp<EffectHalInterface> effect) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (effect == nullptr) {
@@ -184,7 +188,7 @@ status_t StreamHalAidl::addEffect(sp<EffectHalInterface> effect) {
 }
 
 status_t StreamHalAidl::removeEffect(sp<EffectHalInterface> effect) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (effect == nullptr) {
@@ -195,7 +199,7 @@ status_t StreamHalAidl::removeEffect(sp<EffectHalInterface> effect) {
 }
 
 status_t StreamHalAidl::standby() {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     const auto state = getState();
@@ -208,8 +212,8 @@ status_t StreamHalAidl::standby() {
             if (reply.state != StreamDescriptor::State::PAUSED &&
                     reply.state != StreamDescriptor::State::DRAIN_PAUSED &&
                     reply.state != StreamDescriptor::State::TRANSFER_PAUSED) {
-                ALOGE("%s: unexpected stream state: %s (expected PAUSED)",
-                        __func__, toString(reply.state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected PAUSED)",
+                            toString(reply.state).c_str());
                 return INVALID_OPERATION;
             }
             FALLTHROUGH_INTENDED;
@@ -219,8 +223,8 @@ status_t StreamHalAidl::standby() {
             if (mIsInput) return flush();
             RETURN_STATUS_IF_ERROR(flush(&reply));
             if (reply.state != StreamDescriptor::State::IDLE) {
-                ALOGE("%s: unexpected stream state: %s (expected IDLE)",
-                        __func__, toString(reply.state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected IDLE)",
+                            toString(reply.state).c_str());
                 return INVALID_OPERATION;
             }
             FALLTHROUGH_INTENDED;
@@ -228,22 +232,22 @@ status_t StreamHalAidl::standby() {
             RETURN_STATUS_IF_ERROR(sendCommand(makeHalCommand<HalCommand::Tag::standby>(),
                             &reply, true /*safeFromNonWorkerThread*/));
             if (reply.state != StreamDescriptor::State::STANDBY) {
-                ALOGE("%s: unexpected stream state: %s (expected STANDBY)",
-                        __func__, toString(reply.state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected STANDBY)",
+                            toString(reply.state).c_str());
                 return INVALID_OPERATION;
             }
             FALLTHROUGH_INTENDED;
         case StreamDescriptor::State::STANDBY:
             return OK;
         default:
-            ALOGE("%s: not supported from %s stream state %s",
-                    __func__, mIsInput ? "input" : "output", toString(state).c_str());
+            AUGMENT_LOG(E, "not supported from %s stream state %s", mIsInput ? "input" : "output",
+                        toString(state).c_str());
             return INVALID_OPERATION;
     }
 }
 
 status_t StreamHalAidl::dump(int fd, const Vector<String16>& args) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     Vector<String16> newArgs = args;
@@ -254,7 +258,7 @@ status_t StreamHalAidl::dump(int fd, const Vector<String16>& args) {
 }
 
 status_t StreamHalAidl::start() {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (!mContext.isMmapped()) {
@@ -267,8 +271,8 @@ status_t StreamHalAidl::start() {
             RETURN_STATUS_IF_ERROR(
                     sendCommand(makeHalCommand<HalCommand::Tag::start>(), &reply, true));
             if (reply.state != StreamDescriptor::State::IDLE) {
-                ALOGE("%s: unexpected stream state: %s (expected IDLE)",
-                        __func__, toString(reply.state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected IDLE)",
+                            toString(reply.state).c_str());
                 return INVALID_OPERATION;
             }
             FALLTHROUGH_INTENDED;
@@ -276,8 +280,8 @@ status_t StreamHalAidl::start() {
             RETURN_STATUS_IF_ERROR(
                     sendCommand(makeHalCommand<HalCommand::Tag::burst>(0), &reply, true));
             if (reply.state != StreamDescriptor::State::ACTIVE) {
-                ALOGE("%s: unexpected stream state: %s (expected ACTIVE)",
-                        __func__, toString(reply.state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected ACTIVE)",
+                            toString(reply.state).c_str());
                 return INVALID_OPERATION;
             }
             FALLTHROUGH_INTENDED;
@@ -287,20 +291,20 @@ status_t StreamHalAidl::start() {
             RETURN_STATUS_IF_ERROR(
                     sendCommand(makeHalCommand<HalCommand::Tag::start>(), &reply, true));
             if (reply.state != StreamDescriptor::State::ACTIVE) {
-                ALOGE("%s: unexpected stream state: %s (expected ACTIVE)",
-                        __func__, toString(reply.state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected ACTIVE)",
+                            toString(reply.state).c_str());
                 return INVALID_OPERATION;
             }
             return OK;
         default:
-            ALOGE("%s: not supported from %s stream state %s",
-                    __func__, mIsInput ? "input" : "output", toString(reply.state).c_str());
+            AUGMENT_LOG(E, "not supported from %s stream state %s", mIsInput ? "input" : "output",
+                        toString(reply.state).c_str());
             return INVALID_OPERATION;
     }
 }
 
 status_t StreamHalAidl::stop() {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (!mContext.isMmapped()) {
@@ -317,28 +321,28 @@ status_t StreamHalAidl::stop() {
         return flush();
     } else if (state != StreamDescriptor::State::IDLE &&
             state != StreamDescriptor::State::STANDBY) {
-        ALOGE("%s: not supported from %s stream state %s",
-                __func__, mIsInput ? "input" : "output", toString(state).c_str());
+        AUGMENT_LOG(E, "not supported from %s stream state %s", mIsInput ? "input" : "output",
+                    toString(state).c_str());
         return INVALID_OPERATION;
     }
     return OK;
 }
 
 status_t StreamHalAidl::getLatency(uint32_t *latency) {
-    ALOGV("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY_V();
     if (!mStream) return NO_INIT;
     StreamDescriptor::Reply reply;
     RETURN_STATUS_IF_ERROR(updateCountersIfNeeded(&reply));
     *latency = std::clamp(std::max<int32_t>(0, reply.latencyMs), 1, 3000);
-    ALOGW_IF(reply.latencyMs != static_cast<int32_t>(*latency),
-             "Suspicious latency value reported by HAL: %d, clamped to %u", reply.latencyMs,
-             *latency);
+    AUGMENT_LOG_IF(W, reply.latencyMs != static_cast<int32_t>(*latency),
+                   "Suspicious latency value reported by HAL: %d, clamped to %u", reply.latencyMs,
+                   *latency);
     return OK;
 }
 
 status_t StreamHalAidl::getObservablePosition(int64_t* frames, int64_t* timestamp,
         StatePositions* statePositions) {
-    ALOGV("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY_V();
     if (!mStream) return NO_INIT;
     StreamDescriptor::Reply reply;
     RETURN_STATUS_IF_ERROR(updateCountersIfNeeded(&reply, statePositions));
@@ -348,7 +352,7 @@ status_t StreamHalAidl::getObservablePosition(int64_t* frames, int64_t* timestam
 }
 
 status_t StreamHalAidl::getHardwarePosition(int64_t *frames, int64_t *timestamp) {
-    ALOGV("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY_V();
     if (!mStream) return NO_INIT;
     StreamDescriptor::Reply reply;
     RETURN_STATUS_IF_ERROR(updateCountersIfNeeded(&reply));
@@ -358,7 +362,7 @@ status_t StreamHalAidl::getHardwarePosition(int64_t *frames, int64_t *timestamp)
 }
 
 status_t StreamHalAidl::getXruns(int32_t *frames) {
-    ALOGV("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY_V();
     if (!mStream) return NO_INIT;
     StreamDescriptor::Reply reply;
     RETURN_STATUS_IF_ERROR(updateCountersIfNeeded(&reply));
@@ -367,7 +371,7 @@ status_t StreamHalAidl::getXruns(int32_t *frames) {
 }
 
 status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred) {
-    ALOGV("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY_V();
     // TIME_CHECK();  // TODO(b/243839867) reenable only when optimized.
     if (!mStream || mContext.getDataMQ() == nullptr) return NO_INIT;
     mWorkerTid.store(gettid(), std::memory_order_release);
@@ -379,8 +383,8 @@ status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred
         StreamDescriptor::Reply reply;
         RETURN_STATUS_IF_ERROR(sendCommand(makeHalCommand<HalCommand::Tag::start>(), &reply));
         if (reply.state != StreamDescriptor::State::IDLE) {
-            ALOGE("%s: failed to get the stream out of standby, actual state: %s",
-                    __func__, toString(reply.state).c_str());
+            AUGMENT_LOG(E, "failed to get the stream out of standby, actual state: %s",
+                        toString(reply.state).c_str());
             return INVALID_OPERATION;
         }
     }
@@ -394,7 +398,7 @@ status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred
             StreamDescriptor::Command::make<StreamDescriptor::Command::Tag::burst>(bytes);
     if (!mIsInput) {
         if (!mContext.getDataMQ()->write(static_cast<const int8_t*>(buffer), bytes)) {
-            ALOGE("%s: failed to write %zu bytes to data MQ", __func__, bytes);
+            AUGMENT_LOG(E, "failed to write %zu bytes to data MQ", bytes);
             return NOT_ENOUGH_DATA;
         }
     }
@@ -407,7 +411,7 @@ status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred
                 __func__, *transferred, bytes);
         if (auto toRead = mContext.getDataMQ()->availableToRead(&fmqError, &fmqErrorMsg);
                 toRead != 0 && !mContext.getDataMQ()->read(static_cast<int8_t*>(buffer), toRead)) {
-            ALOGE("%s: failed to read %zu bytes to data MQ", __func__, toRead);
+            AUGMENT_LOG(E, "failed to read %zu bytes to data MQ", toRead);
             return NOT_ENOUGH_DATA;
         }
     }
@@ -418,7 +422,7 @@ status_t StreamHalAidl::transfer(void *buffer, size_t bytes, size_t *transferred
 }
 
 status_t StreamHalAidl::pause(StreamDescriptor::Reply* reply) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
 
@@ -446,14 +450,14 @@ status_t StreamHalAidl::pause(StreamDescriptor::Reply* reply) {
         }
         return status;
     } else {
-        ALOGD("%s: already stream in one of the PAUSED kind of states, current state: %s", __func__,
-              toString(state).c_str());
+        AUGMENT_LOG(D, "already stream in one of the PAUSED kind of states, current state: %s",
+                toString(state).c_str());
         return OK;
     }
 }
 
 status_t StreamHalAidl::resume(StreamDescriptor::Reply* reply) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (mIsInput) {
@@ -467,26 +471,26 @@ status_t StreamHalAidl::resume(StreamDescriptor::Reply* reply) {
             RETURN_STATUS_IF_ERROR(
                     sendCommand(makeHalCommand<HalCommand::Tag::burst>(0), innerReply));
             if (innerReply->state != StreamDescriptor::State::ACTIVE) {
-                ALOGE("%s: unexpected stream state: %s (expected ACTIVE)",
-                        __func__, toString(innerReply->state).c_str());
+                AUGMENT_LOG(E, "unexpected stream state: %s (expected ACTIVE)",
+                            toString(innerReply->state).c_str());
                 return INVALID_OPERATION;
             }
             return OK;
         } else if (isInPausedState(state)) {
             return sendCommand(makeHalCommand<HalCommand::Tag::start>(), reply);
         } else if (isInPlayOrRecordState(state)) {
-            ALOGD("%s: already in stream state: %s", __func__, toString(state).c_str());
+            AUGMENT_LOG(D, "already in stream state: %s", toString(state).c_str());
             return OK;
         } else {
-            ALOGE("%s: unexpected stream state: %s (expected IDLE or one of *PAUSED states)",
-                        __func__, toString(state).c_str());
+            AUGMENT_LOG(E, "unexpected stream state: %s (expected IDLE or one of *PAUSED states)",
+                        toString(state).c_str());
             return INVALID_OPERATION;
         }
     }
 }
 
 status_t StreamHalAidl::drain(bool earlyNotify, StreamDescriptor::Reply* reply) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     return sendCommand(makeHalCommand<HalCommand::Tag::drain>(
@@ -497,7 +501,7 @@ status_t StreamHalAidl::drain(bool earlyNotify, StreamDescriptor::Reply* reply) 
 }
 
 status_t StreamHalAidl::flush(StreamDescriptor::Reply* reply) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
 
@@ -506,17 +510,17 @@ status_t StreamHalAidl::flush(StreamDescriptor::Reply* reply) {
                 makeHalCommand<HalCommand::Tag::flush>(), reply,
                 true /*safeFromNonWorkerThread*/);  // The workers stops its I/O activity first.
     } else if (isInPlayOrRecordState(state)) {
-        ALOGE("%s: found stream in non-flushable state: %s", __func__, toString(state).c_str());
+        AUGMENT_LOG(E, "found stream in non-flushable state: %s", toString(state).c_str());
         return INVALID_OPERATION;
     } else {
-        ALOGD("%s: already stream in one of the flushable state: current state: %s", __func__,
-              toString(state).c_str());
+        AUGMENT_LOG(D, "already stream in one of the flushable state: current state: %s",
+                    toString(state).c_str());
         return OK;
     }
 }
 
 status_t StreamHalAidl::exit() {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     return statusTFromBinderStatus(mStream->prepareToClose());
@@ -536,7 +540,7 @@ void StreamHalAidl::onAsyncTransferReady() {
         sendCommand(makeHalCommand<HalCommand::Tag::getStatus>(),
                 nullptr, true /*safeFromNonWorkerThread */);
     } else {
-        ALOGW("%s: unexpected onTransferReady in the state %s", __func__, toString(state).c_str());
+        AUGMENT_LOG(W, "unexpected onTransferReady in the state %s", toString(state).c_str());
     }
 }
 
@@ -558,19 +562,19 @@ void StreamHalAidl::onAsyncDrainReady() {
         std::lock_guard l(mLock);
         mStatePositions.framesAtFlushOrDrain = mLastReply.observable.frames;
     } else {
-        ALOGW("%s: unexpected onDrainReady in the state %s", __func__, toString(state).c_str());
+        AUGMENT_LOG(W, "unexpected onDrainReady in the state %s", toString(state).c_str());
     }
 }
 
 void StreamHalAidl::onAsyncError() {
     std::lock_guard l(mLock);
-    ALOGW("%s: received in the state %s", __func__, toString(mLastReply.state).c_str());
+    AUGMENT_LOG(W, "received in the state %s", toString(mLastReply.state).c_str());
     mLastReply.state = StreamDescriptor::State::ERROR;
 }
 
 status_t StreamHalAidl::createMmapBuffer(int32_t minSizeFrames __unused,
                                          struct audio_mmap_buffer_info *info) {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (!mContext.isMmapped()) {
@@ -630,15 +634,14 @@ status_t StreamHalAidl::sendCommand(
     {
         std::lock_guard l(mCommandReplyLock);
         if (!mContext.getCommandMQ()->writeBlocking(&command, 1)) {
-            ALOGE("%s: failed to write command %s to MQ", __func__, command.toString().c_str());
+            AUGMENT_LOG(E, "failed to write command %s to MQ", command.toString().c_str());
             return NOT_ENOUGH_DATA;
         }
         if (reply == nullptr) {
             reply = &localReply;
         }
         if (!mContext.getReplyMQ()->readBlocking(reply, 1)) {
-            ALOGE("%s: failed to read from reply MQ, command %s",
-                    __func__, command.toString().c_str());
+            AUGMENT_LOG(E, "failed to read from reply MQ, command %s", command.toString().c_str());
             return NOT_ENOUGH_DATA;
         }
         {
@@ -675,8 +678,8 @@ status_t StreamHalAidl::sendCommand(
         case STATUS_INVALID_OPERATION: return INVALID_OPERATION;
         case STATUS_NOT_ENOUGH_DATA: return NOT_ENOUGH_DATA;
         default:
-            ALOGE("%s: unexpected status %d returned for command %s",
-                    __func__, reply->status, command.toString().c_str());
+            AUGMENT_LOG(E, "unexpected status %d returned for command %s", reply->status,
+                        command.toString().c_str());
             return INVALID_OPERATION;
     }
 }
@@ -741,10 +744,10 @@ status_t StreamOutHalAidl::setParameters(const String8& kvPairs) {
     if (!mStream) return NO_INIT;
 
     AudioParameter parameters(kvPairs);
-    ALOGD("%s: parameters: \"%s\"", __func__, parameters.toString().c_str());
+    AUGMENT_LOG(D, "parameters: \"%s\"", parameters.toString().c_str());
 
     if (status_t status = filterAndUpdateOffloadMetadata(parameters); status != OK) {
-        ALOGW("%s: filtering or updating offload metadata failed: %d", __func__, status);
+        AUGMENT_LOG(W, "filtering or updating offload metadata failed: %d", status);
     }
 
     return StreamHalAidl::setParameters(parameters.toString());
@@ -755,6 +758,7 @@ status_t StreamOutHalAidl::getLatency(uint32_t *latency) {
 }
 
 status_t StreamOutHalAidl::setVolume(float left, float right) {
+    AUGMENT_LOG(V, "left %f right %f", left, right);
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     size_t channelCount = audio_channel_count_from_out_mask(mConfig.channel_mask);
@@ -808,11 +812,11 @@ status_t StreamOutHalAidl::getRenderPosition(uint64_t *dspFrames) {
 }
 
 status_t StreamOutHalAidl::setCallback(wp<StreamOutHalInterfaceCallback> callback) {
-    ALOGD("%p %s", this, __func__);
+    LOG_ENTRY();
     TIME_CHECK();
     if (!mStream) return NO_INIT;
     if (!mContext.isAsynchronous()) {
-        ALOGE("%s: the callback is intended for asynchronous streams only", __func__);
+        AUGMENT_LOG(E, "the callback is intended for asynchronous streams only");
         return INVALID_OPERATION;
     }
     mClientCallback = callback;
@@ -851,7 +855,7 @@ status_t StreamOutHalAidl::drain(bool earlyNotify) {
     if (!mStream) return NO_INIT;
 
     if (const auto state = getState(); isInDrainedState(state)) {
-        ALOGD("%p %s stream already in %s", this, __func__, toString(state).c_str());
+        AUGMENT_LOG(D, "stream already in %s state", toString(state).c_str());
         if (mContext.isAsynchronous()) onDrainReady();
         return OK;
     }
@@ -884,7 +888,7 @@ status_t StreamOutHalAidl::getPresentationPosition(uint64_t *frames, struct time
 }
 
 status_t StreamOutHalAidl::presentationComplete() {
-    ALOGD("%p %s::%s", this, getClassName().c_str(), __func__);
+    LOG_ENTRY();
     return OK;
 }
 
@@ -1075,10 +1079,10 @@ status_t StreamOutHalAidl::filterAndUpdateOffloadMetadata(AudioParameter &parame
         updateMetadata = true;
     }
     if (updateMetadata) {
-        ALOGD("%s set offload metadata %s", __func__, mOffloadMetadata.toString().c_str());
+        AUGMENT_LOG(D, "set offload metadata %s", mOffloadMetadata.toString().c_str());
         if (status_t status = statusTFromBinderStatus(
                         mStream->updateOffloadMetadata(mOffloadMetadata)); status != OK) {
-            ALOGE("%s: updateOffloadMetadata failed %d", __func__, status);
+            AUGMENT_LOG(E, "updateOffloadMetadata failed %d", status);
             return status;
         }
     }
@@ -1165,7 +1169,7 @@ status_t StreamInHalAidl::getActiveMicrophones(std::vector<media::MicrophoneInfo
             // Note: info.portId is not filled because it's a bit of framework info.
             result.push_back(std::move(info));
         } else {
-            ALOGE("%s: no static info for active microphone with id '%s'", __func__, d.id.c_str());
+            AUGMENT_LOG(E, "no static info for active microphone with id '%s'", d.id.c_str());
         }
     }
     *microphones = std::move(result);

@@ -49,13 +49,15 @@ class Args {
 
 class ConversionHelperAidl {
   protected:
-    ConversionHelperAidl(std::string_view className) : mClassName(className) {}
+    ConversionHelperAidl(std::string_view className, std::string_view instanceName)
+        : mClassName(className), mInstanceName(instanceName) {}
 
-    const std::string& getClassName() const {
-        return mClassName;
-    }
+    const std::string& getClassName() const { return mClassName; }
+
+    const std::string& getInstanceName() const { return mInstanceName; }
 
     const std::string mClassName;
+    const std::string mInstanceName;
 };
 
 // 'action' must accept a value of type 'T' and return 'status_t'.
