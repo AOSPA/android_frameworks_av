@@ -431,7 +431,21 @@ void CameraManagerGlobal::getCameraIdList(const DeviceContext& context,
         if (!statusAndHAL3Support.supportsHAL3) {
             continue;
         }
-        cameraIds->push_back(key.cameraId);
+
+// QTI_BEGIN: 2025-04-02: Camera: Allowing only [0, 1] cameras in NDK list
+        // HAL populate only [0, 1] as public cameras, but mDeviceStatusMap has all cameraIds
+        // which includes physical cameras exposed as logical cameras
+        // this cause mismatch between cameraList from CameraManger.
+        bool is_number = !key.cameraId.empty() && std::find_if(key.cameraId.begin(),
+                            key.cameraId.end(), [](unsigned char c) { return !std::isdigit(c); }) == key.cameraId.end();
+        if (is_number == true) {
+            if (atoi(key.cameraId.c_str()) < 2) {
+                cameraIds->push_back(key.cameraId);
+            }
+        } else {
+          cameraIds->push_back(key.cameraId);
+        }
+// QTI_END: 2025-04-2: Camera: Allowing only [0, 1] cameras in NDK list
     }
 }
 
