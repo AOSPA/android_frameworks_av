@@ -463,26 +463,23 @@ void NuPlayer::Decoder::onConfigure(const sp<AMessage> &format) {
                     int32_t displayWidth = 0;
                     int32_t displayHeight = 0;
 
-                    // Get video source dimensions: To confirm if the video is playing in portrait mode or landscape mode.
+                    // Get raw video source dimensions
                     int32_t videoWidth = 0, videoHeight = 0;
                     if (format->findInt32("width", &videoWidth)
                             && format->findInt32("height", &videoHeight)
                             && videoWidth > 0 && videoHeight > 0) {
-                        int32_t rotation = 0;
-                        format->findInt32("rotation-degrees", &rotation);
-                        bool videoIsPortrait = ((rotation == 90 || rotation == 270)) ? (videoWidth > videoHeight): (videoHeight > videoWidth);
+                        bool videoIsPortrait = videoHeight > videoWidth;
                         bool displayIsPortrait = (activeMode->resolution.height > activeMode->resolution.width);
                         bool needsSwap = (videoIsPortrait != displayIsPortrait);
                         if (needsSwap) {
                             displayWidth = activeMode->resolution.height;
                             displayHeight = activeMode->resolution.width;
-                        }
-                        else {
+                        } else {
                             displayWidth = activeMode->resolution.width;
                             displayHeight = activeMode->resolution.height;
                         }
                         // Add displayWidth and displayHeight to vendor extension.
-                        if(videoWidth > displayWidth || videoHeight > displayHeight){
+                        if (videoWidth > displayWidth || videoHeight > displayHeight){
                             format->setInt32("vendor.qti-ext-down-scalar.output-width", displayWidth);
                             format->setInt32("vendor.qti-ext-down-scalar.output-height", displayHeight);
                         }
@@ -1580,9 +1577,7 @@ bool NuPlayer::Decoder::shouldEnableVsyncForVideo(
     bool isVideoCodec = (
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_HEVC, mime.c_str()) ||
         !strcasecmp(MEDIA_MIMETYPE_VIDEO_AV1, mime.c_str()) ||
-        !strcasecmp(MEDIA_MIMETYPE_VIDEO_AVC, mime.c_str()) ||
-        !strcasecmp(MEDIA_MIMETYPE_VIDEO_H263, mime.c_str()) ||
-        !strcasecmp(MEDIA_MIMETYPE_VIDEO_MPEG4, mime.c_str())
+        !strcasecmp(MEDIA_MIMETYPE_VIDEO_AVC, mime.c_str())
     );
 
     if (isVideoCodec && pixels <= 2073600 && frameRate > 0 && frameRate <= 30) {
@@ -1651,8 +1646,13 @@ void NuPlayer::Decoder::teardownVsyncCallbacks() {
 void NuPlayer::Decoder::vsyncThreadLoop() {
     ALOGV("NuPlayerDecoder: VSync thread loop started");
 
+    // Use pollOnce (not pollAll): pollOnce returns after each epoll_wait so the
+    // loop re-checks mVsyncModeEnabled every iteration. pollAll() re-loops while
+    // a callback fires, which can swallow teardown's wake() and block join().
+    // wake() uses a latched eventfd, so the indefinite (-1) wait is always
+    // interrupted at teardown without needing a poll timeout.
     while (mVsyncModeEnabled.load(std::memory_order_acquire)) {
-        int result = mVsyncLooper->pollAll(-1);
+        int result = mVsyncLooper->pollOnce(-1);
 
         if (result == Looper::POLL_ERROR) {
             ALOGE("NuPlayerDecoder: VSync looper poll error");

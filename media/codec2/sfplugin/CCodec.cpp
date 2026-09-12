@@ -1885,17 +1885,22 @@ void CCodec::configure(const sp<AMessage> &msg) {
         bool clientValueValid = true;
         if ((config->mDomain & Config::IS_DECODER) && maxInputSize.value > 0) {
             sp<ABuffer> csd;
+            size_t maxCsdSize = 0;
             for (size_t ix = 0; msg->findBuffer(StringPrintf("csd-%zu", ix).c_str(), &csd); ++ix) {
                 if (csd) {
                     // Always ensure component value fits CSD
                     if (csd->size() > maxInputSize.value) {
                         maxInputSize.value = csd->size();
                     }
-                    // If client specified a value, validate it against CSD too
-                    if (clientSpecifiedInputSize && csd->size() > (uint32_t)clientInputSize) {
-                        clientValueValid = false;
+                    if (csd->size() > maxCsdSize) {
+                        maxCsdSize = csd->size();
                     }
                 }
+            }
+            // I-frames may carry inline parameter sets not reflected in stsz sample sizes;
+            // add maxCsdSize overhead to avoid undersizing the input buffer.
+            if (clientSpecifiedInputSize && (config->mDomain & Config::IS_VIDEO) && maxCsdSize > 0) {
+                clientInputSize += (int32_t)maxCsdSize;
             }
         }
 

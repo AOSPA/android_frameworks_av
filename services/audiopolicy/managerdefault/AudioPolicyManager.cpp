@@ -1031,8 +1031,13 @@ void AudioPolicyManager::connectTelephonyRxAudioSource(uint32_t delayMs)
         }
         if (com::android::media::audioserver::optimize_call_routing()
                 && mCallRxSourceClient->isConnected()) {
-            rerouteTelephonyAudioSource(mCallRxSourceClient, mCallRxSourceClient->srcDevice(),
-                                        rxDevice, delayMs);
+            status_t status = rerouteTelephonyAudioSource(
+                    mCallRxSourceClient, mCallRxSourceClient->srcDevice(), rxDevice, delayMs);
+            if (status != NO_ERROR) {
+                ALOGE("%s failed to reroute RX source client", __func__);
+                disconnectTelephonyAudioSource(mCallRxSourceClient);
+                return;
+            }
             ALOGV("%s rerouted portd ID %d between source %s and sink %s", __func__,
                   mCallRxSourceClient->portId(),
                   mCallRxSourceClient->srcDevice()->toString().c_str(),
@@ -1086,7 +1091,13 @@ void AudioPolicyManager::connectTelephonyTxAudioSource(
         }
         if (com::android::media::audioserver::optimize_call_routing()
                 && mCallTxSourceClient->isConnected()) {
-            rerouteTelephonyAudioSource(mCallTxSourceClient, srcDevice, sinkDevice, delayMs);
+            status_t status = rerouteTelephonyAudioSource(
+                    mCallTxSourceClient, srcDevice, sinkDevice, delayMs);
+            if (status != NO_ERROR) {
+                ALOGE("%s failed to reroute TX source client", __func__);
+                disconnectTelephonyAudioSource(mCallTxSourceClient);
+                return;
+            }
             ALOGV("%s rerouted portd ID %d between source %s and sink %s", __func__,
                   mCallTxSourceClient->portId(),
                   srcDevice->toString().c_str(), sinkDevice->toString().c_str());
@@ -1122,7 +1133,7 @@ void AudioPolicyManager::connectTelephonyTxAudioSource(
     }
 }
 
-void AudioPolicyManager::rerouteTelephonyAudioSource(const sp<SourceClientDescriptor> &source,
+status_t AudioPolicyManager::rerouteTelephonyAudioSource(const sp<SourceClientDescriptor> &source,
         const sp<DeviceDescriptor> &srcDevice, const sp<DeviceDescriptor> &sinkDevice,
         uint32_t delayMs) {
     sp<SwAudioOutputDescriptor> swOutput = source->swOutput().promote();
@@ -1148,8 +1159,8 @@ void AudioPolicyManager::rerouteTelephonyAudioSource(const sp<SourceClientDescri
     // Note: the SW output associated with "source" can be updated by createAudioPatchInternal()
 
     if (status != NO_ERROR || mAudioPatches.indexOfKey(handle) < 0) {
-        ALOGW("%s patch panel could not connect device patch, error %d", __func__, status);
-        return;
+        ALOGE("%s patch panel could not connect device patch, error %d", __func__, status);
+        return status == NO_ERROR ? UNKNOWN_ERROR : status;
     }
 
     swOutput = source->swOutput().promote();
@@ -1157,10 +1168,10 @@ void AudioPolicyManager::rerouteTelephonyAudioSource(const sp<SourceClientDescri
     source->connect(handle, sinkDevice);
     swOutput->start();
     swOutput->setClientActive(source, true);
-
     applyStreamVolumes(swOutput, {sinkDevice->type()}, delayMs);
     ALOGV("%s portd ID %d between source %s and sink %s delayMs %u", __func__, source->portId(),
         srcDevice->toString().c_str(), sinkDevice->toString().c_str(), delayMs);
+    return NO_ERROR;
 }
 
 void AudioPolicyManager::setPhoneState(audio_mode_t state)

@@ -364,6 +364,7 @@ public:
 // QTI_END: 2019-06-07: Video: av: Add MPEG-H track support in MP4 muxer
     bool mGotStartKeyFrame;
     bool mRequiresStartKeyFrame;
+    bool mTrackNeedsKeyFrames;
     bool mIsMalformed;
     TrackId mTrackId;
     int64_t mTrackDurationUs;
@@ -2327,6 +2328,7 @@ MPEG4Writer::Track::Track(MPEG4Writer* owner, const sp<MediaSource>& source, uin
       mStarted(false),
       mGotStartKeyFrame(false),
       mRequiresStartKeyFrame(false),
+      mTrackNeedsKeyFrames(false),
       mIsMalformed(false),
       mTrackId(aTrackId),
       mTrackDurationUs(0),
@@ -2392,7 +2394,7 @@ MPEG4Writer::Track::Track(MPEG4Writer* owner, const sp<MediaSource>& source, uin
 
     int32_t aacProfile = 0;
     mMeta->findInt32(kKeyAACProfile, &aacProfile);
-    mRequiresStartKeyFrame = mIsVideo || (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AAC, mime)
+    mTrackNeedsKeyFrames = mIsVideo || (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AAC, mime)
                                           && aacProfile == AACObjectXHE);
 
 // QTI_BEGIN: 2021-03-19: Video: libstagefright: Add changes to handle multiple slices in writer
@@ -3217,6 +3219,12 @@ status_t MPEG4Writer::Track::start(MetaData *params) {
         mPaused = false;
         mResumed = true;
         return OK;
+    }
+
+    if (mTrackNeedsKeyFrames) {
+        ALOGV("%s track will wait for a key frame.", getTrackType());
+        mRequiresStartKeyFrame = true;
+        mGotStartKeyFrame = false;
     }
 
     int64_t startTimeUs;

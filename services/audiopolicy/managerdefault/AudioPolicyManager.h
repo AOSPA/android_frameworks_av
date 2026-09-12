@@ -821,7 +821,7 @@ protected:
                                            const sp<DeviceDescriptor> &sinkDevice,
                                            uint32_t delayMs);
 
-        void rerouteTelephonyAudioSource(const sp<SourceClientDescriptor> &source,
+        status_t rerouteTelephonyAudioSource(const sp<SourceClientDescriptor> &source,
                                          const sp<DeviceDescriptor> &srcDevice,
                                          const sp<DeviceDescriptor> &sinkDevice,
                                          uint32_t delayMs);

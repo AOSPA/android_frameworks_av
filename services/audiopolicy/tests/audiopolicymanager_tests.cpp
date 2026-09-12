@@ -4183,6 +4183,66 @@ TEST_F(AudioPolicyManagerPhoneTest, VibrationUsagesMapToTtsStrategy) {
     }
 }
 
+class AudioPolicyManagerTestClientPatchFails : public AudioPolicyManagerTestClient {
+public:
+    status_t createAudioPatch(const struct audio_patch *patch,
+                              audio_patch_handle_t *handle,
+                              int delayMs) override {
+        if (mFailCreatePatch) {
+            return INVALID_OPERATION;
+        }
+        return AudioPolicyManagerTestClient::createAudioPatch(patch, handle, delayMs);
+    }
+    bool mFailCreatePatch = false;
+};
+
+class AudioPolicyManagerPhoneTestWithPatchFailure : public AudioPolicyManagerPhoneTest {
+protected:
+    AudioPolicyManagerTestClient* getClient() override {
+        mTestClient = new AudioPolicyManagerTestClientPatchFails();
+        return mTestClient;
+    }
+    void SetUpManagerConfig() override {
+        ASSERT_NO_FATAL_FAILURE(AudioPolicyManagerPhoneTest::SetUpManagerConfig());
+        sp<HwModule> primaryModule = mConfig->getHwModules().getModuleFromName("primary");
+        ASSERT_NE(nullptr, primaryModule);
+        primaryModule->setHalVersion(3, 0); // Force HAL version 3.0 to enable HW patches
+    }
+public:
+    AudioPolicyManagerTestClientPatchFails* mTestClient = nullptr;
+};
+
+TEST_F(AudioPolicyManagerPhoneTestWithPatchFailure, RerouteTelephonyFailureRecoveryRepro) {
+    // 1. Start a call
+    mManager->setPhoneState(AUDIO_MODE_IN_CALL);
+
+    // Verify that a patch was created
+    ASSERT_GT(mTestClient->getActivePatchesCount(), 0u);
+
+    product_strategy_t phoneStrategy = mManager->getStrategyForStream(AUDIO_STREAM_VOICE_CALL, 0);
+
+    // Ensure we are routed to Earpiece first
+    AudioDeviceTypeAddrVector preferredDevices = {
+            AudioDeviceTypeAddr(AUDIO_DEVICE_OUT_EARPIECE, "")};
+    mManager->setDevicesRoleForStrategy(phoneStrategy, DEVICE_ROLE_PREFERRED, preferredDevices);
+
+    // Route to Speaker (succeeds)
+    preferredDevices = {AudioDeviceTypeAddr(AUDIO_DEVICE_OUT_SPEAKER, "")};
+    ASSERT_EQ(NO_ERROR, mManager->setDevicesRoleForStrategy(
+                    phoneStrategy, DEVICE_ROLE_PREFERRED, preferredDevices));
+
+    // 2. Enable patch failure
+    mTestClient->mFailCreatePatch = true;
+
+    // 3. Trigger routing change to Earpiece
+    preferredDevices = {AudioDeviceTypeAddr(AUDIO_DEVICE_OUT_EARPIECE, "")};
+    mManager->setDevicesRoleForStrategy(phoneStrategy, DEVICE_ROLE_PREFERRED, preferredDevices);
+
+    // 4. Trigger another routing change back to Earpiece
+    preferredDevices = {AudioDeviceTypeAddr(AUDIO_DEVICE_OUT_EARPIECE, "")};
+    mManager->setDevicesRoleForStrategy(phoneStrategy, DEVICE_ROLE_PREFERRED, preferredDevices);
+}
+
 class AudioPolicyManagerPhoneLegacyUsbTest : public AudioPolicyManagerTestWithConfigurationFile {
 protected:
     std::string getConfigFile() override { return sPhoneLegacyUsbConfig; }
